@@ -16,8 +16,11 @@ once, listing the workflows, with the savings summed and the largest one's evide
 
 ## cache dependencies
 
-- **Fires when** dependency installs take 15 s or more per job and the workflow file has no
-  dependency cache (`actions/cache`, a setup action's `cache:` input, `cache-dependency-path`).
+- **Fires when** dependency installs take 15 s or more per job and the parsed workflow file has
+  no dependency cache: no `actions/cache` step, no setup action whose `cache:` input is on, no
+  `cache-dependency-path`, no setup-ruby `bundler-cache`, and no setup-go from v4 (which caches
+  unless told not to). A commented-out step, or an input that is `false` or `${{ false }}`, is
+  not a cache.
 - **Confidence** confirmed.
 - **Estimate** 60% of the measured install time, times runs a week.
 - **Fix** cache the package manager's store, keyed on the committed lockfile, or on the manifest
@@ -73,7 +76,9 @@ once, listing the workflows, with the savings summed and the largest one's evide
 ## outdated runs keep going
 
 - **Fires when** 2 or more pull request runs a week were still running when a newer commit on
-  the same branch started its run, and the workflow file has no `cancel-in-progress`.
+  the same branch started its run, and no concurrency block in the workflow (top level or per
+  job) has `cancel-in-progress` on. `false` and `${{ false }}` are off; `true` and any other
+  expression (a condition such as "pull requests only") are on.
 - **Confidence** measured.
 - **Estimate** those runs a week, times job-minutes per run.
 - **Fix** a concurrency group per branch with `cancel-in-progress: true`. *Trade-off:* a

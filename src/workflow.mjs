@@ -97,3 +97,81 @@ export function concurrencyGroupOf(doc) {
   if (c && typeof c === 'object') return String(c.group || '');
   return c ? String(c) : '';
 }
+
+/** Every step of every job, in file order. */
+export function allSteps(doc) {
+  const steps = [];
+  for (const job of Object.values(doc.jobs || {})) {
+    for (const st of (job && job.steps) || []) if (st && typeof st === 'object') steps.push(st);
+  }
+  return steps;
+}
+
+/** Whether a YAML value turns a feature on: true, "true", or an expression that is not literally false. */
+export function isOn(value) {
+  if (value === true) return true;
+  if (value === false || value === null || value === undefined) return false;
+  const s = String(value).trim();
+  if (s === '' || s === 'false') return false;
+  if (s === 'true') return true;
+  const expr = /^\$\{\{\s*(.*?)\s*\}\}$/.exec(s);
+  if (expr) return expr[1] !== 'false' && expr[1] !== "'false'";
+  return false;
+}
+
+/** A setup action's cache input names a package manager (npm, pip, maven) or says true; off is false, empty, or an expression that is literally false. */
+export function cacheInputOn(value) {
+  if (value === undefined || value === null || value === false) return false;
+  const s = String(value).trim();
+  if (s === '' || s === 'false') return false;
+  const expr = /^\$\{\{\s*(.*?)\s*\}\}$/.exec(s);
+  if (expr) return expr[1] !== 'false' && expr[1] !== "''" && expr[1] !== "'false'";
+  return true;
+}
+
+/** The major version in `owner/action@v4` or `@v4.1.0`, or null for a SHA or a branch. */
+function majorOf(uses) {
+  const m = /@v(\d+)/.exec(uses);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Cache, concurrency and install facts from the parsed file, so a commented-out line or a value
+ * that switches a feature off never counts. A dependency cache is an actions/cache step, a setup
+ * action's cache input that is on (setup-go from v4 caches unless told not to), a
+ * cache-dependency-path, or setup-ruby's bundler-cache.
+ */
+export function workflowFacts(doc) {
+  const steps = allSteps(doc);
+  let hasCache = false;
+  let setupCache = false;
+  let cachesNodeModules = false;
+  for (const st of steps) {
+    const uses = String(st.uses || '');
+    const inputs = st.with && typeof st.with === 'object' ? st.with : {};
+    if (/^actions\/cache(\/restore)?@/.test(uses)) {
+      hasCache = true;
+      if (/node_modules/.test(String(inputs.path || ''))) cachesNodeModules = true;
+    }
+    if (/^actions\/setup-[a-z]+@/.test(uses) || /^pnpm\/action-setup@/.test(uses) || /^ruby\/setup-ruby@/.test(uses)) {
+      const cacheInput = inputs.cache;
+      const goDefault = /^actions\/setup-go@/.test(uses) && (majorOf(uses) ?? 4) >= 4 && cacheInput === undefined;
+      if (cacheInputOn(cacheInput) || goDefault || inputs['cache-dependency-path'] || isOn(inputs['bundler-cache'])) {
+        hasCache = true;
+        if (/^actions\/setup-node@/.test(uses)) setupCache = true;
+      }
+    }
+  }
+  const concurrencies = [doc.concurrency, ...Object.values(doc.jobs || {}).map((j) => j && j.concurrency)].filter((c) => c !== undefined && c !== null);
+  const cancels = concurrencies.some((c) => c && typeof c === 'object' && isOn(c['cancel-in-progress']));
+  const runs = steps.map((st) => String(st.run || '')).join('\n');
+  return {
+    hasCache,
+    setupCache,
+    cachesNodeModules,
+    hasConcurrency: concurrencies.length > 0,
+    cancels,
+    npmInstallNoCi: /\bnpm (install|i)\b/.test(runs) && !/\bnpm ci\b/.test(runs),
+    preferOffline: runs.includes('--prefer-offline'),
+  };
+}

@@ -7381,6 +7381,13 @@ var RateLimitError = class extends Error {
     this.resetAt = resetAt;
   }
 };
+var NotFoundError = class extends Error {
+  constructor(repo) {
+    super(`${repo} was not found, or the token cannot read it`);
+    this.name = "NotFoundError";
+    this.repo = repo;
+  }
+};
 var GitHubError = class extends Error {
   constructor(status, path, message) {
     super(`GitHub API ${status} on ${path}${message ? `: ${message}` : ""}`);
@@ -7455,7 +7462,10 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, workflows = 8,
   const runs = [];
   for (let page = 1; page <= maxPages; page++) {
     const d = await client.get(`repos/${repo}/actions/runs?per_page=100&page=${page}&created=${encodeURIComponent(">=" + since)}`);
-    if (!d) break;
+    if (!d) {
+      if (page === 1) throw new NotFoundError(repo);
+      break;
+    }
     const batch = d.workflow_runs || [];
     runs.push(...batch);
     if (batch.length < 100) break;
@@ -7570,6 +7580,69 @@ function concurrencyGroupOf(doc) {
   if (c && typeof c === "object") return String(c.group || "");
   return c ? String(c) : "";
 }
+function allSteps(doc) {
+  const steps = [];
+  for (const job of Object.values(doc.jobs || {})) {
+    for (const st of job && job.steps || []) if (st && typeof st === "object") steps.push(st);
+  }
+  return steps;
+}
+function isOn(value) {
+  if (value === true) return true;
+  if (value === false || value === null || value === void 0) return false;
+  const s = String(value).trim();
+  if (s === "" || s === "false") return false;
+  if (s === "true") return true;
+  const expr = /^\$\{\{\s*(.*?)\s*\}\}$/.exec(s);
+  if (expr) return expr[1] !== "false" && expr[1] !== "'false'";
+  return false;
+}
+function cacheInputOn(value) {
+  if (value === void 0 || value === null || value === false) return false;
+  const s = String(value).trim();
+  if (s === "" || s === "false") return false;
+  const expr = /^\$\{\{\s*(.*?)\s*\}\}$/.exec(s);
+  if (expr) return expr[1] !== "false" && expr[1] !== "''" && expr[1] !== "'false'";
+  return true;
+}
+function majorOf(uses) {
+  const m = /@v(\d+)/.exec(uses);
+  return m ? Number(m[1]) : null;
+}
+function workflowFacts(doc) {
+  const steps = allSteps(doc);
+  let hasCache = false;
+  let setupCache = false;
+  let cachesNodeModules = false;
+  for (const st of steps) {
+    const uses = String(st.uses || "");
+    const inputs = st.with && typeof st.with === "object" ? st.with : {};
+    if (/^actions\/cache(\/restore)?@/.test(uses)) {
+      hasCache = true;
+      if (/node_modules/.test(String(inputs.path || ""))) cachesNodeModules = true;
+    }
+    if (/^actions\/setup-[a-z]+@/.test(uses) || /^pnpm\/action-setup@/.test(uses) || /^ruby\/setup-ruby@/.test(uses)) {
+      const cacheInput = inputs.cache;
+      const goDefault = /^actions\/setup-go@/.test(uses) && (majorOf(uses) ?? 4) >= 4 && cacheInput === void 0;
+      if (cacheInputOn(cacheInput) || goDefault || inputs["cache-dependency-path"] || isOn(inputs["bundler-cache"])) {
+        hasCache = true;
+        if (/^actions\/setup-node@/.test(uses)) setupCache = true;
+      }
+    }
+  }
+  const concurrencies = [doc.concurrency, ...Object.values(doc.jobs || {}).map((j) => j && j.concurrency)].filter((c) => c !== void 0 && c !== null);
+  const cancels = concurrencies.some((c) => c && typeof c === "object" && isOn(c["cancel-in-progress"]));
+  const runs = steps.map((st) => String(st.run || "")).join("\n");
+  return {
+    hasCache,
+    setupCache,
+    cachesNodeModules,
+    hasConcurrency: concurrencies.length > 0,
+    cancels,
+    npmInstallNoCi: /\bnpm (install|i)\b/.test(runs) && !/\bnpm ci\b/.test(runs),
+    preferOffline: runs.includes("--prefer-offline")
+  };
+}
 
 // src/util.mjs
 function secs(a, b) {
@@ -7624,125 +7697,144 @@ var THRESHOLDS = {
 };
 var PR_EVENTS = /* @__PURE__ */ new Set(["pull_request", "pull_request_target"]);
 var GROUPED = /* @__PURE__ */ new Set(["self-hosted wrap-up tail", "toolchain setup", "queue wait"]);
-function hostedJob(j) {
-  const rn = String(j.runner_name || "").toLowerCase();
-  const labels = (j.labels || []).join(" ").toLowerCase();
-  return rn.includes("github actions") || labels.includes("ubuntu-") || labels.includes("windows-") || labels.includes("macos-");
+function ranOnGitHubHosted(job) {
+  const runner = String(job.runner_name || "").toLowerCase();
+  const labels = (job.labels || []).join(" ").toLowerCase();
+  return runner.includes("github actions") || labels.includes("ubuntu-") || labels.includes("windows-") || labels.includes("macos-");
 }
-function measureWorkflow(wf, rs, jobsPerRun, text, week) {
-  const low = text.toLowerCase();
-  const doc = parseWorkflow(text);
-  const commands = stepCommands(doc);
-  let hasCache = /actions\/cache@|\bcache:\s*['"]?(npm|pnpm|yarn|pip|poetry|gradle|maven|go|true)|cache-dependency-path|setup-go@v[4-9]/.test(low);
-  const hasConcurrency = /^\s*concurrency:/m.test(text);
-  const cancels = /cancel-in-progress:\s*(true|\$\{\{)/.test(low);
-  const walls = rs.filter((r) => r.status === "completed" && r.conclusion === "success" && r.run_started_at).map((r) => secs(r.run_started_at, r.updated_at));
-  const cats = {};
-  const stepSecs = /* @__PURE__ */ new Map();
-  const jobSecsPerRun = [];
-  const waits = [], tails = [], heads = [], stepsPerJob = [], jobLens = [];
-  let hosted = 0, nJobs = 0;
-  for (const jobs of jobsPerRun) {
-    let total = 0;
-    for (const j of jobs) {
-      nJobs++;
-      const dur = secs(j.started_at, j.completed_at);
-      total += dur;
-      waits.push(secs(j.created_at, j.started_at));
-      if (hostedJob(j)) hosted++;
-      const st = (j.steps || []).filter((s) => s.started_at && s.completed_at);
-      stepsPerJob.push(st.length);
-      jobLens.push(dur);
-      for (const s of st) {
-        const c = categoryOf(s.name, commands);
-        const d = secs(s.started_at, s.completed_at);
-        cats[c] = (cats[c] || 0) + d;
-        if (c === "cache") hasCache = true;
-        if (c === "work") {
-          const k = String(s.name).replace(/\s+/g, " ").slice(0, 60);
-          if (!stepSecs.has(k)) stepSecs.set(k, []);
-          stepSecs.get(k).push(d);
+function timeJobs(sampledRuns, commands) {
+  const t = {
+    secondsByCategory: {},
+    workStepSeconds: /* @__PURE__ */ new Map(),
+    jobSecondsPerRun: [],
+    queueWaits: [],
+    tails: [],
+    heads: [],
+    jobLengths: [],
+    stepsPerJob: [],
+    hostedJobs: 0,
+    jobCount: 0,
+    sawCacheStep: false
+  };
+  for (const jobs of sampledRuns) {
+    let runSeconds = 0;
+    for (const job of jobs) {
+      t.jobCount++;
+      const length = secs(job.started_at, job.completed_at);
+      runSeconds += length;
+      t.jobLengths.push(length);
+      t.queueWaits.push(secs(job.created_at, job.started_at));
+      if (ranOnGitHubHosted(job)) t.hostedJobs++;
+      const steps = (job.steps || []).filter((s) => s.started_at && s.completed_at);
+      t.stepsPerJob.push(steps.length);
+      for (const step of steps) {
+        const kind = categoryOf(step.name, commands);
+        const seconds = secs(step.started_at, step.completed_at);
+        t.secondsByCategory[kind] = (t.secondsByCategory[kind] || 0) + seconds;
+        if (kind === "cache") t.sawCacheStep = true;
+        if (kind === "work") {
+          const name = String(step.name).replace(/\s+/g, " ").slice(0, 60);
+          if (!t.workStepSeconds.has(name)) t.workStepSeconds.set(name, []);
+          t.workStepSeconds.get(name).push(seconds);
         }
       }
-      if (st.length) {
-        const first = st.map((s) => s.started_at).sort()[0];
-        const last = st.map((s) => s.completed_at).sort().at(-1);
-        heads.push(secs(j.started_at, first));
-        tails.push(secs(last, j.completed_at));
+      if (steps.length) {
+        const firstStart = steps.map((s) => s.started_at).sort()[0];
+        const lastEnd = steps.map((s) => s.completed_at).sort().at(-1);
+        t.heads.push(secs(job.started_at, firstStart));
+        t.tails.push(secs(lastEnd, job.completed_at));
       }
     }
-    jobSecsPerRun.push(total);
+    t.jobSecondsPerRun.push(runSeconds);
   }
-  const medJobSecs = median(jobSecsPerRun);
-  const catTotal = sum(Object.values(cats)) + sum(tails) + sum(heads);
-  const share = {};
-  for (const [c, v] of Object.entries(cats)) share[c] = catTotal ? v / catTotal : 0;
-  share.tail = catTotal ? sum(tails) / catTotal : 0;
-  share.head = catTotal ? sum(heads) / catTotal : 0;
-  const attempts = rs.filter((r) => (r.run_attempt || 1) > 1).length;
-  const failed = rs.filter((r) => r.conclusion === "failure").length;
-  const eventsBySha = /* @__PURE__ */ new Map();
-  for (const r of rs) {
-    if (!eventsBySha.has(r.head_sha)) eventsBySha.set(r.head_sha, /* @__PURE__ */ new Set());
-    eventsBySha.get(r.head_sha).add(r.event);
+  return t;
+}
+function timeShares(timing) {
+  const total = sum(Object.values(timing.secondsByCategory)) + sum(timing.tails) + sum(timing.heads);
+  const shares = {};
+  for (const [kind, seconds] of Object.entries(timing.secondsByCategory)) shares[kind] = total ? seconds / total : 0;
+  shares.tail = total ? sum(timing.tails) / total : 0;
+  shares.head = total ? sum(timing.heads) / total : 0;
+  return shares;
+}
+function duplicateCommits(workflowRuns) {
+  const eventsByCommit = /* @__PURE__ */ new Map();
+  for (const r of workflowRuns) {
+    if (!eventsByCommit.has(r.head_sha)) eventsByCommit.set(r.head_sha, /* @__PURE__ */ new Set());
+    eventsByCommit.get(r.head_sha).add(r.event);
   }
-  const dup = [...eventsBySha.values()].filter((ev) => ev.has("push") && (ev.has("pull_request") || ev.has("pull_request_target"))).length;
-  const byBranch = /* @__PURE__ */ new Map();
-  for (const r of rs) {
-    if (PR_EVENTS.has(r.event) && r.run_started_at) {
-      if (!byBranch.has(r.head_branch)) byBranch.set(r.head_branch, []);
-      byBranch.get(r.head_branch).push(r);
+  return [...eventsByCommit.values()].filter((events) => events.has("push") && (events.has("pull_request") || events.has("pull_request_target"))).length;
+}
+function outdatedRuns(workflowRuns) {
+  const runsByBranch = /* @__PURE__ */ new Map();
+  for (const r of workflowRuns) {
+    if (!PR_EVENTS.has(r.event) || !r.run_started_at) continue;
+    if (!runsByBranch.has(r.head_branch)) runsByBranch.set(r.head_branch, []);
+    runsByBranch.get(r.head_branch).push(r);
+  }
+  let outdated = 0;
+  for (const branchRuns of runsByBranch.values()) {
+    branchRuns.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+    for (let i = 0; i + 1 < branchRuns.length; i++) {
+      const older = branchRuns[i];
+      const newer = branchRuns[i + 1];
+      if (older.head_sha !== newer.head_sha && Date.parse(newer.created_at) < Date.parse(older.updated_at) && older.conclusion !== "cancelled") outdated++;
     }
   }
-  let superseded = 0;
-  for (const lst of byBranch.values()) {
-    lst.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
-    for (let i = 0; i + 1 < lst.length; i++) {
-      const a = lst[i], b = lst[i + 1];
-      if (a.head_sha !== b.head_sha && Date.parse(b.created_at) < Date.parse(a.updated_at) && a.conclusion !== "cancelled") superseded++;
-    }
-  }
-  const topSteps = [...stepSecs.entries()].map(([k, v]) => ({ step: k, median_s: median(v), seen: v.length })).sort((a, b) => b.median_s - a.median_s || (a.step < b.step ? 1 : a.step > b.step ? -1 : 0) || b.seen - a.seen).slice(0, 3).map((t) => ({ ...t, median_s: Math.round(t.median_s) }));
-  const n = jobsPerRun.length;
-  const sortedShare = Object.fromEntries(Object.entries(share).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, round(v, 3)]));
+  return outdated;
+}
+function longestSteps(workStepSeconds) {
+  return [...workStepSeconds.entries()].map(([step, seconds]) => ({ step, median_s: median(seconds), seen: seconds.length })).sort((a, b) => b.median_s - a.median_s || (a.step < b.step ? 1 : a.step > b.step ? -1 : 0) || b.seen - a.seen).slice(0, 3).map((s) => ({ ...s, median_s: Math.round(s.median_s) }));
+}
+function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor) {
+  const doc = parseWorkflow(fileText);
+  const facts = workflowFacts(doc);
+  const timing = timeJobs(sampledRuns, stepCommands(doc));
+  const shares = timeShares(timing);
+  const sampledCount = sampledRuns.length;
+  const medianRunSeconds = median(timing.jobSecondsPerRun);
+  const successfulWalls = workflowRuns.filter((r) => r.status === "completed" && r.conclusion === "success" && r.run_started_at).map((r) => secs(r.run_started_at, r.updated_at));
+  const reruns = workflowRuns.filter((r) => (r.run_attempt || 1) > 1).length;
+  const failures = workflowRuns.filter((r) => r.conclusion === "failure").length;
+  const perWeek = (n) => round(n * weekFactor, 1);
   return {
-    workflow: wf,
-    path: String(rs[0].path || "").split("@")[0],
-    runs_week: round(rs.length * week, 1),
-    sampled_runs: n,
-    jobs_per_run: round(nJobs / n, 1),
-    job_minutes_per_run: round(medJobSecs / 60, 2),
-    job_minutes_week: round(rs.length * week * medJobSecs / 60, 1),
-    wait_p50: pct(waits, 0.5),
-    wait_p90: pct(waits, 0.9),
-    tail_p50: pct(tails, 0.5),
-    hosted_share: nJobs ? round(hosted / nJobs, 2) : 0,
-    steps_per_job: median(stepsPerJob),
-    share: sortedShare,
-    cats_secs_per_run: Object.fromEntries(Object.entries(cats).map(([k, v]) => [k, round(v / n, 1)])),
-    has_cache: hasCache,
-    reruns_week: round(attempts * week, 1),
-    failed_week: round(failed * week, 1),
-    dup_commits_week: round(dup * week, 1),
-    wall_p50: pct(walls, 0.5),
-    wall_p90: pct(walls, 0.9),
-    superseded_week: round(superseded * week, 1),
-    has_concurrency: hasConcurrency,
-    cancels,
-    top_steps: topSteps,
-    longest_job_s: jobLens.length ? Math.max(...jobLens) : 0,
-    median_job_s: median(jobLens),
-    reruns_raw: attempts,
-    npm_install_no_ci: /npm (install|i)\b/.test(low) && !/npm ci\b/.test(low),
-    prefer_offline: low.includes("--prefer-offline"),
-    caches_node_modules: /path:[^\n]*node_modules/.test(low),
-    setup_cache: /\bcache:\s*['"]?(npm|pnpm|yarn)/.test(low),
-    dep_share: round(share.deps || 0, 3),
+    workflow: workflowName,
+    path: String(workflowRuns[0].path || "").split("@")[0],
+    runs_week: perWeek(workflowRuns.length),
+    sampled_runs: sampledCount,
+    jobs_per_run: round(timing.jobCount / sampledCount, 1),
+    job_minutes_per_run: round(medianRunSeconds / 60, 2),
+    job_minutes_week: round(workflowRuns.length * weekFactor * medianRunSeconds / 60, 1),
+    wait_p50: pct(timing.queueWaits, 0.5),
+    wait_p90: pct(timing.queueWaits, 0.9),
+    tail_p50: pct(timing.tails, 0.5),
+    hosted_share: timing.jobCount ? round(timing.hostedJobs / timing.jobCount, 2) : 0,
+    steps_per_job: median(timing.stepsPerJob),
+    share: Object.fromEntries(Object.entries(shares).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, round(v, 3)])),
+    cats_secs_per_run: Object.fromEntries(Object.entries(timing.secondsByCategory).map(([k, v]) => [k, round(v / sampledCount, 1)])),
+    has_cache: facts.hasCache || timing.sawCacheStep,
+    reruns_week: perWeek(reruns),
+    failed_week: perWeek(failures),
+    dup_commits_week: perWeek(duplicateCommits(workflowRuns)),
+    wall_p50: pct(successfulWalls, 0.5),
+    wall_p90: pct(successfulWalls, 0.9),
+    superseded_week: perWeek(outdatedRuns(workflowRuns)),
+    has_concurrency: facts.hasConcurrency,
+    cancels: facts.cancels,
+    top_steps: longestSteps(timing.workStepSeconds),
+    longest_job_s: timing.jobLengths.length ? Math.max(...timing.jobLengths) : 0,
+    median_job_s: median(timing.jobLengths),
+    reruns_raw: reruns,
+    npm_install_no_ci: facts.npmInstallNoCi,
+    prefer_offline: facts.preferOffline,
+    caches_node_modules: facts.cachesNodeModules,
+    setup_cache: facts.setupCache,
+    dep_share: round(shares.deps || 0, 3),
     triggers: triggersOf(doc),
     push_branches: pushBranchesOf(doc),
     concurrency_group: concurrencyGroupOf(doc),
-    events: countBy(rs, (r) => r.event),
-    fixed_share: round((share.overhead || 0) + (share.head || 0) + (share.tail || 0) + (share.checkout || 0), 3)
+    events: countBy(workflowRuns, (r) => r.event),
+    fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3)
   };
 }
 var T = THRESHOLDS;
@@ -7951,7 +8043,7 @@ function analyse(repo, data) {
 
 // src/report.mjs
 var CONF = { confirmed: "confirmed by the workflow file", inferred: "cause inferred", measured: "measured" };
-var cell = (s) => String(s).replace(/\|/g, "\\|").replace(/\n/g, " ");
+var cell = (s) => String(s).replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 function shareText(w, n = 3) {
   return Object.entries(w.share).slice(0, n).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(", ");
 }

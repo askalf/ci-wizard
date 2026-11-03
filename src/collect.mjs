@@ -1,3 +1,5 @@
+import { NotFoundError } from './github.mjs';
+
 // Reads what an audit needs from GitHub, read-only: up to 500 workflow runs from the window, the
 // jobs (with their steps) of the newest successful runs of the busiest workflows, those
 // workflows' files, and the repository's root listing (to see which lockfiles it commits).
@@ -14,7 +16,11 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, workflo
   const runs = [];
   for (let page = 1; page <= maxPages; page++) {
     const d = await client.get(`repos/${repo}/actions/runs?per_page=100&page=${page}&created=${encodeURIComponent('>=' + since)}`);
-    if (!d) break;
+    // GitHub answers 404 for a repository that does not exist and for one the token cannot see.
+    if (!d) {
+      if (page === 1) throw new NotFoundError(repo);
+      break;
+    }
     const batch = d.workflow_runs || [];
     runs.push(...batch);
     if (batch.length < 100) break;

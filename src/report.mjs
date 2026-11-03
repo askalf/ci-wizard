@@ -5,7 +5,9 @@ import { fmtS } from './util.mjs';
 
 const CONF = { confirmed: 'confirmed by the workflow file', inferred: 'cause inferred', measured: 'measured' };
 
-const cell = (s) => String(s).replace(/\|/g, '\\|').replace(/\n/g, ' ');
+// Backslashes first, then pipes: escaping the pipe alone turns `A\|B` into `A\\|B`, an escaped
+// backslash followed by a column break.
+export const cell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
 export function shareText(w, n = 3) {
   return Object.entries(w.share).slice(0, n).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(', ');

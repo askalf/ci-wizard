@@ -1,0 +1,37 @@
+name: Bug report
+description: A wrong number, a wrong finding, a crash, or a report that reads badly.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Security issues go to SECURITY.md, not here.
+  - type: input
+    id: command
+    attributes:
+      label: The command or workflow step you ran
+      description: For example `npx github:askalf/ci-wizard#v0.1.1 owner/repo --days 14`, or the action step with its inputs.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `ci-wizard --version`, or the tag or SHA the action is pinned to.
+    validations:
+      required: true
+  - type: textarea
+    id: section
+    attributes:
+      label: The part of the report that is wrong
+      description: Paste the finding or the table row, as the report printed it.
+      render: markdown
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and why
+      description: For a wrong finding, what the workflow file or the run history actually shows.
+    validations:
+      required: true

@@ -13,6 +13,14 @@ export class RateLimitError extends Error {
   }
 }
 
+export class NotFoundError extends Error {
+  constructor(repo) {
+    super(`${repo} was not found, or the token cannot read it`);
+    this.name = 'NotFoundError';
+    this.repo = repo;
+  }
+}
+
 export class GitHubError extends Error {
   constructor(status, path, message) {
     super(`GitHub API ${status} on ${path}${message ? `: ${message}` : ''}`);

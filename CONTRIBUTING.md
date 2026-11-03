@@ -40,6 +40,21 @@ npm run build   # bundles src/ into dist/
 - the built action, run on this repository
 - CodeQL and OpenSSF Scorecard
 
+## Releases
+
+A release is a version bump in `package.json`, `src/version.mjs` and `CHANGELOG.md` on `main`,
+then a GitHub release with the tag `v<version>`. Publishing that release runs
+`.github/workflows/publish.yml`, which checks the tag against `package.json`, runs the tests,
+rebuilds `dist/`, packs the tarball, attests it, and runs `npm publish --provenance` with npm
+trusted publishing: no npm token is stored in the repository.
+
+**Owner step, once:** on npmjs.com, the `ci-wizard` package's settings need a trusted publisher
+for GitHub Actions with repository `askalf/ci-wizard` and workflow filename `publish.yml` (the
+bare filename, no environment). Until it is set, the publish step fails with an authentication
+error. If the package does not exist on npm yet, npm may require its first version to be
+published once by the owner before a trusted publisher can be added; check npm's documentation at
+the time.
+
 ## Conventions
 
 - GitHub Actions are pinned to a full commit SHA with the version in a comment.

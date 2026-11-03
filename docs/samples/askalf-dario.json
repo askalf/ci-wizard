@@ -1,0 +1,572 @@
+{
+ "repo": "askalf/dario",
+ "covered_days": 0.71,
+ "runs_total": 500,
+ "lockfiles": [
+  "package-lock.json"
+ ],
+ "workflows": [
+  {
+   "workflow": "Fleet status",
+   "path": ".github/workflows/fleet-status.yml",
+   "runs_week": 1745.5,
+   "sampled_runs": 5,
+   "jobs_per_run": 1,
+   "job_minutes_per_run": 0.15,
+   "job_minutes_week": 261.8,
+   "wait_p50": 2,
+   "wait_p90": 2,
+   "tail_p50": 4,
+   "hosted_share": 0,
+   "steps_per_job": 4,
+   "share": {
+    "tail": 0.419,
+    "overhead": 0.209,
+    "work": 0.209,
+    "head": 0.163
+   },
+   "cats_secs_per_run": {
+    "overhead": 1.8,
+    "work": 1.8
+   },
+   "has_cache": false,
+   "reruns_week": 0,
+   "failed_week": 0,
+   "dup_commits_week": 0,
+   "wall_p50": 21,
+   "wall_p90": 43,
+   "superseded_week": 0,
+   "has_concurrency": true,
+   "cancels": false,
+   "top_steps": [
+    {
+     "step": "Run askalf/ci/actions/fleet-status@70c075925d61e135043fd7525",
+     "median_s": 1,
+     "seen": 5
+    }
+   ],
+   "longest_job_s": 9,
+   "median_job_s": 9,
+   "reruns_raw": 0,
+   "npm_install_no_ci": false,
+   "prefer_offline": false,
+   "caches_node_modules": false,
+   "setup_cache": false,
+   "dep_share": 0,
+   "triggers": [
+    "issue_comment",
+    "pull_request",
+    "pull_request_review",
+    "workflow_run"
+   ],
+   "push_branches": [],
+   "concurrency_group": "${{ github.event_name == 'workflow_run' && format('fleet-status-{0}-{1}-{2}', github.event.workflow_run.event, github.event.workflow_run.head_repository.full_name, github.event.workflow_run.head_branch) || format('fleet-status-run-{0}', github.run_id) }}",
+   "events": {
+    "workflow_run": 163,
+    "pull_request_review": 6,
+    "pull_request": 7
+   },
+   "fixed_share": 0.791
+  },
+  {
+   "workflow": "Wire drift (self-hosted)",
+   "path": ".github/workflows/wire-drift-self-hosted.yml",
+   "runs_week": 228.1,
+   "sampled_runs": 5,
+   "jobs_per_run": 1,
+   "job_minutes_per_run": 0.52,
+   "job_minutes_week": 117.9,
+   "wait_p50": 19,
+   "wait_p90": 19,
+   "tail_p50": 4,
+   "hosted_share": 0,
+   "steps_per_job": 17,
+   "share": {
+    "work": 0.357,
+    "deps": 0.287,
+    "tail": 0.127,
+    "overhead": 0.083,
+    "checkout": 0.07,
+    "head": 0.051,
+    "toolchain": 0.025
+   },
+   "cats_secs_per_run": {
+    "overhead": 2.6,
+    "checkout": 2.2,
+    "toolchain": 0.8,
+    "deps": 9,
+    "work": 11.2
+   },
+   "has_cache": false,
+   "reruns_week": 0,
+   "failed_week": 0,
+   "dup_commits_week": 0,
+   "wall_p50": 53,
+   "wall_p90": 121,
+   "superseded_week": 0,
+   "has_concurrency": true,
+   "cancels": false,
+   "top_steps": [
+    {
+     "step": "Run wire-drift check",
+     "median_s": 10,
+     "seen": 5
+    },
+    {
+     "step": "Close drift issues on a clean run",
+     "median_s": 1,
+     "seen": 5
+    },
+    {
+     "step": "Set job status",
+     "median_s": 0,
+     "seen": 5
+    }
+   ],
+   "longest_job_s": 32,
+   "median_job_s": 31,
+   "reruns_raw": 0,
+   "npm_install_no_ci": false,
+   "prefer_offline": false,
+   "caches_node_modules": false,
+   "setup_cache": false,
+   "dep_share": 0.287,
+   "triggers": [
+    "push",
+    "schedule",
+    "workflow_dispatch"
+   ],
+   "push_branches": [
+    "master"
+   ],
+   "concurrency_group": "wire-drift-${{ github.workflow }}",
+   "events": {
+    "workflow_dispatch": 17,
+    "schedule": 2,
+    "push": 4
+   },
+   "fixed_share": 0.331
+  },
+  {
+   "workflow": "CC template drift watch (self-hosted)",
+   "path": ".github/workflows/cc-drift-template-watch.yml",
+   "runs_week": 188.4,
+   "sampled_runs": 5,
+   "jobs_per_run": 1,
+   "job_minutes_per_run": 0.52,
+   "job_minutes_week": 97.4,
+   "wait_p50": 2,
+   "wait_p90": 7,
+   "tail_p50": 4,
+   "hosted_share": 0,
+   "steps_per_job": 16,
+   "share": {
+    "deps": 0.364,
+    "work": 0.238,
+    "tail": 0.132,
+    "checkout": 0.093,
+    "overhead": 0.086,
+    "head": 0.06,
+    "toolchain": 0.026
+   },
+   "cats_secs_per_run": {
+    "overhead": 2.6,
+    "checkout": 2.8,
+    "toolchain": 0.8,
+    "deps": 11,
+    "work": 7.2
+   },
+   "has_cache": false,
+   "reruns_week": 0,
+   "failed_week": 0,
+   "dup_commits_week": 0,
+   "wall_p50": 35,
+   "wall_p90": 39,
+   "superseded_week": 0,
+   "has_concurrency": false,
+   "cancels": false,
+   "top_steps": [
+    {
+     "step": "Run drift check",
+     "median_s": 6,
+     "seen": 5
+    },
+    {
+     "step": "Close stale drift issue",
+     "median_s": 1,
+     "seen": 5
+    },
+    {
+     "step": "Check the open rebake PR against live",
+     "median_s": 1,
+     "seen": 5
+    }
+   ],
+   "longest_job_s": 32,
+   "median_job_s": 31,
+   "reruns_raw": 0,
+   "npm_install_no_ci": false,
+   "prefer_offline": false,
+   "caches_node_modules": false,
+   "setup_cache": false,
+   "dep_share": 0.364,
+   "triggers": [
+    "schedule",
+    "workflow_dispatch"
+   ],
+   "push_branches": [],
+   "concurrency_group": "",
+   "events": {
+    "workflow_dispatch": 17,
+    "schedule": 2
+   },
+   "fixed_share": 0.371
+  },
+  {
+   "workflow": "Drift PR heal (conflict + version collision)",
+   "path": ".github/workflows/drift-pr-heal.yml",
+   "runs_week": 198.4,
+   "sampled_runs": 5,
+   "jobs_per_run": 1,
+   "job_minutes_per_run": 0.22,
+   "job_minutes_week": 43,
+   "wait_p50": 2,
+   "wait_p90": 2,
+   "tail_p50": 4,
+   "hosted_share": 0,
+   "steps_per_job": 7,
+   "share": {
+    "checkout": 0.369,
+    "tail": 0.323,
+    "overhead": 0.138,
+    "head": 0.138,
+    "work": 0.031
+   },
+   "cats_secs_per_run": {
+    "overhead": 1.8,
+    "checkout": 4.8,
+    "work": 0.4
+   },
+   "has_cache": false,
+   "reruns_week": 0,
+   "failed_week": 0,
+   "dup_commits_week": 0,
+   "wall_p50": 18,
+   "wall_p90": 34,
+   "superseded_week": 0,
+   "has_concurrency": true,
+   "cancels": false,
+   "top_steps": [
+    {
+     "step": "Require the drift-bot PAT",
+     "median_s": 0,
+     "seen": 5
+    },
+    {
+     "step": "Heal",
+     "median_s": 0,
+     "seen": 5
+    }
+   ],
+   "longest_job_s": 14,
+   "median_job_s": 13,
+   "reruns_raw": 0,
+   "npm_install_no_ci": false,
+   "prefer_offline": false,
+   "caches_node_modules": false,
+   "setup_cache": false,
+   "dep_share": 0,
+   "triggers": [
+    "schedule",
+    "workflow_dispatch"
+   ],
+   "push_branches": [],
+   "concurrency_group": "drift-pr-heal",
+   "events": {
+    "workflow_dispatch": 17,
+    "schedule": 3
+   },
+   "fixed_share": 0.969
+  },
+  {
+   "workflow": "Deployed version watch (self-hosted)",
+   "path": ".github/workflows/deployed-version-watch.yml",
+   "runs_week": 198.4,
+   "sampled_runs": 5,
+   "jobs_per_run": 1,
+   "job_minutes_per_run": 0.2,
+   "job_minutes_week": 39.7,
+   "wait_p50": 2,
+   "wait_p90": 2,
+   "tail_p50": 4,
+   "hosted_share": 0,
+   "steps_per_job": 8,
+   "share": {
+    "tail": 0.333,
+    "work": 0.233,
+    "overhead": 0.183,
+    "checkout": 0.133,
+    "head": 0.117
+   },
+   "cats_secs_per_run": {
+    "overhead": 2.2,
+    "checkout": 1.6,
+    "work": 2.8
+   },
+   "has_cache": false,
+   "reruns_week": 0,
+   "failed_week": 0,
+   "dup_commits_week": 0,
+   "wall_p50": 16,
+   "wall_p90": 25,
+   "superseded_week": 0,
+   "has_concurrency": true,
+   "cancels": false,
+   "top_steps": [
+    {
+     "step": "Compare deployed version against the latest release",
+     "median_s": 2,
+     "seen": 5
+    },
+    {
+     "step": "Report",
+     "median_s": 1,
+     "seen": 5
+    }
+   ],
+   "longest_job_s": 13,
+   "median_job_s": 12,
+   "reruns_raw": 0,
+   "npm_install_no_ci": false,
+   "prefer_offline": false,
+   "caches_node_modules": false,
+   "setup_cache": false,
+   "dep_share": 0,
+   "triggers": [
+    "schedule",
+    "workflow_dispatch"
+   ],
+   "push_branches": [],
+   "concurrency_group": "dario-deployed-version",
+   "events": {
+    "schedule": 3,
+    "workflow_dispatch": 17
+   },
+   "fixed_share": 0.767
+  },
+  {
+   "workflow": "PR keep-current (update behind, explain conflicts)",
+   "path": ".github/workflows/pr-keep-current.yml",
+   "runs_week": 247.9,
+   "sampled_runs": 5,
+   "jobs_per_run": 1,
+   "job_minutes_per_run": 0.13,
+   "job_minutes_week": 33.1,
+   "wait_p50": 2,
+   "wait_p90": 9,
+   "tail_p50": 5,
+   "hosted_share": 0,
+   "steps_per_job": 5,
+   "share": {
+    "tail": 0.525,
+    "head": 0.25,
+    "overhead": 0.125,
+    "work": 0.1
+   },
+   "cats_secs_per_run": {
+    "overhead": 1,
+    "work": 0.8
+   },
+   "has_cache": false,
+   "reruns_week": 0,
+   "failed_week": 0,
+   "dup_commits_week": 0,
+   "wall_p50": 11,
+   "wall_p90": 30,
+   "superseded_week": 0,
+   "has_concurrency": true,
+   "cancels": false,
+   "top_steps": [
+    {
+     "step": "Update behind PRs, explain conflicting ones",
+     "median_s": 1,
+     "seen": 5
+    },
+    {
+     "step": "Require the bot PAT",
+     "median_s": 0,
+     "seen": 5
+    }
+   ],
+   "longest_job_s": 10,
+   "median_job_s": 8,
+   "reruns_raw": 0,
+   "npm_install_no_ci": false,
+   "prefer_offline": false,
+   "caches_node_modules": false,
+   "setup_cache": false,
+   "dep_share": 0,
+   "triggers": [
+    "push",
+    "schedule",
+    "workflow_dispatch"
+   ],
+   "push_branches": [
+    "master"
+   ],
+   "concurrency_group": "pr-keep-current",
+   "events": {
+    "workflow_dispatch": 17,
+    "schedule": 2,
+    "push": 6
+   },
+   "fixed_share": 0.9
+  },
+  {
+   "workflow": "Self-healing supervisor",
+   "path": ".github/workflows/self-healing-supervisor.yml",
+   "runs_week": 188.4,
+   "sampled_runs": 5,
+   "jobs_per_run": 1,
+   "job_minutes_per_run": 0.13,
+   "job_minutes_week": 25.1,
+   "wait_p50": 1,
+   "wait_p90": 6,
+   "tail_p50": 3,
+   "hosted_share": 0,
+   "steps_per_job": 4,
+   "share": {
+    "tail": 0.415,
+    "work": 0.293,
+    "head": 0.244,
+    "overhead": 0.049
+   },
+   "cats_secs_per_run": {
+    "overhead": 0.4,
+    "work": 2.4
+   },
+   "has_cache": false,
+   "reruns_week": 0,
+   "failed_week": 0,
+   "dup_commits_week": 0,
+   "wall_p50": 12,
+   "wall_p90": 20,
+   "superseded_week": 0,
+   "has_concurrency": true,
+   "cancels": false,
+   "top_steps": [
+    {
+     "step": "Identify transient-failure candidates and rerun",
+     "median_s": 2,
+     "seen": 5
+    }
+   ],
+   "longest_job_s": 10,
+   "median_job_s": 8,
+   "reruns_raw": 0,
+   "npm_install_no_ci": false,
+   "prefer_offline": false,
+   "caches_node_modules": false,
+   "setup_cache": false,
+   "dep_share": 0,
+   "triggers": [
+    "schedule",
+    "workflow_dispatch"
+   ],
+   "push_branches": [],
+   "concurrency_group": "self-healing-supervisor",
+   "events": {
+    "workflow_dispatch": 17,
+    "schedule": 2
+   },
+   "fixed_share": 0.707
+  },
+  {
+   "workflow": "Bot branch reaper",
+   "path": ".github/workflows/auto-merge-sweep.yml",
+   "runs_week": 188.4,
+   "sampled_runs": 5,
+   "jobs_per_run": 1,
+   "job_minutes_per_run": 0.1,
+   "job_minutes_week": 18.8,
+   "wait_p50": 8,
+   "wait_p90": 8,
+   "tail_p50": 4,
+   "hosted_share": 0,
+   "steps_per_job": 4,
+   "share": {
+    "tail": 0.576,
+    "head": 0.212,
+    "overhead": 0.121,
+    "work": 0.091
+   },
+   "cats_secs_per_run": {
+    "overhead": 0.8,
+    "work": 0.6
+   },
+   "has_cache": false,
+   "reruns_week": 0,
+   "failed_week": 0,
+   "dup_commits_week": 0,
+   "wall_p50": 16,
+   "wall_p90": 23,
+   "superseded_week": 0,
+   "has_concurrency": true,
+   "cancels": false,
+   "top_steps": [
+    {
+     "step": "Reap bot branches whose PR already merged or was closed",
+     "median_s": 1,
+     "seen": 5
+    }
+   ],
+   "longest_job_s": 9,
+   "median_job_s": 6,
+   "reruns_raw": 0,
+   "npm_install_no_ci": false,
+   "prefer_offline": false,
+   "caches_node_modules": false,
+   "setup_cache": false,
+   "dep_share": 0,
+   "triggers": [
+    "schedule",
+    "workflow_dispatch"
+   ],
+   "push_branches": [],
+   "concurrency_group": "bot-branch-reaper",
+   "events": {
+    "workflow_dispatch": 17,
+    "schedule": 2
+   },
+   "fixed_share": 0.909
+  }
+ ],
+ "job_minutes_week_sampled": 636.8,
+ "findings": [
+  {
+   "saving_min_week": 109.4,
+   "workflow": "scheduled workflows",
+   "what": "many small scheduled jobs",
+   "evidence": "5 periodic workflows (scheduled or dispatched on a clock) each run a job of under 30 s (Drift PR heal (conflict + version collision), Deployed version watch (self-hosted), PR keep-current (update behind, explain conflicts), Self-healing supervisor, Bot branch reaper); each pays its own setup, checkout and wrap-up",
+   "fix": "run them as steps of one scheduled job, or as one job with a step per check, so the fixed cost is paid once per tick",
+   "confidence": "measured"
+  },
+  {
+   "saving_min_week": 104,
+   "workflow": "7 workflows: Fleet status, PR keep-current (update behind, explain conflicts), Wire drift (self-hosted), Drift PR heal (conflict + version collision), Deployed version watch (self-hosted) and more",
+   "what": "self-hosted wrap-up tail",
+   "evidence": "median 4 s after the last step before the job reports done (GitHub-hosted is about 2 s) (shown for the largest; the same holds in the others)",
+   "fix": "fewer steps per job (each step is an uploaded log), and a runner close to GitHub's service region",
+   "confidence": "measured"
+  },
+  {
+   "saving_min_week": 103.5,
+   "workflow": "Fleet status",
+   "what": "runs far more often than code changes",
+   "evidence": "1746 runs a week (workflow_run 163, pull_request 7, pull_request_review 6 in the window); 79% of its job time is fixed cost (setup, checkout, wrap-up)",
+   "fix": "trigger it from fewer upstream workflows or events, debounce it (one run per commit with a concurrency group and cancel-in-progress), or fold it into the workflow that triggers it",
+   "confidence": "measured"
+  }
+ ],
+ "api_calls": 54
+}

@@ -3,11 +3,13 @@ import { createClient } from './github.mjs';
 import { collect } from './collect.mjs';
 import { analyse } from './analyse.mjs';
 
-export { createClient, RateLimitError, GitHubError } from './github.mjs';
+export { createClient, RateLimitError, GitHubError, NotFoundError } from './github.mjs';
 export { collect } from './collect.mjs';
 export { analyse, THRESHOLDS } from './analyse.mjs';
 export { report } from './report.mjs';
 export { html } from './html.mjs';
+export { compare, compareData } from './compare.mjs';
+export { VERSION } from './version.mjs';
 
 export const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 

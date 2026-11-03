@@ -1,0 +1,25 @@
+name: Rule request
+description: A pattern that costs CI time and that ci-wizard does not find yet.
+labels: [rule]
+body:
+  - type: textarea
+    id: pattern
+    attributes:
+      label: The pattern
+      description: What a workflow does that wastes time, in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: The evidence
+      description: What in the run history or the workflow file shows it, and how often it happens. A rule has to be able to show its cause, not guess it.
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: The fix, and its trade-off
+      description: What a team would change, and what they would give up for it.
+    validations:
+      required: true
