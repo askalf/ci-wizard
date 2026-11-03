@@ -50,8 +50,8 @@ trusted publishing: no npm token is stored in the repository.
 
 **Owner step, once:** on npmjs.com, the `ci-wizard` package's settings need a trusted publisher
 for GitHub Actions with repository `askalf/ci-wizard` and workflow filename `publish.yml` (the
-bare filename, no environment). Until it is set, the publish step fails with an authentication
-error. If the package does not exist on npm yet, npm may require its first version to be
+bare filename, no environment). Then set the repository variable `NPM_PUBLISH` to `true`: the
+publish job is skipped until it is, so a release never ends in a failed publish run. If the package does not exist on npm yet, npm may require its first version to be
 published once by the owner before a trusted publisher can be added; check npm's documentation at
 the time.
 

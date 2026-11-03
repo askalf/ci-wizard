@@ -17,6 +17,9 @@ concurrency:
 
 jobs:
   publish:
+    # Off until the npmjs.com trusted publisher exists: set the repository variable NPM_PUBLISH to
+    # true once it does. Without the gate every release would end in a failed publish run.
+    if: vars.NPM_PUBLISH == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
