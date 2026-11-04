@@ -7,6 +7,19 @@ file. A finding states its evidence, a confidence and an estimated weekly saving
 history show it; the cause is the plain reading of the numbers. *inferred*: the cause is a likely
 reading, and the evidence says what else the time may include.
 
+**Window.** When the window holds every run (fewer than the 500-run cap), it covers the days asked
+for, so a repository that ran only on the last day of seven reads as that many runs a week. When
+the cap is reached, the window covers its oldest run to now, and the report says so. Runs whose
+jobs were all skipped count as runs but cost no job-minutes.
+
+**Thin samples.** A workflow timed from fewer than 3 successful runs is marked † in the table,
+and its findings' evidence says how many runs it was timed from.
+
+**Step categories.** A step counts as checkout when it is `actions/checkout` or is named
+"Checkout" / "Check out" (not a test suite that mentions checkout), and as a dependency install
+for `yarn`, `yarn install` or `yarn --frozen-lockfile`, never `yarn test`. A step whose name has an
+expression (`Test on ${{ matrix.node }}`) is matched to its command after GitHub expands it.
+
 **Estimates.** Weekly figures scale the sampled window to 7 days. A saving is a formula over
 measured time, never the result of running the fix; the formulas are below. Thresholds live in
 `THRESHOLDS` in `src/analyse.mjs`.

@@ -7458,9 +7458,12 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
 
 // src/collect.mjs
 var LOCKFILES = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock", "poetry.lock", "uv.lock", "Pipfile.lock", "go.sum", "Cargo.lock", "Gemfile.lock"];
-async function collect(client, repo, { days = 7, perWorkflow = 5, workflows = 8, now = /* @__PURE__ */ new Date(), maxPages = 5 } = {}) {
+async function collect(client, repo, { days = 7, perWorkflow = 5, workflows = 8, now = /* @__PURE__ */ new Date(), maxPages = 5, onProgress = () => {
+} } = {}) {
   const since = new Date(now.getTime() - days * 864e5).toISOString().replace(/\.\d{3}Z$/, "Z");
   const runs = [];
+  let truncated = false;
+  onProgress("reading workflow runs");
   for (let page = 1; page <= maxPages; page++) {
     const d = await client.get(`repos/${repo}/actions/runs?per_page=100&page=${page}&created=${encodeURIComponent(">=" + since)}`);
     if (!d) {
@@ -7470,10 +7473,11 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, workflows = 8,
     const batch = d.workflow_runs || [];
     runs.push(...batch);
     if (batch.length < 100) break;
+    if (page === maxPages) truncated = true;
   }
   if (!runs.length) return null;
   const oldest = Math.min(...runs.map((r) => Date.parse(r.created_at)));
-  const coveredDays = Math.max(0.25, (now.getTime() - oldest) / 864e5);
+  const coveredDays = truncated ? Math.max(0.25, (now.getTime() - oldest) / 864e5) : days;
   const byWf = /* @__PURE__ */ new Map();
   for (const r of runs) {
     if (!byWf.has(r.name)) byWf.set(r.name, []);
@@ -7481,7 +7485,9 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, workflows = 8,
   }
   const top = [...byWf.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, workflows);
   const samples = /* @__PURE__ */ new Map();
+  let n = 0;
   for (const [wf, rs] of top) {
+    onProgress(`timing ${wf} (${++n}/${top.length})`);
     const ok = rs.filter((r) => r.status === "completed" && r.conclusion === "success").slice(0, perWorkflow);
     const jobsPerRun = [];
     for (const r of ok) {
@@ -7490,6 +7496,7 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, workflows = 8,
     }
     samples.set(wf, jobsPerRun);
   }
+  onProgress("reading workflow files");
   const files = /* @__PURE__ */ new Map();
   for (const [, rs] of top) {
     const path = String(rs[0].path || "").split("@")[0];
@@ -7500,16 +7507,17 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, workflows = 8,
   const root = await client.get(`repos/${repo}/contents/`) || [];
   const names = new Set((Array.isArray(root) ? root : []).map((x) => x && x.name));
   const lockfiles = LOCKFILES.filter((f) => names.has(f)).sort();
-  return { runs, byWf, samples, coveredDays, since, files, lockfiles };
+  return { runs, byWf, samples, coveredDays, truncated, since, files, lockfiles };
 }
 
 // src/workflow.mjs
 var import_yaml = __toESM(require_dist(), 1);
 var CATS = [
   ["overhead", /^(set up job|complete job|set up runner|complete runner)$/],
-  ["checkout", /checkout/],
+  // actions/checkout, or a step named for it; not a test suite that happens to say "checkout".
+  ["checkout", /actions\/checkout|^check ?out\b|^git clone\b/],
   ["toolchain", /setup-(node|go|python|java|dotnet|ruby|pnpm|bun|deno|uv|rust)|pnpm\/action-setup|rustup|toolchain|install (node|go|python|pnpm|bun|deno|rust)\b|setup (node|go|python|pnpm|bun|java)/],
-  ["deps", /\b(npm (ci|install|i)\b|pnpm (install|i)\b|yarn( install)?\b|bun install|pip install|uv (sync|pip)|poetry install|go mod download|bundle install|cargo fetch|install (dep|package)|dependencies)/],
+  ["deps", /\b(npm (ci|install|i)\b|pnpm (install|i)\b|\byarn(\s+install\b|\s*$|\s+--(frozen-lockfile|immutable|pure-lockfile|prefer-offline))|bun install|pip install|uv (sync|pip)|poetry install|go mod download|bundle install|cargo fetch|install (dep|package)|dependencies)/],
   ["cache", /\bcache\b/],
   ["artifacts", /(upload|download)-artifact|(upload|download) artifact/],
   ["docker", /\bdocker\b|buildx|build-push/]
@@ -7545,11 +7553,21 @@ function stepCommands(doc) {
   }
   return out;
 }
+function commandOf(name, commands) {
+  const n = String(name).trim();
+  const exact = commands.get(n) || (n.startsWith("Post ") ? commands.get(n.slice(5)) : "");
+  if (exact) return exact;
+  for (const [pattern, cmd] of commands) {
+    if (!pattern.includes("${{")) continue;
+    const rx = new RegExp(`^(Post )?${pattern.split(/\$\{\{.*?\}\}/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*?")}$`, "s");
+    if (rx.test(n)) return cmd;
+  }
+  return "";
+}
 function categoryOf(name, commands) {
   const c = category(name);
   if (c !== "work") return c;
-  const n = String(name).trim();
-  const cmd = commands.get(n) || (n.startsWith("Post ") ? commands.get(n.slice(5)) : "") || "";
+  const cmd = commandOf(name, commands);
   if (!cmd) return c;
   const first = cmd.trim() ? cmd.split("\n")[0] : "";
   const c2 = category(first);
@@ -7694,11 +7712,13 @@ var THRESHOLDS = {
   queueP90: 30,
   shortJobsCount: 6,
   fanOutRunsWeek: 500,
-  periodicCount: 3
+  periodicCount: 3,
+  thinSample: 3
 };
 var PR_EVENTS = /* @__PURE__ */ new Set(["pull_request", "pull_request_target"]);
 var GROUPED = /* @__PURE__ */ new Set(["self-hosted wrap-up tail", "toolchain setup", "queue wait"]);
 function ranOnGitHubHosted(job) {
+  if (job.runner_group_name) return job.runner_group_name === "GitHub Actions";
   const runner = String(job.runner_name || "").toLowerCase();
   const labels = (job.labels || []).join(" ").toLowerCase();
   return runner.includes("github actions") || labels.includes("ubuntu-") || labels.includes("windows-") || labels.includes("macos-");
@@ -7797,15 +7817,18 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
   const successfulWalls = workflowRuns.filter((r) => r.status === "completed" && r.conclusion === "success" && r.run_started_at).map((r) => secs(r.run_started_at, r.updated_at));
   const reruns = workflowRuns.filter((r) => (r.run_attempt || 1) > 1).length;
   const failures = workflowRuns.filter((r) => r.conclusion === "failure").length;
+  const costedRuns = workflowRuns.filter((r) => r.conclusion !== "skipped").length;
   const perWeek = (n) => round(n * weekFactor, 1);
   return {
     workflow: workflowName,
     path: String(workflowRuns[0].path || "").split("@")[0],
     runs_week: perWeek(workflowRuns.length),
     sampled_runs: sampledCount,
+    thin_sample: sampledCount < THRESHOLDS.thinSample,
+    skipped_week: perWeek(workflowRuns.length - costedRuns),
     jobs_per_run: round(timing.jobCount / sampledCount, 1),
     job_minutes_per_run: round(medianRunSeconds / 60, 2),
-    job_minutes_week: round(workflowRuns.length * weekFactor * medianRunSeconds / 60, 1),
+    job_minutes_week: round(costedRuns * weekFactor * medianRunSeconds / 60, 1),
     wait_p50: pct(timing.queueWaits, 0.5),
     wait_p90: pct(timing.queueWaits, 0.9),
     tail_p50: pct(timing.tails, 0.5),
@@ -7841,7 +7864,8 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
 var T = THRESHOLDS;
 function workflowFindings(w, { lockKey, hasLock }) {
   const F = [];
-  const add = (saving, what, evidence, fix, confidence = "measured") => F.push({ saving, workflow: w.workflow, what, evidence, fix, confidence });
+  const thin = w.thin_sample ? ` (timed from only ${w.sampled_runs} successful run${w.sampled_runs === 1 ? "" : "s"})` : "";
+  const add = (saving, what, evidence, fix, confidence = "measured") => F.push({ saving, workflow: w.workflow, what, evidence: evidence + thin, fix, confidence });
   const perRun = w.cats_secs_per_run;
   const jobs = Math.max(1, w.jobs_per_run);
   const deps = perRun.deps || 0;
@@ -8034,11 +8058,13 @@ function analyse(repo, data) {
   return {
     repo,
     covered_days: round(data.coveredDays, 2),
+    window_truncated: Boolean(data.truncated),
     runs_total: data.runs.length,
     lockfiles: data.lockfiles,
     workflows,
     job_minutes_week_sampled: round(sum(workflows.map((w) => w.job_minutes_week)), 1),
-    findings
+    findings,
+    saving_min_week_total: round(sum(findings.map((f) => f.saving_min_week)), 1)
   };
 }
 
@@ -8055,6 +8081,12 @@ function report(a, { maxFindings = 8 } = {}) {
   const L = [];
   L.push(`# CI audit: ${a.repo}`, "");
   L.push(`Read-only, from GitHub's Actions API: ${a.runs_total} workflow runs over ${a.covered_days} days, the busiest workflows sampled job by job. Weekly figures scale the sampled window to 7 days. Savings are estimates, labelled with the evidence they come from.`, "");
+  if (a.window_truncated) L.push(`The ${a.runs_total}-run cap was reached, so the window covers ${a.covered_days} days rather than the days asked for; weekly figures are scaled from that shorter window and are noisier.`, "");
+  if (a.findings.length && a.job_minutes_week_sampled > 0) {
+    const total = a.saving_min_week_total ?? a.findings.reduce((s, f) => s + f.saving_min_week, 0);
+    const share = Math.round(100 * total / a.job_minutes_week_sampled);
+    L.push(`**${a.findings.length} finding${a.findings.length === 1 ? "" : "s"}**, together about ${Math.round(total)} of the ${Math.round(a.job_minutes_week_sampled)} job-minutes a week the sampled workflows use (${share}%, estimate; fixes can overlap, so the sum is an upper bound).`, "");
+  }
   L.push("## What to fix first", "");
   if (!a.findings.length) L.push("Nothing crossed the thresholds in this sample.");
   a.findings.slice(0, maxFindings).forEach((f, i) => {
@@ -8065,9 +8097,12 @@ function report(a, { maxFindings = 8 } = {}) {
   L.push("| Workflow | Runs/week | Jobs/run | Job-min/run | Job-min/week | Developer wait p50 / p90 | Queue p50 / p90 | Biggest shares |");
   L.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const w of a.workflows) {
-    L.push(`| ${cell(w.workflow)} | ${Math.round(w.runs_week)} | ${w.jobs_per_run.toFixed(1)} | ${w.job_minutes_per_run.toFixed(1)} | ${Math.round(w.job_minutes_week)} | ${fmtS(w.wall_p50)} / ${fmtS(w.wall_p90)} | ${Math.round(w.wait_p50)} s / ${Math.round(w.wait_p90)} s | ${shareText(w)} |`);
+    L.push(`| ${cell(w.workflow)}${w.thin_sample ? " †" : ""} | ${Math.round(w.runs_week)} | ${w.jobs_per_run.toFixed(1)} | ${w.job_minutes_per_run.toFixed(1)} | ${Math.round(w.job_minutes_week)} | ${fmtS(w.wall_p50)} / ${fmtS(w.wall_p90)} | ${Math.round(w.wait_p50)} s / ${Math.round(w.wait_p90)} s | ${shareText(w)} |`);
   }
-  L.push("", `Sampled workflows total about **${Math.round(a.job_minutes_week_sampled)} job-minutes a week**. Developer wait is a successful run's wall time, start to finish.`, "");
+  L.push("", `Sampled workflows total about **${Math.round(a.job_minutes_week_sampled)} job-minutes a week**. Developer wait is a successful run's wall time, start to finish.`);
+  const thin = a.workflows.filter((w) => w.thin_sample);
+  if (thin.length) L.push(`† Timed from fewer than 3 successful runs in the window, so its per-run figures can be an outlier; a longer \`--days\` window samples more.`);
+  L.push("");
   L.push("### The longest steps", "");
   for (const w of a.workflows.slice(0, 4)) {
     if (!w.top_steps.length) continue;
@@ -8075,10 +8110,14 @@ function report(a, { maxFindings = 8 } = {}) {
     const facts = [w.has_cache ? "caches dependencies" : "no dependency cache found in the workflow file", w.cancels ? "cancels outdated runs" : "no cancel-in-progress"];
     L.push(`- *${w.workflow}* (\`${w.path}\`): ${steps}. Workflow file: ${facts.join(", ")}.`);
   }
+  if (a.findings.length) {
+    L.push("", "## Next step: prove the fix", "");
+    L.push("Keep this report as a baseline (`ci-wizard owner/repo --save before.json`, or the action's `report.json`). Make one change, let it run for a few days, measure again with `--save after.json`, and run `ci-wizard compare before.json after.json`: per workflow, what moved, and which findings are gone.");
+  }
   L.push("", "## How it was measured", "");
   L.push("- Job time = completed minus started; queue wait = started minus created; developer wait = a successful run's wall time. All from the Actions API, in whole seconds.");
   L.push("- Steps grouped into runner overhead, checkout, toolchain, dependencies, cache, artifacts, docker and work, by the command the workflow file gives each step (its run or uses line) and otherwise by its name; time before the first step and after the last step counted separately.");
-  L.push("- Duplicate runs = commits the workflow ran on both a push and a pull request event. Reruns = runs with a run attempt above 1. Outdated runs = a pull request run still going when a newer commit on the same branch started its run.");
+  L.push("- Runs whose jobs were all skipped count as runs but cost no job-minutes. Duplicate runs = commits the workflow ran on both a push and a pull request event. Reruns = runs with a run attempt above 1. Outdated runs = a pull request run still going when a newer commit on the same branch started its run.");
   L.push("- Cache and concurrency facts are read from the workflow file itself (actions/cache, a setup action's cache input, concurrency and cancel-in-progress).");
   L.push("- Estimated savings: dependency cache 60% of install time when no cache runs, 30% when one runs but installs still dominate; checkout and toolchain 50%; duplicates, outdated runs and reruns their full job time; self-hosted tail the excess over 2 s; fixed-cost findings half of the fixed share. See docs/rules.md in the ci-wizard repository.");
   return `${L.join("\n")}
@@ -8107,7 +8146,7 @@ function section(a) {
     const save = f.saving_min_week >= 1 ? `about ${Math.round(f.saving_min_week).toLocaleString("en-US")} job-min a week` : "saves developer wait, not job minutes";
     return `<li class="find"><div class="rank num">${i + 1}</div><div class="fbody"><div class="fhead"><h4>${esc(f.what)}</h4><span class="chip ${cls}">${label}</span><span class="save">${save} <em>(estimate)</em></span></div><div class="where">${esc(f.workflow)}</div><p>${esc(f.evidence)}.</p><p class="fix"><b>Fix</b> ${esc(f.fix)}.</p></div></li>`;
   }).join("") || '<li class="find"><div class="fbody"><p>Nothing crossed the thresholds in this sample.</p></div></li>';
-  const rows = a.workflows.map((w) => `<tr><td>${esc(w.workflow)}</td><td class="n">${Math.round(w.runs_week)}</td><td class="n">${w.jobs_per_run.toFixed(1)}</td><td class="n">${w.job_minutes_per_run.toFixed(1)}</td><td class="n">${Math.round(w.job_minutes_week).toLocaleString("en-US")}</td><td class="n">${fmtS(w.wall_p50)} / ${fmtS(w.wall_p90)}</td><td class="n">${Math.round(w.wait_p50)} s / ${Math.round(w.wait_p90)} s</td><td>${Object.entries(w.share).slice(0, 3).map(([k, v]) => `${esc(k)} ${Math.round(v * 100)}%`).join(", ")}</td></tr>`).join("");
+  const rows = a.workflows.map((w) => `<tr><td>${esc(w.workflow)}${w.thin_sample ? ' <span title="timed from fewer than 3 successful runs">†</span>' : ""}</td><td class="n">${Math.round(w.runs_week)}</td><td class="n">${w.jobs_per_run.toFixed(1)}</td><td class="n">${w.job_minutes_per_run.toFixed(1)}</td><td class="n">${Math.round(w.job_minutes_week).toLocaleString("en-US")}</td><td class="n">${fmtS(w.wall_p50)} / ${fmtS(w.wall_p90)}</td><td class="n">${Math.round(w.wait_p50)} s / ${Math.round(w.wait_p90)} s</td><td>${Object.entries(w.share).slice(0, 3).map(([k, v]) => `${esc(k)} ${Math.round(v * 100)}%`).join(", ")}</td></tr>`).join("");
   const steps = a.workflows.slice(0, 4).filter((w) => w.top_steps.length).map((w) => `<li><b>${esc(w.workflow)}</b>: ${w.top_steps.map((t) => `${esc(t.step)} ${fmtS(t.median_s)}`).join("; ")} <span class="muted">(${w.has_cache ? "caches dependencies" : "no dependency cache in the workflow file"}, ${w.cancels ? "cancels outdated runs" : "no cancel-in-progress"})</span></li>`).join("");
   return `
 <section class="repo" id="${id}" aria-labelledby="${id}-h">
@@ -8278,6 +8317,8 @@ function compareData(before, after) {
   return {
     repos: [before.repo, after.repo],
     sameRepo: before.repo === after.repo,
+    // window_truncated arrived with the change to how the window is scaled; a report without it is older.
+    mixedVersions: "window_truncated" in before !== "window_truncated" in after,
     windows: [{ days: before.covered_days, runs: before.runs_total }, { days: after.covered_days, runs: after.runs_total }],
     both,
     onlyBefore: before.workflows.filter((w) => !afterByName.has(w.workflow)).map((w) => w.workflow),
@@ -8292,6 +8333,7 @@ function compare(before, after) {
   const L = [];
   L.push(`# CI comparison: ${c.sameRepo ? before.repo : `${before.repo} against ${after.repo}`}`, "");
   if (!c.sameRepo) L.push("These two reports are of different repositories, so the changes below compare two codebases, not a before and after.", "");
+  if (c.mixedVersions) L.push("One report comes from ci-wizard 0.1.1 or earlier, which scaled weekly figures from the oldest run read even when the window held every run, so a quiet repository's weekly numbers there read high. Audit again with this version for both sides before reading a drop as the change working.", "");
   L.push(`Before: ${c.windows[0].runs} runs over ${c.windows[0].days} days. After: ${c.windows[1].runs} runs over ${c.windows[1].days} days. Weekly figures in each are scaled to 7 days, so windows of different lengths compare, but a short window is noisier.`, "");
   const tm = { digits: 0 };
   L.push(`Sampled workflows: ${Math.round(c.totals.before)} job-minutes a week before, ${Math.round(c.totals.after)} after: ${change(tm, c.totals.before, c.totals.after)}.`, "");
@@ -8317,10 +8359,10 @@ var VERSION = "0.1.1";
 
 // src/index.mjs
 var REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-async function audit({ repo, token, fetchImpl, days = 7, workflows = 8, perWorkflow = 5, now, client } = {}) {
+async function audit({ repo, token, fetchImpl, days = 7, workflows = 8, perWorkflow = 5, now, client, onProgress } = {}) {
   if (!REPO_RE.test(String(repo))) throw new Error(`not an owner/name repository: ${repo}`);
   const c = client || createClient({ token, fetchImpl });
-  const data = await collect(c, repo, { days, workflows, perWorkflow, now });
+  const data = await collect(c, repo, { days, workflows, perWorkflow, now, onProgress });
   if (!data) return null;
   const a = analyse(repo, data);
   a.api_calls = c.calls;
@@ -8328,13 +8370,40 @@ async function audit({ repo, token, fetchImpl, days = 7, workflows = 8, perWorkf
 }
 
 // src/cli.mjs
-var USAGE = `usage: ci-wizard owner/repo [--days 7] [--workflows 8] [--per-workflow 5] [--json] [--html out.html]
+var USAGE = `usage: ci-wizard [owner/repo] [--days 7] [--workflows 8] [--per-workflow 5] [--json] [--html out.html] [--save out.json]
        ci-wizard compare before.json after.json
        ci-wizard --version
 
 Reads a repository's GitHub Actions runs, jobs and workflow files (read-only) and reports where
-the CI time goes and what to fix first. Token: GITHUB_TOKEN or GH_TOKEN, else \`gh auth token\`.
-compare takes two reports saved with --json, from before and after a change, and shows what moved.`;
+the CI time goes and what to fix first. The repository is owner/repo or a GitHub URL; left out,
+it is the origin remote of the git checkout in the current directory.
+Token: GITHUB_TOKEN or GH_TOKEN, else \`gh auth token\`.
+
+  --days N           days of runs to read (default 7; up to 500 runs are read)
+  --workflows N      busiest workflows to time job by job (default 8)
+  --per-workflow N   newest successful runs of each to time (default 5)
+  --json             print the report as JSON instead of markdown
+  --save FILE        also save the JSON report, as a baseline for compare
+  --html FILE        also write the report as an HTML page
+
+The method: audit and --save before.json, make one change, let it run, audit again with
+--save after.json, then \`ci-wizard compare before.json after.json\` shows what moved.`;
+function parseRepo(s) {
+  const t = String(s || "").trim();
+  if (!t) return null;
+  const m = /^(?:(?:https?:\/\/|ssh:\/\/)?(?:[^@/]+@)?(?:www\.)?github\.com[/:])?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?(?:[/?#].*)?$/.exec(t);
+  if (!m) return null;
+  const repo = `${m[1]}/${m[2]}`;
+  return REPO_RE.test(repo) ? repo : null;
+}
+function repoFromGit(cwd) {
+  try {
+    const url = execFileSync("git", ["remote", "get-url", "origin"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return /github\.com[/:]/.test(url) ? parseRepo(url) : null;
+  } catch {
+    return null;
+  }
+}
 function tokenFromEnv(env) {
   if (env.GITHUB_TOKEN) return env.GITHUB_TOKEN;
   if (env.GH_TOKEN) return env.GH_TOKEN;
@@ -8377,7 +8446,7 @@ function runCompare(paths, { stdout, stderr }) {
   stdout.write(compare(before, after));
   return 0;
 }
-async function main(argv = process.argv.slice(2), { env = process.env, stdout = process.stdout, stderr = process.stderr, fetchImpl } = {}) {
+async function main(argv = process.argv.slice(2), { env = process.env, stdout = process.stdout, stderr = process.stderr, fetchImpl, cwd = process.cwd(), token: givenToken } = {}) {
   let args;
   try {
     args = parseArgs({
@@ -8389,6 +8458,7 @@ async function main(argv = process.argv.slice(2), { env = process.env, stdout = 
         "per-workflow": { type: "string", default: "5" },
         json: { type: "boolean", default: false },
         html: { type: "string" },
+        save: { type: "string" },
         help: { type: "boolean", short: "h", default: false },
         version: { type: "boolean", short: "v", default: false }
       }
@@ -8412,11 +8482,32 @@ ${USAGE}
     return 0;
   }
   if (positionals[0] === "compare") return runCompare(positionals.slice(1), { stdout, stderr });
-  const repo = positionals[0];
-  if (positionals.length !== 1 || !REPO_RE.test(repo)) {
+  if (positionals.length > 1) {
     stderr.write(`${USAGE}
 `);
     return 2;
+  }
+  let repo;
+  if (positionals.length) {
+    repo = parseRepo(positionals[0]);
+    if (!repo) {
+      stderr.write(`ci-wizard: ${positionals[0]} is not owner/repo or a GitHub repository URL
+
+${USAGE}
+`);
+      return 2;
+    }
+  } else {
+    repo = repoFromGit(cwd);
+    if (!repo) {
+      stderr.write(`ci-wizard: name a repository (owner/repo), or run inside a checkout whose origin is on GitHub
+
+${USAGE}
+`);
+      return 2;
+    }
+    stderr.write(`ci-wizard: auditing ${repo} (the origin of this checkout)
+`);
   }
   let days, workflows, perWorkflow;
   try {
@@ -8428,26 +8519,40 @@ ${USAGE}
 `);
     return 2;
   }
+  const token = givenToken !== void 0 ? givenToken : tokenFromEnv(env);
+  if (!token) {
+    stderr.write("ci-wizard: no token found (GITHUB_TOKEN, GH_TOKEN or `gh auth login`); unauthenticated calls are limited to 60 an hour, and a private repository reads as not found\n");
+  }
+  const live = Boolean(stderr.isTTY);
+  const onProgress = live ? (msg) => stderr.write(`\r\x1B[Kci-wizard: ${msg}...`) : void 0;
   let a;
   try {
-    a = await audit({ repo, token: tokenFromEnv(env), fetchImpl, days, workflows, perWorkflow });
+    a = await audit({ repo, token, fetchImpl, days, workflows, perWorkflow, onProgress });
   } catch (err) {
+    if (live) stderr.write("\r\x1B[K");
     stderr.write(`ci-wizard: ${err.message}
 `);
+    if (err instanceof NotFoundError && !token) stderr.write("ci-wizard: with no token only public repositories can be read\n");
     return err instanceof RateLimitError ? 3 : 1;
   }
+  if (live) stderr.write("\r\x1B[K");
   if (!a) {
     stderr.write(`ci-wizard: ${repo} has no workflow runs in the last ${days} days
 `);
     return 1;
   }
   if (values.html) writeFileSync(values.html, html([a], { title: `CI audit: ${repo}` }));
+  if (values.save) writeFileSync(values.save, `${JSON.stringify(a, null, 1)}
+`);
   stdout.write(values.json ? `${JSON.stringify(a, null, 1)}
 ` : report(a));
   stderr.write(`ci-wizard: ${a.runs_total} runs over ${a.covered_days} d, ${a.workflows.length} workflows sampled, ${a.findings.length} findings, ${a.api_calls} API calls
 `);
+  if (values.save) stderr.write(`ci-wizard: saved ${values.save}; after a change has run a while, save another report and run \`ci-wizard compare ${values.save} <after>.json\`
+`);
   return 0;
 }
 export {
-  main
+  main,
+  parseRepo
 };

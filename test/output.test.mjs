@@ -27,7 +27,7 @@ test('report: findings first, every saving called an estimate, and how it was me
 
 test('report: a pipe in a workflow name cannot break the table', () => {
   const a = analyse('o/r', data({ workflows: [{ name: 'A | B', runs: runs(3) }] }));
-  assert.match(report(a), /\| A \\\| B \|/);
+  assert.match(report(a), /\| A \\\| B( †)? \|/);
 });
 
 test('html: workflow and step names are escaped', () => {
@@ -113,7 +113,7 @@ test('cli: prints the markdown report, or JSON with --json', async () => {
 test('cli: usage errors exit 2', async () => {
   for (const args of [[], ['nope'], ['o/r', '--days', '0'], ['o/r', '--workflows', '2.5'], ['o/r', '--bogus']]) {
     const io = cliIO();
-    assert.equal(await cli(args, { env: { GITHUB_TOKEN: 'x' }, ...io }), 2, args.join(' '));
+    assert.equal(await cli(args, { env: { GITHUB_TOKEN: 'x' }, ...io, cwd: tmpdir() }), 2, args.join(' '));
   }
 });
 

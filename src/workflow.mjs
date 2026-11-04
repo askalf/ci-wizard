@@ -6,9 +6,10 @@ import { parse } from 'yaml';
 /** Step categories, matched on a lower-cased step name or command (a "Post " step counts with what it posts for). */
 const CATS = [
   ['overhead', /^(set up job|complete job|set up runner|complete runner)$/],
-  ['checkout', /checkout/],
+  // actions/checkout, or a step named for it; not a test suite that happens to say "checkout".
+  ['checkout', /actions\/checkout|^check ?out\b|^git clone\b/],
   ['toolchain', /setup-(node|go|python|java|dotnet|ruby|pnpm|bun|deno|uv|rust)|pnpm\/action-setup|rustup|toolchain|install (node|go|python|pnpm|bun|deno|rust)\b|setup (node|go|python|pnpm|bun|java)/],
-  ['deps', /\b(npm (ci|install|i)\b|pnpm (install|i)\b|yarn( install)?\b|bun install|pip install|uv (sync|pip)|poetry install|go mod download|bundle install|cargo fetch|install (dep|package)|dependencies)/],
+  ['deps', /\b(npm (ci|install|i)\b|pnpm (install|i)\b|\byarn(\s+install\b|\s*$|\s+--(frozen-lockfile|immutable|pure-lockfile|prefer-offline))|bun install|pip install|uv (sync|pip)|poetry install|go mod download|bundle install|cargo fetch|install (dep|package)|dependencies)/],
   ['cache', /\bcache\b/],
   ['artifacts', /(upload|download)-artifact|(upload|download) artifact/],
   ['docker', /\bdocker\b|buildx|build-push/],
@@ -33,7 +34,11 @@ export function parseWorkflow(text) {
   }
 }
 
-/** Step name -> its run or uses text, naming unnamed steps the way GitHub does ("Run <uses>" or "Run <first line>"). */
+/**
+ * Step name -> its run or uses text, naming unnamed steps the way GitHub does ("Run <uses>" or
+ * "Run <first line>"). A name with an expression (`Test on ${{ matrix.node }}`) reaches the API
+ * expanded, so categoryOf also matches it as a pattern.
+ */
 export function stepCommands(doc) {
   const out = new Map();
   for (const job of Object.values(doc.jobs || {})) {
@@ -56,11 +61,22 @@ export function stepCommands(doc) {
  * by the command the workflow file gives it, so a step named "Install" that runs `npm install`
  * counts as a dependency install.
  */
+export function commandOf(name, commands) {
+  const n = String(name).trim();
+  const exact = commands.get(n) || (n.startsWith('Post ') ? commands.get(n.slice(5)) : '');
+  if (exact) return exact;
+  for (const [pattern, cmd] of commands) {
+    if (!pattern.includes('${{')) continue;
+    const rx = new RegExp(`^(Post )?${pattern.split(/\$\{\{.*?\}\}/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*?')}$`, 's');
+    if (rx.test(n)) return cmd;
+  }
+  return '';
+}
+
 export function categoryOf(name, commands) {
   const c = category(name);
   if (c !== 'work') return c;
-  const n = String(name).trim();
-  const cmd = commands.get(n) || (n.startsWith('Post ') ? commands.get(n.slice(5)) : '') || '';
+  const cmd = commandOf(name, commands);
   if (!cmd) return c;
   const first = cmd.trim() ? cmd.split('\n')[0] : '';
   const c2 = category(first);

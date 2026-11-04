@@ -21,6 +21,7 @@ export const THRESHOLDS = {
   shortJobsCount: 6,
   fanOutRunsWeek: 500,
   periodicCount: 3,
+  thinSample: 3,
 };
 
 const PR_EVENTS = new Set(['pull_request', 'pull_request_target']);
@@ -28,6 +29,9 @@ const PR_EVENTS = new Set(['pull_request', 'pull_request_target']);
 const GROUPED = new Set(['self-hosted wrap-up tail', 'toolchain setup', 'queue wait']);
 
 function ranOnGitHubHosted(job) {
+  // The runner group is the reliable field: GitHub-hosted jobs report "GitHub Actions". Labels are
+  // only a fallback for older payloads, since a self-hosted runner may carry an ubuntu-* label.
+  if (job.runner_group_name) return job.runner_group_name === 'GitHub Actions';
   const runner = String(job.runner_name || '').toLowerCase();
   const labels = (job.labels || []).join(' ').toLowerCase();
   return runner.includes('github actions') || labels.includes('ubuntu-') || labels.includes('windows-') || labels.includes('macos-');
@@ -139,15 +143,19 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     .map((r) => secs(r.run_started_at, r.updated_at));
   const reruns = workflowRuns.filter((r) => (r.run_attempt || 1) > 1).length;
   const failures = workflowRuns.filter((r) => r.conclusion === 'failure').length;
+  // A run whose jobs were all skipped costs no job time; it still counts as a run.
+  const costedRuns = workflowRuns.filter((r) => r.conclusion !== 'skipped').length;
   const perWeek = (n) => round(n * weekFactor, 1);
   return {
     workflow: workflowName,
     path: String(workflowRuns[0].path || '').split('@')[0],
     runs_week: perWeek(workflowRuns.length),
     sampled_runs: sampledCount,
+    thin_sample: sampledCount < THRESHOLDS.thinSample,
+    skipped_week: perWeek(workflowRuns.length - costedRuns),
     jobs_per_run: round(timing.jobCount / sampledCount, 1),
     job_minutes_per_run: round(medianRunSeconds / 60, 2),
-    job_minutes_week: round((workflowRuns.length * weekFactor * medianRunSeconds) / 60, 1),
+    job_minutes_week: round((costedRuns * weekFactor * medianRunSeconds) / 60, 1),
     wait_p50: pct(timing.queueWaits, 0.5),
     wait_p90: pct(timing.queueWaits, 0.9),
     tail_p50: pct(timing.tails, 0.5),
@@ -186,7 +194,9 @@ const T = THRESHOLDS;
 /** The per-workflow rules. Each returns findings as { saving, workflow, what, evidence, fix, confidence }. */
 export function workflowFindings(w, { lockKey, hasLock }) {
   const F = [];
-  const add = (saving, what, evidence, fix, confidence = 'measured') => F.push({ saving, workflow: w.workflow, what, evidence, fix, confidence });
+  // A timing from one or two runs can be an outlier; the evidence says so rather than hiding it.
+  const thin = w.thin_sample ? ` (timed from only ${w.sampled_runs} successful run${w.sampled_runs === 1 ? '' : 's'})` : '';
+  const add = (saving, what, evidence, fix, confidence = 'measured') => F.push({ saving, workflow: w.workflow, what, evidence: evidence + thin, fix, confidence });
   const perRun = w.cats_secs_per_run;
   const jobs = Math.max(1, w.jobs_per_run);
 
@@ -364,10 +374,12 @@ export function analyse(repo, data) {
   return {
     repo,
     covered_days: round(data.coveredDays, 2),
+    window_truncated: Boolean(data.truncated),
     runs_total: data.runs.length,
     lockfiles: data.lockfiles,
     workflows,
     job_minutes_week_sampled: round(sum(workflows.map((w) => w.job_minutes_week)), 1),
     findings,
+    saving_min_week_total: round(sum(findings.map((f) => f.saving_min_week)), 1),
   };
 }

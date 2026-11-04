@@ -1,5 +1,6 @@
-// ci-wizard owner/repo [--days 7] [--workflows 8] [--per-workflow 5] [--json] [--html out.html]
+// ci-wizard [owner/repo | GitHub URL] [--days 7] [--workflows 8] [--per-workflow 5] [--json] [--html out.html] [--save out.json]
 // ci-wizard compare before.json after.json
+// With no repository, the audit reads the origin remote of the git checkout it runs in.
 // The audit prints the markdown report (or the JSON with --json). The token comes from
 // GITHUB_TOKEN or GH_TOKEN, or from `gh auth token` when the GitHub CLI is signed in; it needs
 // read access to the repository's Actions and contents, and nothing is written. compare reads two
@@ -7,17 +8,50 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { audit, html, report, RateLimitError, REPO_RE } from './index.mjs';
+import { audit, html, NotFoundError, report, RateLimitError, REPO_RE } from './index.mjs';
 import { compare } from './compare.mjs';
 import { VERSION } from './version.mjs';
 
-const USAGE = `usage: ci-wizard owner/repo [--days 7] [--workflows 8] [--per-workflow 5] [--json] [--html out.html]
+const USAGE = `usage: ci-wizard [owner/repo] [--days 7] [--workflows 8] [--per-workflow 5] [--json] [--html out.html] [--save out.json]
        ci-wizard compare before.json after.json
        ci-wizard --version
 
 Reads a repository's GitHub Actions runs, jobs and workflow files (read-only) and reports where
-the CI time goes and what to fix first. Token: GITHUB_TOKEN or GH_TOKEN, else \`gh auth token\`.
-compare takes two reports saved with --json, from before and after a change, and shows what moved.`;
+the CI time goes and what to fix first. The repository is owner/repo or a GitHub URL; left out,
+it is the origin remote of the git checkout in the current directory.
+Token: GITHUB_TOKEN or GH_TOKEN, else \`gh auth token\`.
+
+  --days N           days of runs to read (default 7; up to 500 runs are read)
+  --workflows N      busiest workflows to time job by job (default 8)
+  --per-workflow N   newest successful runs of each to time (default 5)
+  --json             print the report as JSON instead of markdown
+  --save FILE        also save the JSON report, as a baseline for compare
+  --html FILE        also write the report as an HTML page
+
+The method: audit and --save before.json, make one change, let it run, audit again with
+--save after.json, then \`ci-wizard compare before.json after.json\` shows what moved.`;
+
+/**
+ * owner/repo from what a person is likely to paste: owner/repo, a github.com URL (with or without
+ * a path after the repository, or .git), or an SSH remote. Null when it is none of those.
+ */
+export function parseRepo(s) {
+  const t = String(s || '').trim();
+  if (!t) return null;
+  const m = /^(?:(?:https?:\/\/|ssh:\/\/)?(?:[^@/]+@)?(?:www\.)?github\.com[/:])?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?(?:[/?#].*)?$/.exec(t);
+  if (!m) return null;
+  const repo = `${m[1]}/${m[2]}`;
+  return REPO_RE.test(repo) ? repo : null;
+}
+
+function repoFromGit(cwd) {
+  try {
+    const url = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return /github\.com[/:]/.test(url) ? parseRepo(url) : null;
+  } catch {
+    return null;
+  }
+}
 
 function tokenFromEnv(env) {
   if (env.GITHUB_TOKEN) return env.GITHUB_TOKEN;
@@ -64,7 +98,7 @@ function runCompare(paths, { stdout, stderr }) {
   return 0;
 }
 
-export async function main(argv = process.argv.slice(2), { env = process.env, stdout = process.stdout, stderr = process.stderr, fetchImpl } = {}) {
+export async function main(argv = process.argv.slice(2), { env = process.env, stdout = process.stdout, stderr = process.stderr, fetchImpl, cwd = process.cwd(), token: givenToken } = {}) {
   let args;
   try {
     args = parseArgs({
@@ -76,6 +110,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, st
         'per-workflow': { type: 'string', default: '5' },
         json: { type: 'boolean', default: false },
         html: { type: 'string' },
+        save: { type: 'string' },
         help: { type: 'boolean', short: 'h', default: false },
         version: { type: 'boolean', short: 'v', default: false },
       },
@@ -94,10 +129,24 @@ export async function main(argv = process.argv.slice(2), { env = process.env, st
     return 0;
   }
   if (positionals[0] === 'compare') return runCompare(positionals.slice(1), { stdout, stderr });
-  const repo = positionals[0];
-  if (positionals.length !== 1 || !REPO_RE.test(repo)) {
+  if (positionals.length > 1) {
     stderr.write(`${USAGE}\n`);
     return 2;
+  }
+  let repo;
+  if (positionals.length) {
+    repo = parseRepo(positionals[0]);
+    if (!repo) {
+      stderr.write(`ci-wizard: ${positionals[0]} is not owner/repo or a GitHub repository URL\n\n${USAGE}\n`);
+      return 2;
+    }
+  } else {
+    repo = repoFromGit(cwd);
+    if (!repo) {
+      stderr.write(`ci-wizard: name a repository (owner/repo), or run inside a checkout whose origin is on GitHub\n\n${USAGE}\n`);
+      return 2;
+    }
+    stderr.write(`ci-wizard: auditing ${repo} (the origin of this checkout)\n`);
   }
   let days, workflows, perWorkflow;
   try {
@@ -108,19 +157,31 @@ export async function main(argv = process.argv.slice(2), { env = process.env, st
     stderr.write(`${err.message}\n`);
     return 2;
   }
+  const token = givenToken !== undefined ? givenToken : tokenFromEnv(env);
+  if (!token) {
+    stderr.write('ci-wizard: no token found (GITHUB_TOKEN, GH_TOKEN or `gh auth login`); unauthenticated calls are limited to 60 an hour, and a private repository reads as not found\n');
+  }
+  // Progress only on a terminal: a redirected stderr or a CI log gets the one summary line.
+  const live = Boolean(stderr.isTTY);
+  const onProgress = live ? (msg) => stderr.write(`\r\x1b[Kci-wizard: ${msg}...`) : undefined;
   let a;
   try {
-    a = await audit({ repo, token: tokenFromEnv(env), fetchImpl, days, workflows, perWorkflow });
+    a = await audit({ repo, token, fetchImpl, days, workflows, perWorkflow, onProgress });
   } catch (err) {
+    if (live) stderr.write('\r\x1b[K');
     stderr.write(`ci-wizard: ${err.message}\n`);
+    if (err instanceof NotFoundError && !token) stderr.write('ci-wizard: with no token only public repositories can be read\n');
     return err instanceof RateLimitError ? 3 : 1;
   }
+  if (live) stderr.write('\r\x1b[K');
   if (!a) {
     stderr.write(`ci-wizard: ${repo} has no workflow runs in the last ${days} days\n`);
     return 1;
   }
   if (values.html) writeFileSync(values.html, html([a], { title: `CI audit: ${repo}` }));
+  if (values.save) writeFileSync(values.save, `${JSON.stringify(a, null, 1)}\n`);
   stdout.write(values.json ? `${JSON.stringify(a, null, 1)}\n` : report(a));
   stderr.write(`ci-wizard: ${a.runs_total} runs over ${a.covered_days} d, ${a.workflows.length} workflows sampled, ${a.findings.length} findings, ${a.api_calls} API calls\n`);
+  if (values.save) stderr.write(`ci-wizard: saved ${values.save}; after a change has run a while, save another report and run \`ci-wizard compare ${values.save} <after>.json\`\n`);
   return 0;
 }

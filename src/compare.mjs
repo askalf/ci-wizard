@@ -52,6 +52,8 @@ export function compareData(before, after) {
   return {
     repos: [before.repo, after.repo],
     sameRepo: before.repo === after.repo,
+    // window_truncated arrived with the change to how the window is scaled; a report without it is older.
+    mixedVersions: ('window_truncated' in before) !== ('window_truncated' in after),
     windows: [{ days: before.covered_days, runs: before.runs_total }, { days: after.covered_days, runs: after.runs_total }],
     both,
     onlyBefore: before.workflows.filter((w) => !afterByName.has(w.workflow)).map((w) => w.workflow),
@@ -68,6 +70,7 @@ export function compare(before, after) {
   const L = [];
   L.push(`# CI comparison: ${c.sameRepo ? before.repo : `${before.repo} against ${after.repo}`}`, '');
   if (!c.sameRepo) L.push('These two reports are of different repositories, so the changes below compare two codebases, not a before and after.', '');
+  if (c.mixedVersions) L.push('One report comes from ci-wizard 0.1.1 or earlier, which scaled weekly figures from the oldest run read even when the window held every run, so a quiet repository\'s weekly numbers there read high. Audit again with this version for both sides before reading a drop as the change working.', '');
   L.push(`Before: ${c.windows[0].runs} runs over ${c.windows[0].days} days. After: ${c.windows[1].runs} runs over ${c.windows[1].days} days. Weekly figures in each are scaled to 7 days, so windows of different lengths compare, but a short window is noisier.`, '');
   const tm = { digits: 0 };
   L.push(`Sampled workflows: ${Math.round(c.totals.before)} job-minutes a week before, ${Math.round(c.totals.after)} after: ${change(tm, c.totals.before, c.totals.after)}.`, '');

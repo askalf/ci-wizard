@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+Precision:
+
+- Weekly figures no longer read high for a quiet repository: when the window holds every run, it
+  covers the days asked for, not the span from the oldest run to now (which turned 10 runs on the
+  last of seven days into 70 a week). Only a window cut short by the 500-run cap scales from its
+  oldest run, and the report says when that happened (`window_truncated` in the JSON). `compare`
+  warns when one side is a report from 0.1.1 or earlier.
+- `yarn test`, `yarn lint` and other yarn scripts are work, not dependency installs; only `yarn`,
+  `yarn install` and `yarn --frozen-lockfile`-style lines count as installs.
+- A step that only mentions checkout (`Run checkout e2e tests`) is work; checkout means
+  `actions/checkout` or a step named "Checkout" / "Check out".
+- Step names with expressions (`Test on ${{ matrix.node }}`) are matched to their command, so a
+  matrix job's install steps are classified by what they run.
+- Runs whose jobs were all skipped no longer count toward job-minutes (`skipped_week` in the JSON).
+- GitHub-hosted is read from the job's runner group; a self-hosted runner with an `ubuntu-*` label
+  no longer counts as hosted (which hid its wrap-up tail).
+- A workflow timed from fewer than 3 successful runs is marked † in the table and its findings say
+  so (`thin_sample` in the JSON).
+
+Ease of use and process:
+
+- The repository can be a GitHub URL or an SSH remote, or left out inside a checkout whose origin
+  is on GitHub.
+- `--save file.json` keeps the JSON report while printing the markdown, as the baseline for
+  `compare`; the CLI then says the command to run after the change.
+- The report opens with a one-line summary (findings, their estimated total against the measured
+  job-minutes) and ends with the next step: how to prove a fix with `compare`.
+- With no token, the CLI warns about GitHub's anonymous limit, and a not-found repository says
+  that only public ones can be read without one.
+- Progress on a terminal while runs and jobs are read; the usage lists every option.
+
 ## 0.1.1
 
 - **compare**, the method's fourth step: `ci-wizard compare before.json after.json` (and `compare`

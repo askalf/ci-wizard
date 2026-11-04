@@ -62,6 +62,7 @@ the job for what it finds; it fails only when it cannot read the repository.
 
 ```sh
 npx github:askalf/ci-wizard#v0.1.1 owner/repo
+npx github:askalf/ci-wizard#v0.1.1 https://github.com/owner/repo --save before.json
 npx github:askalf/ci-wizard#v0.1.1 owner/repo --days 14 --json > before.json
 npx github:askalf/ci-wizard#v0.1.1 owner/repo --html audit.html
 npx github:askalf/ci-wizard#v0.1.1 compare before.json after.json
@@ -69,8 +70,10 @@ npx github:askalf/ci-wizard#v0.1.1 --version
 ```
 
 The token comes from `GITHUB_TOKEN` or `GH_TOKEN`, or from `gh auth token` when the GitHub CLI is
-signed in. Options: `--days`, `--workflows`, `--per-workflow`, `--json`, `--html <file>`,
-`--version`. Exit codes: 0 report written, 1 the repository was not found or not readable, no
+signed in. The repository is `owner/repo`, a GitHub URL or an SSH remote; left out, it is the
+origin of the git checkout you run in. Options: `--days`, `--workflows`, `--per-workflow`,
+`--json`, `--save <file>` (the JSON report beside the markdown, as a baseline for `compare`),
+`--html <file>`, `--version`. Exit codes: 0 report written, 1 the repository was not found or not readable, no
 runs in the window, or an API error, 2 usage, 3 stopped near the rate limit.
 
 ## The method
@@ -84,7 +87,7 @@ runs in the window, or an API error, 2 usage, 3 stopped near the rate limit.
    caches (including a setup action's cache input), concurrency and cancel-in-progress, how
    dependencies install, whether a lockfile is committed. A commented-out step or a feature
    switched off with `false` never counts.
-4. **Prove.** Save the report with `--json` before the change. After the change has run for a
+4. **Prove.** Save the report with `--save before.json` (or `--json`) before the change. After the change has run for a
    while, measure again and run `ci-wizard compare before.json after.json`: per workflow, the
    runs a week, job-minutes, developer wait, queue wait and wrap-up tail before and after, with
    the change, and the findings that disappeared or appeared.
@@ -105,7 +108,8 @@ runs in the window, or an API error, 2 usage, 3 stopped near the rate limit.
 
 - **Sampled.** The window is up to 500 runs, and job-level timing comes from a few recent
   successful runs of each busy workflow. A busy repository's 500 runs may cover less than a day;
-  weekly figures scale the window to 7 days, so a short window is noisier.
+  weekly figures scale the window to 7 days, so a short window is noisier, and the report says
+  when the cap cut the window short. A workflow timed from fewer than 3 runs is marked †.
 - **Estimates.** Savings come from simple formulas over measured time (see
   [docs/rules.md](docs/rules.md)), not from running the fix. `compare` on a run after the change
   is what proves one.
