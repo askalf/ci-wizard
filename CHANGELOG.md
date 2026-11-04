@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Releases are automatic: a version bump merged to `main` creates the tag `v<version>` and the
+  GitHub release, with that version's CHANGELOG section as the notes, and then runs the npm
+  publish (still gated on `NPM_PUBLISH`). `npm test` fails a version with no CHANGELOG section.
+
 ## 0.1.2
 
 Precision:

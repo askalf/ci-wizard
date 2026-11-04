@@ -42,11 +42,16 @@ npm run build   # bundles src/ into dist/
 
 ## Releases
 
-A release is a version bump in `package.json`, `src/version.mjs` and `CHANGELOG.md` on `main`,
-then a GitHub release with the tag `v<version>`. Publishing that release runs
-`.github/workflows/publish.yml`, which checks the tag against `package.json`, runs the tests,
-rebuilds `dist/`, packs the tarball, attests it, and runs `npm publish --provenance` with npm
-trusted publishing: no npm token is stored in the repository.
+A release is a version bump merged to `main`: `package.json` (and its lockfile), `src/version.mjs`,
+`dist/` (`npm run build`) and a `## <version>` section in `CHANGELOG.md`. Nothing else is done by
+hand. On that push, `.github/workflows/publish.yml` sees that the tag `v<version>` does not exist
+yet, creates it on the merge commit and publishes the GitHub release, with the version's
+CHANGELOG section as the notes (`scripts/release-notes.mjs`). It then runs the npm publish job: it
+checks the tag against `package.json`, runs the tests, rebuilds `dist/`, packs the tarball, attests
+it, and runs `npm publish --provenance` with npm trusted publishing, so no npm token is stored in
+the repository. A pushed `v*` tag, a run from the Actions tab, or a release published by hand take
+the same path. `npm test` fails a version bump whose CHANGELOG has no section for it, so a release
+with empty notes cannot reach `main`.
 
 **Owner step, once:** on npmjs.com, the `ci-wizard` package's settings need a trusted publisher
 for GitHub Actions with repository `askalf/ci-wizard` and workflow filename `publish.yml` (the

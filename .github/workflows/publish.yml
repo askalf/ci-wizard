@@ -1,10 +1,32 @@
-name: Publish to npm
-# Runs only when a GitHub release is published. Auth is npm trusted publishing (OIDC): the
-# npmjs.com trusted publisher for ci-wizard is bound to this repository and this filename
-# (publish.yml), so no npm token is stored anywhere. Provenance comes with OIDC publishing, and
-# the packed tarball gets a GitHub build attestation too.
+name: Release
+# Releases are plumbed: a version bump merged to main is the whole release step.
+#
+# - A push to main that changes package.json (or this file): when the tag v<version> does not
+#   exist yet, the release job creates it on that commit and publishes the GitHub release, with
+#   that version's CHANGELOG.md section as the notes (scripts/release-notes.mjs). A push that
+#   leaves the version alone finds its tag and does nothing.
+# - A pushed v* tag, or a run from the Actions tab with a version: the same, for that tag.
+# - A release someone publishes by hand: the release job finds it and leaves it as it is.
+#
+# The npm publish runs in this same workflow, after the release job: a release created with the
+# job's GITHUB_TOKEN starts no other workflow, so a separate on-release workflow would never run.
+# Auth is npm trusted publishing (OIDC): the npmjs.com trusted publisher for ci-wizard is bound to
+# this repository and this filename (publish.yml), so the file keeps its name and no npm token is
+# stored anywhere. Provenance comes with OIDC publishing, and the packed tarball gets a GitHub
+# build attestation too.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+      - .github/workflows/publish.yml
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version to release, e.g. v0.1.3 (package.json and CHANGELOG.md must name it)
+        required: true
   release:
     types: [published]
 
@@ -12,14 +34,87 @@ permissions:
   contents: read
 
 concurrency:
-  group: publish
+  group: release
   cancel-in-progress: false
 
 jobs:
+  release:
+    if: github.repository == 'askalf/ci-wizard'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # create the tag and the release
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Tag and publish the release from CHANGELOG.md
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          case "$EVENT" in
+            workflow_dispatch) tag="$INPUT_TAG" ;;
+            release) tag="$RELEASE_TAG" ;;
+            *) if [ "$REF_TYPE" = tag ]; then tag="$REF_NAME"; else tag="v$version"; fi ;;
+          esac
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$tag is not a vX.Y.Z version"
+            exit 1
+          fi
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::tag $tag does not match package.json version $version (expected v$version)"
+            exit 1
+          fi
+
+          tag_exists=false
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then tag_exists=true; fi
+          if [ "$EVENT" = push ] && [ "$REF_TYPE" = branch ] && [ "$tag_exists" = true ]; then
+            echo "$tag is already tagged; nothing to release."
+            exit 0
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $tag already exists; leaving it as it is."
+            exit 0
+          fi
+          node scripts/release-notes.mjs "$tag" > "$RUNNER_TEMP/notes.md"
+          # A zero exit is not enough: a script that silently skips its main block also exits 0,
+          # and gh would publish empty notes.
+          if ! [ -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "::error::release notes for $tag are empty"
+            exit 1
+          fi
+          if [ "$tag_exists" = true ]; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "ci-wizard $version" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            # No tag yet: gh creates it on the commit this run checked out.
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "ci-wizard $version" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          echo "published release $tag"
+
   publish:
+    needs: release
     # Off until the npmjs.com trusted publisher exists: set the repository variable NPM_PUBLISH to
     # true once it does. Without the gate every release would end in a failed publish run.
-    if: vars.NPM_PUBLISH == 'true'
+    if: vars.NPM_PUBLISH == 'true' && needs.release.outputs.tag != ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -30,6 +125,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ needs.release.outputs.tag }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # Trusted publishing needs npm 11.5.1 or later; Node 24 ships npm 11. The package's
@@ -41,7 +137,7 @@ jobs:
       - name: The release tag names package.json's version
         id: version
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ needs.release.outputs.tag }}
         run: |
           set -euo pipefail
           version=$(node -p "require('./package.json').version")
