@@ -167,10 +167,10 @@ test('compare: a hand-edited report with a measurement that is not a number show
   assert.match(md, /job-minutes a week before, - after: -/);
 });
 
-test('cli compare: a report whose workflows or findings are not objects is rejected with a message', async () => {
+test('cli compare: a report whose workflows or findings are not objects, or whose printed fields are, is rejected with a message', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ciw-'));
   writeFileSync(join(dir, 'b.json'), JSON.stringify(before));
-  for (const [name, bad] of [['null-workflow', { ...after, workflows: [null] }], ['list-finding', { ...after, findings: [[]] }], ['number-workflow', { ...after, workflows: [3] }]]) {
+  for (const [name, bad] of [['null-workflow', { ...after, workflows: [null] }], ['list-finding', { ...after, findings: [[]] }], ['number-workflow', { ...after, workflows: [3] }], ['object-repo', { ...after, repo: { toString: null } }], ['object-what', { ...after, findings: [{ what: { toString: null }, workflow: 'CI' }] }]]) {
     writeFileSync(join(dir, `${name}.json`), JSON.stringify(bad));
     const o = { out: '', err: '' };
     assert.equal(await cli(['compare', join(dir, 'b.json'), join(dir, `${name}.json`)], { env: {}, stdout: { write: (s) => (o.out += s) }, stderr: { write: (s) => (o.err += s) } }), 1, name);

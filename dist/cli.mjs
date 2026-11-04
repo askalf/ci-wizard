@@ -8434,9 +8434,9 @@ function readReport(path) {
     throw new Error(`cannot read ${path}: ${err.code === "ENOENT" ? "no such file" : err.message}`);
   }
   const object = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
-  if (!object(a) || !Array.isArray(a.workflows) || !Array.isArray(a.findings) || !a.workflows.every(object) || !a.findings.every(object)) {
-    throw new Error(`${path} is not a ci-wizard --json report`);
-  }
+  const plain = (x) => x === null || typeof x !== "object";
+  const ok = object(a) && Array.isArray(a.workflows) && Array.isArray(a.findings) && a.workflows.every(object) && a.findings.every(object) && ["repo", "covered_days", "runs_total", "job_minutes_week_sampled"].every((k) => plain(a[k])) && a.workflows.every((w) => plain(w.workflow)) && a.findings.every((f) => ["what", "workflow", "evidence", "saving_min_week"].every((k) => plain(f[k])));
+  if (!ok) throw new Error(`${path} is not a ci-wizard --json report`);
   return a;
 }
 function runCompare(paths, { stdout, stderr }) {

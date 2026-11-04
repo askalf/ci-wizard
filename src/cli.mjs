@@ -86,11 +86,16 @@ function readReport(path) {
   } catch (err) {
     throw new Error(`cannot read ${path}: ${err.code === 'ENOENT' ? 'no such file' : err.message}`);
   }
-  // Every workflow and finding must be an object: compare reads fields off each one.
+  // Every workflow and finding must be an object, and every field compare prints must be a plain
+  // value: an object there (`{"toString": null}`) cannot be turned into text and would throw.
   const object = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
-  if (!object(a) || !Array.isArray(a.workflows) || !Array.isArray(a.findings) || !a.workflows.every(object) || !a.findings.every(object)) {
-    throw new Error(`${path} is not a ci-wizard --json report`);
-  }
+  const plain = (x) => x === null || typeof x !== 'object';
+  const ok = object(a) && Array.isArray(a.workflows) && Array.isArray(a.findings)
+    && a.workflows.every(object) && a.findings.every(object)
+    && ['repo', 'covered_days', 'runs_total', 'job_minutes_week_sampled'].every((k) => plain(a[k]))
+    && a.workflows.every((w) => plain(w.workflow))
+    && a.findings.every((f) => ['what', 'workflow', 'evidence', 'saving_min_week'].every((k) => plain(f[k])));
+  if (!ok) throw new Error(`${path} is not a ci-wizard --json report`);
   return a;
 }
 
