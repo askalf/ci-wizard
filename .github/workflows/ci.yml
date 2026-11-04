@@ -33,6 +33,20 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - run: npm test
+      # The version bump on main IS the release (publish.yml tags and publishes on merge), so an
+      # outside contributor's fork pull request may not carry one. Same-repository branches are
+      # exempt. pull_request only: a push to main has no base to judge against.
+      - name: release authority (an outside contributor's pull request does not cut a release)
+        if: github.event_name == 'pull_request' && matrix.node == 22
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # On pull_request, github.sha is the merge commit: the base with this pull request applied.
+          HEAD_SHA: ${{ github.sha }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          node scripts/check-release-authority.mjs
 
   dist:
     # The action runs from the committed dist/, so dist/ must be exactly what src/ builds to.
