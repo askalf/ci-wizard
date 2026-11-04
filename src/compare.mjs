@@ -21,13 +21,17 @@ export const METRICS = [
 const REPO_WIDE = new Set(['self-hosted wrap-up tail', 'toolchain setup', 'queue wait', 'reruns', 'many small scheduled jobs']);
 const findingKey = (f) => (REPO_WIDE.has(f.what) ? f.what : `${f.what}\u0000${f.workflow}`);
 
+// A report file is edited by hand and written by other versions, so a measurement may be absent,
+// null or not a number at all: only a finite number is shown or compared.
+const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+
 function show(m, v) {
-  if (v === undefined || v === null) return '-';
+  if (!isNum(v)) return '-';
   return m.time ? fmtS(v) : v.toFixed(m.digits);
 }
 
 function change(m, before, after) {
-  if (before === undefined || after === undefined) return '-';
+  if (!isNum(before) || !isNum(after)) return '-';
   const d = after - before;
   const sign = d > 0 ? '+' : d < 0 ? '-' : '';
   const abs = Math.abs(d);
@@ -44,7 +48,7 @@ export function compareData(before, after) {
     const a = afterByName.get(b.workflow);
     return {
       workflow: b.workflow,
-      metrics: METRICS.map((m) => ({ ...m, before: b[m.key], after: a[m.key], delta: a[m.key] !== undefined && b[m.key] !== undefined ? round(a[m.key] - b[m.key], 2) : null })),
+      metrics: METRICS.map((m) => ({ ...m, before: b[m.key], after: a[m.key], delta: isNum(a[m.key]) && isNum(b[m.key]) ? round(a[m.key] - b[m.key], 2) : null })),
     };
   });
   const afterKeys = new Set(after.findings.map(findingKey));
@@ -73,7 +77,7 @@ export function compare(before, after) {
   if (c.mixedVersions) L.push('One report comes from ci-wizard 0.1.1 or earlier, which scaled weekly figures from the oldest run read even when the window held every run, so a quiet repository\'s weekly numbers there read high. Audit again with this version for both sides before reading a drop as the change working.', '');
   L.push(`Before: ${c.windows[0].runs} runs over ${c.windows[0].days} days. After: ${c.windows[1].runs} runs over ${c.windows[1].days} days. Weekly figures in each are scaled to 7 days, so windows of different lengths compare, but a short window is noisier.`, '');
   const tm = { digits: 0 };
-  L.push(`Sampled workflows: ${Math.round(c.totals.before)} job-minutes a week before, ${Math.round(c.totals.after)} after: ${change(tm, c.totals.before, c.totals.after)}.`, '');
+  L.push(`Sampled workflows: ${isNum(c.totals.before) ? Math.round(c.totals.before) : '-'} job-minutes a week before, ${isNum(c.totals.after) ? Math.round(c.totals.after) : '-'} after: ${change(tm, c.totals.before, c.totals.after)}.`, '');
   for (const w of c.both) {
     L.push(`## ${w.workflow}`, '');
     L.push('| Measure | Before | After | Change |', '| --- | --- | --- | --- |');

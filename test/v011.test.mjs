@@ -156,6 +156,28 @@ test('cli compare: reads two --json reports; usage and unreadable files are erro
   assert.match(missing.o.err, /no such file/);
 });
 
+test('compare: a hand-edited report with a measurement that is not a number shows a dash, not a crash', () => {
+  const edited = JSON.parse(JSON.stringify(after));
+  edited.workflows[0].job_minutes_per_run = false;
+  edited.workflows[0].wall_p50 = 'slow';
+  edited.job_minutes_week_sampled = null;
+  const md = compare(before, edited);
+  assert.match(md, /\| Job-min\/run \| [\d.]+ \| - \| - \|/);
+  assert.match(md, /\| Developer wait p50 \| .+ \| - \| - \|/);
+  assert.match(md, /job-minutes a week before, - after: -/);
+});
+
+test('cli compare: a report whose workflows or findings are not objects is rejected with a message', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ciw-'));
+  writeFileSync(join(dir, 'b.json'), JSON.stringify(before));
+  for (const [name, bad] of [['null-workflow', { ...after, workflows: [null] }], ['list-finding', { ...after, findings: [[]] }], ['number-workflow', { ...after, workflows: [3] }]]) {
+    writeFileSync(join(dir, `${name}.json`), JSON.stringify(bad));
+    const o = { out: '', err: '' };
+    assert.equal(await cli(['compare', join(dir, 'b.json'), join(dir, `${name}.json`)], { env: {}, stdout: { write: (s) => (o.out += s) }, stderr: { write: (s) => (o.err += s) } }), 1, name);
+    assert.match(o.err, /is not a ci-wizard --json report/, name);
+  }
+});
+
 test('--version prints the package version, and the usage lists it and compare', async () => {
   let out = '';
   assert.equal(await cli(['--version'], { env: {}, stdout: { write: (s) => (out += s) }, stderr: { write() {} } }), 0);

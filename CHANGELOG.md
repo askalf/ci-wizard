@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Fuzzing: three Jazzer.js targets run weekly and on every pull request that touches them
+  (`.github/workflows/fuzz.yml`), over workflow files, API run history and saved report files, with
+  a persistent corpus. Jazzer is installed from `.clusterfuzzlite/`, so the package keeps no
+  dependencies. `.clusterfuzzlite/` also builds the targets for a weekly ClusterFuzzLite coverage
+  report.
+- `ci-wizard compare` no longer crashes on a hand-edited report: a measurement that is not a number
+  shows as `-`, and a report whose workflows or findings are not objects is rejected with the usual
+  "is not a ci-wizard --json report" message. Found by the new fuzzing.
+
 - Releases are automatic, as in askalf/dario: the version bump on `main` is the release.
   `publish.yml` tags the merge commit, cuts the GitHub release with that version's CHANGELOG
   section, attaches the attested tarball (`.sigstore.json` and `.intoto.jsonl` beside it), and

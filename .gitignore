@@ -2,3 +2,5 @@ node_modules/
 *.log
 .ci-wizard/
 coverage/
+fuzz/corpus/
+fuzz/crashes/

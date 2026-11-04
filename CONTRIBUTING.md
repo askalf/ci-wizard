@@ -38,6 +38,9 @@ npm run build   # bundles src/ into dist/
 - `dist/` rebuilt from `src/` with no difference
 - actionlint on the workflow files
 - the built action, run on this repository
+- fuzzing of the parsers that read untrusted input (workflow files, run history, saved reports)
+  with Jazzer.js: `node fuzz/run.mjs` after `npm ci --prefix .clusterfuzzlite` runs the same
+  targets locally, and a crash writes its reproducing input to the working directory
 - CodeQL and OpenSSF Scorecard
 
 Redline, an automated reviewer, also reads each pull request from a branch in this repository

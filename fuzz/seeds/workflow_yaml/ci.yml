@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run per pull request: a newer push cancels the older run. Runs on main all finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      # The version bump on main IS the release (publish.yml tags and publishes on merge), so an
+      # outside contributor's fork pull request may not carry one. Same-repository branches are
+      # exempt. pull_request only: a push to main has no base to judge against.
+      - name: release authority (an outside contributor's pull request does not cut a release)
+        if: github.event_name == 'pull_request' && matrix.node == 22
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # On pull_request, github.sha is the merge commit: the base with this pull request applied.
+          HEAD_SHA: ${{ github.sha }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          node scripts/check-release-authority.mjs
+
+  dist:
+    # The action runs from the committed dist/, so dist/ must be exactly what src/ builds to.
+    name: dist matches src
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Rebuild and compare
+        run: |
+          npm run build
+          if ! git diff --exit-code -- dist/; then
+            echo "::error::dist/ does not match src/: run npm run build and commit dist/"
+            exit 1
+          fi
+
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint
+        # A checksum-pinned release tarball, not an installer script piped into a shell.
+        run: |
+          set -euo pipefail
+          curl -fsSL -o actionlint.tgz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tgz" | sha256sum -c -
+          tar xzf actionlint.tgz actionlint
+          ./actionlint -color
+
+  self-test:
+    # The built action audits this repository with the job's own token: actions read and
+    # contents read are all it needs, and the job grants nothing more.
+    name: action audits this repository
+    needs: [test, dist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: audit
+        uses: ./
+        with:
+          days: '14'
+      - name: Check the outputs
+        env:
+          REPORT: ${{ steps.audit.outputs.report-path }}
+          FINDINGS: ${{ steps.audit.outputs.findings }}
+        run: |
+          set -euo pipefail
+          test -s "$REPORT"
+          case "$FINDINGS" in ''|*[!0-9]*) echo "::error::findings output is not a number: $FINDINGS"; exit 1 ;; esac
+          head -5 "$REPORT"

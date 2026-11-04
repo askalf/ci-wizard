@@ -34,6 +34,12 @@ export function parseWorkflow(text) {
   }
 }
 
+// A job's steps as a list. A file that gives `steps` as anything else (a mapping, a number) has no
+// steps this tool can read, and must not stop the audit of every other workflow.
+function stepsOfJob(job) {
+  return job && Array.isArray(job.steps) ? job.steps : [];
+}
+
 /**
  * Step name -> its run or uses text, naming unnamed steps the way GitHub does ("Run <uses>" or
  * "Run <first line>"). A name with an expression (`Test on ${{ matrix.node }}`) reaches the API
@@ -42,7 +48,7 @@ export function parseWorkflow(text) {
 export function stepCommands(doc) {
   const out = new Map();
   for (const job of Object.values(doc.jobs || {})) {
-    for (const st of (job && job.steps) || []) {
+    for (const st of stepsOfJob(job)) {
       if (!st || typeof st !== 'object') continue;
       const cmd = String(st.run || st.uses || '');
       let name = st.name;
@@ -118,7 +124,7 @@ export function concurrencyGroupOf(doc) {
 export function allSteps(doc) {
   const steps = [];
   for (const job of Object.values(doc.jobs || {})) {
-    for (const st of (job && job.steps) || []) if (st && typeof st === 'object') steps.push(st);
+    for (const st of stepsOfJob(job)) if (st && typeof st === 'object') steps.push(st);
   }
   return steps;
 }

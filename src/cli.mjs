@@ -86,7 +86,11 @@ function readReport(path) {
   } catch (err) {
     throw new Error(`cannot read ${path}: ${err.code === 'ENOENT' ? 'no such file' : err.message}`);
   }
-  if (!a || !Array.isArray(a.workflows) || !Array.isArray(a.findings)) throw new Error(`${path} is not a ci-wizard --json report`);
+  // Every workflow and finding must be an object: compare reads fields off each one.
+  const object = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+  if (!object(a) || !Array.isArray(a.workflows) || !Array.isArray(a.findings) || !a.workflows.every(object) || !a.findings.every(object)) {
+    throw new Error(`${path} is not a ci-wizard --json report`);
+  }
   return a;
 }
 

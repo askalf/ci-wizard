@@ -7537,10 +7537,13 @@ function parseWorkflow(text) {
     return {};
   }
 }
+function stepsOfJob(job) {
+  return job && Array.isArray(job.steps) ? job.steps : [];
+}
 function stepCommands(doc) {
   const out = /* @__PURE__ */ new Map();
   for (const job of Object.values(doc.jobs || {})) {
-    for (const st of job && job.steps || []) {
+    for (const st of stepsOfJob(job)) {
       if (!st || typeof st !== "object") continue;
       const cmd = String(st.run || st.uses || "");
       let name = st.name;
@@ -7602,7 +7605,7 @@ function concurrencyGroupOf(doc) {
 function allSteps(doc) {
   const steps = [];
   for (const job of Object.values(doc.jobs || {})) {
-    for (const st of job && job.steps || []) if (st && typeof st === "object") steps.push(st);
+    for (const st of stepsOfJob(job)) if (st && typeof st === "object") steps.push(st);
   }
   return steps;
 }
@@ -8289,12 +8292,13 @@ var METRICS = [
 ];
 var REPO_WIDE = /* @__PURE__ */ new Set(["self-hosted wrap-up tail", "toolchain setup", "queue wait", "reruns", "many small scheduled jobs"]);
 var findingKey = (f) => REPO_WIDE.has(f.what) ? f.what : `${f.what}\0${f.workflow}`;
+var isNum = (v) => typeof v === "number" && Number.isFinite(v);
 function show(m, v) {
-  if (v === void 0 || v === null) return "-";
+  if (!isNum(v)) return "-";
   return m.time ? fmtS(v) : v.toFixed(m.digits);
 }
 function change(m, before, after) {
-  if (before === void 0 || after === void 0) return "-";
+  if (!isNum(before) || !isNum(after)) return "-";
   const d = after - before;
   const sign = d > 0 ? "+" : d < 0 ? "-" : "";
   const abs = Math.abs(d);
@@ -8309,7 +8313,7 @@ function compareData(before, after) {
     const a = afterByName.get(b.workflow);
     return {
       workflow: b.workflow,
-      metrics: METRICS.map((m) => ({ ...m, before: b[m.key], after: a[m.key], delta: a[m.key] !== void 0 && b[m.key] !== void 0 ? round(a[m.key] - b[m.key], 2) : null }))
+      metrics: METRICS.map((m) => ({ ...m, before: b[m.key], after: a[m.key], delta: isNum(a[m.key]) && isNum(b[m.key]) ? round(a[m.key] - b[m.key], 2) : null }))
     };
   });
   const afterKeys = new Set(after.findings.map(findingKey));
@@ -8336,7 +8340,7 @@ function compare(before, after) {
   if (c.mixedVersions) L.push("One report comes from ci-wizard 0.1.1 or earlier, which scaled weekly figures from the oldest run read even when the window held every run, so a quiet repository's weekly numbers there read high. Audit again with this version for both sides before reading a drop as the change working.", "");
   L.push(`Before: ${c.windows[0].runs} runs over ${c.windows[0].days} days. After: ${c.windows[1].runs} runs over ${c.windows[1].days} days. Weekly figures in each are scaled to 7 days, so windows of different lengths compare, but a short window is noisier.`, "");
   const tm = { digits: 0 };
-  L.push(`Sampled workflows: ${Math.round(c.totals.before)} job-minutes a week before, ${Math.round(c.totals.after)} after: ${change(tm, c.totals.before, c.totals.after)}.`, "");
+  L.push(`Sampled workflows: ${isNum(c.totals.before) ? Math.round(c.totals.before) : "-"} job-minutes a week before, ${isNum(c.totals.after) ? Math.round(c.totals.after) : "-"} after: ${change(tm, c.totals.before, c.totals.after)}.`, "");
   for (const w of c.both) {
     L.push(`## ${w.workflow}`, "");
     L.push("| Measure | Before | After | Change |", "| --- | --- | --- | --- |");
@@ -8429,7 +8433,10 @@ function readReport(path) {
   } catch (err) {
     throw new Error(`cannot read ${path}: ${err.code === "ENOENT" ? "no such file" : err.message}`);
   }
-  if (!a || !Array.isArray(a.workflows) || !Array.isArray(a.findings)) throw new Error(`${path} is not a ci-wizard --json report`);
+  const object = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+  if (!object(a) || !Array.isArray(a.workflows) || !Array.isArray(a.findings) || !a.workflows.every(object) || !a.findings.every(object)) {
+    throw new Error(`${path} is not a ci-wizard --json report`);
+  }
   return a;
 }
 function runCompare(paths, { stdout, stderr }) {

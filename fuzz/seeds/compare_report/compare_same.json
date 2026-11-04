@@ -1,0 +1,141 @@
+{
+ "repo": "o/r",
+ "covered_days": 7,
+ "window_truncated": false,
+ "runs_total": 18,
+ "lockfiles": [],
+ "workflows": [
+  {
+   "workflow": "Nightly",
+   "path": ".github/workflows/nightly.yml",
+   "runs_week": 10,
+   "sampled_runs": 1,
+   "thin_sample": true,
+   "skipped_week": 0,
+   "jobs_per_run": 1,
+   "job_minutes_per_run": 0.57,
+   "job_minutes_week": 5.7,
+   "wait_p50": 2,
+   "wait_p90": 2,
+   "tail_p50": 2,
+   "hosted_share": 1,
+   "steps_per_job": 3,
+   "share": {
+    "work": 0.882,
+    "tail": 0.059,
+    "overhead": 0.029,
+    "head": 0.029
+   },
+   "cats_secs_per_run": {
+    "overhead": 1,
+    "work": 30
+   },
+   "has_cache": false,
+   "reruns_week": 0,
+   "failed_week": 0,
+   "dup_commits_week": 0,
+   "wall_p50": 60,
+   "wall_p90": 60,
+   "superseded_week": 0,
+   "has_concurrency": false,
+   "cancels": false,
+   "top_steps": [
+    {
+     "step": "Run tests",
+     "median_s": 30,
+     "seen": 1
+    }
+   ],
+   "longest_job_s": 34,
+   "median_job_s": 34,
+   "reruns_raw": 0,
+   "npm_install_no_ci": true,
+   "prefer_offline": false,
+   "caches_node_modules": false,
+   "setup_cache": false,
+   "dep_share": 0,
+   "triggers": [
+    "pull_request",
+    "push"
+   ],
+   "push_branches": [],
+   "concurrency_group": "",
+   "events": {
+    "schedule": 10
+   },
+   "fixed_share": 0.118
+  },
+  {
+   "workflow": "CI",
+   "path": ".github/workflows/ci.yml",
+   "runs_week": 8,
+   "sampled_runs": 3,
+   "thin_sample": false,
+   "skipped_week": 0,
+   "jobs_per_run": 1,
+   "job_minutes_per_run": 0.57,
+   "job_minutes_week": 4.5,
+   "wait_p50": 2,
+   "wait_p90": 2,
+   "tail_p50": 2,
+   "hosted_share": 1,
+   "steps_per_job": 3,
+   "share": {
+    "work": 0.559,
+    "deps": 0.248,
+    "checkout": 0.093,
+    "tail": 0.062,
+    "overhead": 0.019,
+    "head": 0.019
+   },
+   "cats_secs_per_run": {
+    "overhead": 1,
+    "checkout": 5,
+    "deps": 13.3,
+    "work": 30
+   },
+   "has_cache": false,
+   "reruns_week": 0,
+   "failed_week": 0,
+   "dup_commits_week": 0,
+   "wall_p50": 60,
+   "wall_p90": 60,
+   "superseded_week": 0,
+   "has_concurrency": false,
+   "cancels": false,
+   "top_steps": [
+    {
+     "step": "Run tests",
+     "median_s": 30,
+     "seen": 2
+    },
+    {
+     "step": "Run npm test",
+     "median_s": 30,
+     "seen": 1
+    }
+   ],
+   "longest_job_s": 93,
+   "median_job_s": 34,
+   "reruns_raw": 0,
+   "npm_install_no_ci": true,
+   "prefer_offline": false,
+   "caches_node_modules": false,
+   "setup_cache": false,
+   "dep_share": 0.248,
+   "triggers": [
+    "pull_request",
+    "push"
+   ],
+   "push_branches": [],
+   "concurrency_group": "",
+   "events": {
+    "push": 8
+   },
+   "fixed_share": 0.193
+  }
+ ],
+ "job_minutes_week_sampled": 10.2,
+ "findings": [],
+ "saving_min_week_total": 0
+}

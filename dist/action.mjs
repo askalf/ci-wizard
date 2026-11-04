@@ -7536,10 +7536,13 @@ function parseWorkflow(text) {
     return {};
   }
 }
+function stepsOfJob(job) {
+  return job && Array.isArray(job.steps) ? job.steps : [];
+}
 function stepCommands(doc) {
   const out = /* @__PURE__ */ new Map();
   for (const job of Object.values(doc.jobs || {})) {
-    for (const st of job && job.steps || []) {
+    for (const st of stepsOfJob(job)) {
       if (!st || typeof st !== "object") continue;
       const cmd = String(st.run || st.uses || "");
       let name = st.name;
@@ -7601,7 +7604,7 @@ function concurrencyGroupOf(doc) {
 function allSteps(doc) {
   const steps = [];
   for (const job of Object.values(doc.jobs || {})) {
-    for (const st of job && job.steps || []) if (st && typeof st === "object") steps.push(st);
+    for (const st of stepsOfJob(job)) if (st && typeof st === "object") steps.push(st);
   }
   return steps;
 }

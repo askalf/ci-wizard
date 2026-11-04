@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { category, categoryOf, concurrencyGroupOf, parseWorkflow, pushBranchesOf, stepCommands, triggersOf } from '../src/workflow.mjs';
+import { allSteps, category, categoryOf, concurrencyGroupOf, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, workflowFacts } from '../src/workflow.mjs';
 
 const WF = `name: CI
 on:
@@ -64,4 +64,11 @@ test('a file that does not parse yields no facts, never an error', () => {
   assert.deepEqual(d, {});
   assert.deepEqual(triggersOf(d), []);
   assert.equal(stepCommands(d).size, 0);
+});
+
+test('a job whose steps are not a list has no steps, and does not stop the rest of the file', () => {
+  const doc = parseWorkflow(['jobs:', '  odd:', '    steps:', '      a: 1', '  count:', '    steps: 3', '  fine:', '    steps:', '      - run: npm ci', ''].join(String.fromCharCode(10)));
+  assert.deepEqual([...stepCommands(doc).values()], ['npm ci']);
+  assert.equal(workflowFacts(doc).npmInstallNoCi, false);
+  assert.equal(allSteps(doc).length, 1);
 });
