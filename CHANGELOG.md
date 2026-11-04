@@ -2,9 +2,13 @@
 
 ## Unreleased
 
-- Releases are automatic: a version bump merged to `main` creates the tag `v<version>` and the
-  GitHub release, with that version's CHANGELOG section as the notes, and then runs the npm
-  publish (still gated on `NPM_PUBLISH`). `npm test` fails a version with no CHANGELOG section.
+- Releases are automatic, as in askalf/dario: the version bump on `main` is the release.
+  `publish.yml` tags the merge commit, cuts the GitHub release with that version's CHANGELOG
+  section, attaches the attested tarball (`.sigstore.json` and `.intoto.jsonl` beside it), and
+  publishes to npm (still gated on `NPM_PUBLISH`). It fills only what is missing, and an hourly
+  run finishes a release that failed part-way.
+- `npm test` fails a version with no CHANGELOG section; CI fails an outside contributor's pull
+  request that changes the version (`scripts/check-release-authority.mjs`).
 
 ## 0.1.2
 
