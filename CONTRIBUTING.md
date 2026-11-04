@@ -40,6 +40,13 @@ npm run build   # bundles src/ into dist/
 - the built action, run on this repository
 - CodeQL and OpenSSF Scorecard
 
+Redline, an automated reviewer, also reads each pull request from a branch in this repository
+once it is out of draft. It reports as the `review / redline` check and posts its verdict as a
+review from `sprayberry-redline`. A pull request that changes `.github/workflows/` is reviewed by
+a run of the default branch's workflow files, never its own, so a change to CI cannot shape its
+own review. Redline runs on a self-hosted row and only reads the pull request; a pull request
+from a fork never runs its own code there.
+
 ## Releases
 
 The version bump on `main` is the release, as in askalf/dario. A release pull request moves the
