@@ -10,6 +10,8 @@
 - `ci-wizard compare` no longer crashes on a hand-edited report: a measurement that is not a number
   shows as `-`, and a report whose workflows or findings are not objects is rejected with the usual
   "is not a ci-wizard --json report" message. Found by the new fuzzing.
+- A workflow file whose job lists `steps` as something other than a list, or whose top level is a
+  list, no longer stops the audit: it yields no steps or facts, as an unparseable file does.
 
 - Releases are automatic, as in askalf/dario: the version bump on `main` is the release.
   `publish.yml` tags the merge commit, cuts the GitHub release with that version's CHANGELOG

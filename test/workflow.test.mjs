@@ -72,3 +72,7 @@ test('a job whose steps are not a list has no steps, and does not stop the rest 
   assert.equal(workflowFacts(doc).npmInstallNoCi, false);
   assert.equal(allSteps(doc).length, 1);
 });
+
+test('a file whose top level is a list or a scalar is not a workflow, and yields no facts', () => {
+  for (const text of ['[]', '- a\n- b', 'just text', '3']) assert.deepEqual(parseWorkflow(text), {}, text);
+});

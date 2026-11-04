@@ -33,7 +33,7 @@ export function fuzz(data) {
   const text = data.toString('utf8');
 
   const doc = parseWorkflow(text);
-  if (doc === null || typeof doc !== 'object') fail(`parseWorkflow returned ${typeof doc}`);
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) fail('parseWorkflow did not return a plain object');
 
   const triggers = triggersOf(doc);
   if (!Array.isArray(triggers) || triggers.some((t) => typeof t !== 'string')) fail('triggersOf returned a non-string list');

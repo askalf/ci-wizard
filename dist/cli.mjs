@@ -7532,7 +7532,7 @@ function parseWorkflow(text) {
   if (!text) return {};
   try {
     const doc = (0, import_yaml.parse)(text, { uniqueKeys: false });
-    return doc && typeof doc === "object" ? doc : {};
+    return doc && typeof doc === "object" && !Array.isArray(doc) ? doc : {};
   } catch {
     return {};
   }
