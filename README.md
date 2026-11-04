@@ -9,7 +9,7 @@ and an estimated weekly saving, and every fix is written as an option with its t
 read-only: nothing is written to the repository.
 
 ```sh
-npx github:askalf/ci-wizard#v0.1.1 owner/repo
+npx github:askalf/ci-wizard#v0.1.2 owner/repo
 ```
 
 ```text
@@ -49,7 +49,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: askalf/ci-wizard@v0.1.1
+      - uses: askalf/ci-wizard@v0.1.2
 ```
 
 Pin it to the release commit's full SHA in your workflows. The report lands in the job summary
@@ -61,12 +61,12 @@ the job for what it finds; it fails only when it cannot read the repository.
 ### From the command line
 
 ```sh
-npx github:askalf/ci-wizard#v0.1.1 owner/repo
-npx github:askalf/ci-wizard#v0.1.1 https://github.com/owner/repo --save before.json
-npx github:askalf/ci-wizard#v0.1.1 owner/repo --days 14 --json > before.json
-npx github:askalf/ci-wizard#v0.1.1 owner/repo --html audit.html
-npx github:askalf/ci-wizard#v0.1.1 compare before.json after.json
-npx github:askalf/ci-wizard#v0.1.1 --version
+npx github:askalf/ci-wizard#v0.1.2 owner/repo
+npx github:askalf/ci-wizard#v0.1.2 https://github.com/owner/repo --save before.json
+npx github:askalf/ci-wizard#v0.1.2 owner/repo --days 14 --json > before.json
+npx github:askalf/ci-wizard#v0.1.2 owner/repo --html audit.html
+npx github:askalf/ci-wizard#v0.1.2 compare before.json after.json
+npx github:askalf/ci-wizard#v0.1.2 --version
 ```
 
 The token comes from `GITHUB_TOKEN` or `GH_TOKEN`, or from `gh auth token` when the GitHub CLI is

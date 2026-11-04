@@ -10,7 +10,7 @@ body:
     id: command
     attributes:
       label: The command or workflow step you ran
-      description: For example `npx github:askalf/ci-wizard#v0.1.1 owner/repo --days 14`, or the action step with its inputs.
+      description: For example `npx github:askalf/ci-wizard#v0.1.2 owner/repo --days 14`, or the action step with its inputs.
     validations:
       required: true
   - type: input
