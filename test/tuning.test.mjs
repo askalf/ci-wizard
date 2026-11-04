@@ -10,7 +10,7 @@ import { report } from '../src/report.mjs';
 import { collect } from '../src/collect.mjs';
 import { createClient } from '../src/github.mjs';
 import { category, categoryOf, parseWorkflow, stepCommands } from '../src/workflow.mjs';
-import { main as cli, parseRepo } from '../src/cli.mjs';
+import { main as cli, parseRepo, repoFromRemote } from '../src/cli.mjs';
 import { data, fakeFetch, job, run, runs, t } from './helpers.mjs';
 
 const now = new Date(Date.parse(t(7 * 86400)));
@@ -159,4 +159,14 @@ test('compare: a report from before the window fix is called out against a newer
   delete old.window_truncated;
   assert.match(compare(old, a), /0\.1\.1 or earlier/);
   assert.doesNotMatch(compare(a, a), /0\.1\.1 or earlier/);
+});
+
+test('repoFromRemote: only a remote whose host is github.com', () => {
+  assert.equal(repoFromRemote('https://github.com/askalf/ci-wizard.git'), 'askalf/ci-wizard');
+  assert.equal(repoFromRemote('git@github.com:askalf/ci-wizard.git'), 'askalf/ci-wizard');
+  assert.equal(repoFromRemote('https://evil.example/github.com/askalf/ci-wizard'), null);
+  assert.equal(repoFromRemote('https://github.com.evil.example/askalf/ci-wizard'), null);
+  assert.equal(repoFromRemote('https://gitlab.com/askalf/ci-wizard'), null);
+  assert.equal(repoFromRemote('askalf/ci-wizard'), null);
+  assert.equal(parseRepo('https://github.com.evil.example/askalf/ci-wizard'), null);
 });

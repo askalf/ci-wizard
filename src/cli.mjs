@@ -31,6 +31,10 @@ Token: GITHUB_TOKEN or GH_TOKEN, else \`gh auth token\`.
 The method: audit and --save before.json, make one change, let it run, audit again with
 --save after.json, then \`ci-wizard compare before.json after.json\` shows what moved.`;
 
+// The host part of a github.com URL or remote, anchored at the start: "github.com" anywhere else
+// in a URL (another host's path, a subdomain of another host) is not GitHub.
+const GITHUB_HOST = /^(?:https?:\/\/|ssh:\/\/)?(?:[^@/]+@)?(?:www\.)?github\.com[/:]/;
+
 /**
  * owner/repo from what a person is likely to paste: owner/repo, a github.com URL (with or without
  * a path after the repository, or .git), or an SSH remote. Null when it is none of those.
@@ -38,16 +42,21 @@ The method: audit and --save before.json, make one change, let it run, audit aga
 export function parseRepo(s) {
   const t = String(s || '').trim();
   if (!t) return null;
-  const m = /^(?:(?:https?:\/\/|ssh:\/\/)?(?:[^@/]+@)?(?:www\.)?github\.com[/:])?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?(?:[/?#].*)?$/.exec(t);
+  const m = new RegExp(`^(?:${GITHUB_HOST.source.slice(1)})?([A-Za-z0-9_.-]+)\\/([A-Za-z0-9_.-]+?)(?:\\.git)?(?:[/?#].*)?$`).exec(t);
   if (!m) return null;
   const repo = `${m[1]}/${m[2]}`;
   return REPO_RE.test(repo) ? repo : null;
 }
 
+/** owner/repo from a git remote URL, only when the remote's host is github.com. */
+export function repoFromRemote(url) {
+  return GITHUB_HOST.test(url) ? parseRepo(url) : null;
+}
+
 function repoFromGit(cwd) {
   try {
     const url = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    return /github\.com[/:]/.test(url) ? parseRepo(url) : null;
+    return repoFromRemote(url);
   } catch {
     return null;
   }
