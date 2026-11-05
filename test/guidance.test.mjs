@@ -363,3 +363,14 @@ test('collect reads visibility, from visibility or from the private flag', async
   assert.equal(await get({ private: false }), 'public');
   assert.equal(await get({ private: true }), 'private');
 });
+
+test('the sparse-checkout example suits cone mode: directories only, root files left to the default', () => {
+  const { example } = checkoutAdvice({ inspected: true });
+  const y = parse(example);
+  const entries = String(y.with['sparse-checkout']).trim().split('\n').map((e) => e.trim());
+  assert.deepEqual(entries, ['src', 'test']);
+  // Cone mode (actions/checkout's default) rejects a file path; none is listed, and cone mode is not switched off.
+  for (const e of entries) assert.doesNotMatch(e, /\.[a-z0-9]+$/i, `${e} looks like a file`);
+  assert.equal(y.with['sparse-checkout-cone-mode'], undefined);
+  assert.match(example, /files at the root are always included/);
+});

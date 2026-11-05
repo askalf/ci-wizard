@@ -129,6 +129,8 @@ export function checkoutAdvice(checkout = {}) {
   if (causes.length) return { causes, example: `# on the existing actions/checkout step\nwith:\n${lines.join('\n')}` };
   return {
     causes,
-    example: '# on the existing actions/checkout step: fetch only the paths the job reads\nwith:\n  sparse-checkout: |\n    src\n    package.json',
+    // actions/checkout's sparse-checkout runs in cone mode by default, which takes directories only
+    // (git rejects a file path there) and always includes the files at the repository root.
+    example: '# on the existing actions/checkout step: fetch only the directories the job reads\n# (cone mode, the default: list directories; files at the root are always included)\nwith:\n  sparse-checkout: |\n    src\n    test',
   };
 }
