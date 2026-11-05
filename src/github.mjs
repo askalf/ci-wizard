@@ -70,6 +70,9 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
         calls++;
         res = await fetchImpl(url, { headers });
       } catch (err) {
+        // No answer means no new count, but GitHub may have received and charged the request: count
+        // it as spent, so the reserve check before a retry never works from a stale, higher number.
+        if (remaining !== null) remaining -= 1;
         if (attempt < backoffMs.length) {
           await sleep(backoffMs[attempt]);
           continue;

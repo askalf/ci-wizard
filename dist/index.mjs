@@ -7414,6 +7414,7 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
         calls++;
         res = await fetchImpl(url, { headers });
       } catch (err) {
+        if (remaining !== null) remaining -= 1;
         if (attempt < backoffMs.length) {
           await sleep(backoffMs[attempt]);
           continue;

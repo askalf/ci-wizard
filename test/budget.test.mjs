@@ -110,3 +110,25 @@ test('the action logs the budget when GitHub sends the headers, and the call cou
   assert.match(without.out, /findings, \d+ API calls; report in the job summary/);
   assert.doesNotMatch(without.summary, /API budget/);
 });
+
+test('a request that fails without an answer counts as spent, so a retry cannot cross the reserve', async () => {
+  let sent = 0;
+  // 26 left after the first answer; the second request reaches GitHub (and is charged) but the
+  // connection drops before an answer. Counted as spent, 25 are left, so the retry is not sent.
+  const fetchImpl = async () => {
+    sent++;
+    if (sent === 1) return new Response('{}', { status: 200, headers: { 'x-ratelimit-limit': '1000', 'x-ratelimit-remaining': '26' } });
+    throw new Error('socket hang up');
+  };
+  const c = createClient({ fetchImpl, minRemaining: 25, backoffMs: [0, 0] });
+  await c.get('a');
+  await assert.rejects(c.get('b'), RateLimitError);
+  assert.equal(sent, 2);
+  assert.equal(c.remaining, 25);
+  // With no count known yet there is nothing to protect, and the retries go out as before.
+  let tries = 0;
+  const flaky = createClient({ fetchImpl: async () => { tries++; throw new Error('down'); }, backoffMs: [0, 0] });
+  await assert.rejects(flaky.get('x'), /network/);
+  assert.equal(tries, 3);
+  assert.equal(flaky.remaining, null);
+});
