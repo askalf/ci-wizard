@@ -12,7 +12,7 @@ import { data, find, job, runs } from './helpers.mjs';
 
 const wf = (on, runsOn, extra = '') => `on: ${on}\njobs:\n  test:\n    runs-on: ${runsOn}\n${extra}    steps:\n      - run: make test\n`;
 const reach = (text, repo = 'o/r') => forkReachableSelfHosted(parseWorkflow(text), repo).map((r) => `${r.job}:${r.event}:${r.certain ? 'certain' : 'possible'}`);
-const FORK_TO_HOSTED = "github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest'";
+const FORK_TO_HOSTED = "github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest'";
 
 test('runsOnSelfHosted: lists, strings, label objects and expressions', () => {
   assert.equal(runsOnSelfHosted(['self-hosted', 'linux']), true);
@@ -152,4 +152,63 @@ test('an ephemeral row that keeps its name but registers anew each job is not re
   // Seen on pitlane's ci-wizard-redline-e1: three jobs, one name, runner ids 37, 38 and 39.
   const samples = new Map([['Redline', [37, 38, 39].map((id) => [selfJob(id, 'ci-wizard-redline-e1')])]]);
   assert.deepEqual(runnerReuseFinding(samples), []);
+});
+
+test('fork context: only what every fork pull request shares is known', () => {
+  // An opened-only job runs for a fork when its pull request opens: possible, not dropped.
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', "    if: github.event.action == 'opened'\n")), ['test:pull_request:possible']);
+  // Branch, author, draft state and number vary from one fork pull request to the next.
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', "    if: github.head_ref == 'main'\n")), ['test:pull_request:possible']);
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', '    if: ${{ !github.event.pull_request.draft }}\n')), ['test:pull_request:possible']);
+  // The fork's name is known only to differ from the base repository; against a literal it is unknown.
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', "    if: github.event.pull_request.head.repo.full_name != 'someone/r'\n")), ['test:pull_request:possible']);
+});
+
+test('status functions: failure() can run after a failed dependency; with no needs, success() holds', () => {
+  const after = 'on: [pull_request]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps: [{run: make}]\n  report:\n    needs: build\n    if: failure()\n    runs-on: [self-hosted]\n    steps: [{run: make report}]\n';
+  assert.deepEqual(reach(after), ['report:pull_request:possible']);
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', '    if: success()\n')), ['test:pull_request:certain']);
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', '    if: failure()\n')), []);
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', '    if: always()\n')), ['test:pull_request:certain']);
+});
+
+test('comparisons coerce as GitHub does when types differ', async () => {
+  const { evaluate, parseExpr, completeContext } = await import('../src/expr.mjs');
+  const ev = (e) => evaluate(parseExpr(e), completeContext({}));
+  assert.equal(ev('true == 1'), true);
+  assert.equal(ev("'1' == 1"), true);
+  assert.equal(ev('null == 0'), true);
+  assert.equal(ev("'' == 0"), true);
+  assert.equal(ev("'abc' == 0"), false);
+  assert.equal(ev("'abc' != 0"), true);
+  assert.equal(ev("'ABC' == 'abc'"), true);
+  // A fork's flag compared to 1 runs the job for a fork.
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', '    if: github.event.pull_request.head.repo.fork == 1\n')), ['test:pull_request:certain']);
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', '    if: github.event.pull_request.head.repo.fork != 1\n')), []);
+});
+
+test('label objects: their labels are evaluated before they are classified', () => {
+  const obj = (labels) => `on: [pull_request]\njobs:\n  test:\n    runs-on:\n      group: build\n      labels: "${labels}"\n    steps: [{run: make}]\n`;
+  assert.deepEqual(reach(obj("${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'self-hosted' }}")), []);
+  assert.deepEqual(reach(obj("${{ github.event.pull_request.head.repo.fork && 'self-hosted' || 'ubuntu-latest' }}")), ['test:pull_request:certain']);
+  assert.deepEqual(reach(obj('${{ vars.LABEL }}-self-hosted')), ['test:pull_request:possible']);
+});
+
+test('the guard example leaves push, schedule and dispatch runs on their own runners', async () => {
+  const { valueOf, completeContext, forkPullRequestContext } = await import('../src/expr.mjs');
+  const runsOn = parse(forkGuardExample(['self-hosted', 'app-exec']))['runs-on'];
+  for (const event of ['push', 'schedule', 'workflow_dispatch']) {
+    assert.deepEqual(valueOf(runsOn, completeContext({ repository: 'o/r', event_name: event, event: {} })), ['self-hosted', 'app-exec'], event);
+  }
+  const own = completeContext({ repository: 'o/r', event_name: 'pull_request', event: { pull_request: { head: { repo: { full_name: 'o/r' } } } } });
+  assert.deepEqual(valueOf(runsOn, own), ['self-hosted', 'app-exec']);
+  assert.equal(valueOf(runsOn, forkPullRequestContext('o/r')), 'ubuntu-latest');
+});
+
+test('pull_request_target: a head checkout counts only when its own if lets it run for a fork', () => {
+  const target = (stepIf) => `on: [pull_request_target]\njobs:\n  t:\n    runs-on: [self-hosted]\n    steps:\n      - uses: actions/checkout@v7\n${stepIf ? `        if: ${stepIf}\n` : ''}        with:\n          ref: \${{ github.event.pull_request.head.sha }}\n      - run: make\n`;
+  assert.deepEqual(reach(target('')), ['t:pull_request_target:certain']);
+  assert.deepEqual(reach(target('false')), []);
+  assert.deepEqual(reach(target('github.event.pull_request.head.repo.full_name == github.repository')), []);
+  assert.deepEqual(reach(target("contains(github.event.pull_request.labels.*.name, 'safe')")), ['t:pull_request_target:possible']);
 });

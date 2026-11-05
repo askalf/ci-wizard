@@ -135,7 +135,9 @@ export function checkoutAdvice(checkout = {}) {
   };
 }
 
-const FORK_TO_HOSTED = "github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest'";
+// Only a pull request carries a head repository: on a push, a schedule or a dispatch the head is
+// empty, which also differs from github.repository, so the guard first requires a pull request.
+const FORK_TO_HOSTED = "github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest'";
 
 /**
  * runs-on that sends a fork's pull requests to a GitHub-hosted runner and keeps the job's own

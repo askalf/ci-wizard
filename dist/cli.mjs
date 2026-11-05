@@ -7550,6 +7550,13 @@ var import_yaml = __toESM(require_dist(), 1);
 
 // src/expr.mjs
 var UNKNOWN = /* @__PURE__ */ Symbol("unknown");
+var COMPLETE = /* @__PURE__ */ Symbol("complete");
+function opaque(differsFrom = []) {
+  return { [OPAQUE]: true, differsFrom: differsFrom.map((v) => String(v).toLowerCase()) };
+}
+var OPAQUE = /* @__PURE__ */ Symbol("opaque");
+var STATUS = /* @__PURE__ */ Symbol("status");
+var isOpaque = (v) => Boolean(v && typeof v === "object" && v[OPAQUE]);
 function tokenize(src) {
   const tokens = [];
   let i = 0;
@@ -7700,19 +7707,74 @@ function parseExpr(src) {
   if (p !== tokens.length) throw new Error("trailing input");
   return tree;
 }
-var truthy = (v) => v !== UNKNOWN && !(v === false || v === null || v === 0 || v === "" || Number.isNaN(v));
+var truthy = (v) => v !== UNKNOWN && (isOpaque(v) || !(v === false || v === null || v === 0 || v === "" || Number.isNaN(v)));
 var falsy = (v) => v !== UNKNOWN && !truthy(v);
-var lower = (v) => typeof v === "string" ? v.toLowerCase() : v;
 var get = (obj, key) => {
-  if (obj === UNKNOWN) return UNKNOWN;
+  if (obj === UNKNOWN || isOpaque(obj)) return UNKNOWN;
   if (obj === null || typeof obj !== "object") return null;
   const hit = Object.keys(obj).find((k) => k.toLowerCase() === String(key).toLowerCase());
-  return hit === void 0 ? UNKNOWN : obj[hit];
+  if (hit !== void 0) return obj[hit];
+  return obj[COMPLETE] ? null : UNKNOWN;
 };
-function call(name, args) {
-  if (["always", "success"].includes(name)) return true;
-  if (["failure", "cancelled"].includes(name)) return false;
-  if (args.some((a) => a === UNKNOWN)) return UNKNOWN;
+function toNumber(v) {
+  if (v === null) return 0;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (typeof v === "number") return v;
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (t === "") return 0;
+    const n = /^0x[0-9a-f]+$/i.test(t) ? parseInt(t, 16) : Number(t);
+    return Number.isNaN(n) ? NaN : n;
+  }
+  return NaN;
+}
+function compare(op, a, b) {
+  if (isOpaque(a) || isOpaque(b)) {
+    const [o, other] = isOpaque(a) ? [a, b] : [b, a];
+    if (typeof other === "string" && o.differsFrom.includes(other.toLowerCase()) && (op === "==" || op === "!=")) return op === "!=";
+    return UNKNOWN;
+  }
+  let x = a;
+  let y = b;
+  if (typeof x === "string" && typeof y === "string") {
+    x = x.toLowerCase();
+    y = y.toLowerCase();
+  } else if (typeof x !== typeof y || typeof x === "object" && x !== null || typeof y === "object" && y !== null) {
+    if (typeof x === "object" && x !== null || typeof y === "object" && y !== null) {
+      if (op === "==") return x === y;
+      if (op === "!=") return x !== y;
+      return false;
+    }
+    x = toNumber(x);
+    y = toNumber(y);
+    if (Number.isNaN(x) || Number.isNaN(y)) return op === "!=";
+  }
+  switch (op) {
+    case "==":
+      return x === y;
+    case "!=":
+      return x !== y;
+    case "<":
+      return x < y;
+    case "<=":
+      return x <= y;
+    case ">":
+      return x > y;
+    case ">=":
+      return x >= y;
+    default:
+      return UNKNOWN;
+  }
+}
+function call(name, args, ctx) {
+  if (name === "always") return true;
+  if (name === "success" || name === "failure") {
+    const status = ctx && ctx[STATUS];
+    if (status && status.hasNeeds === false) return name === "success";
+    return UNKNOWN;
+  }
+  if (name === "cancelled") return UNKNOWN;
+  if (args.some((a) => a === UNKNOWN || isOpaque(a))) return UNKNOWN;
   switch (name) {
     case "fromjson":
       try {
@@ -7723,7 +7785,7 @@ function call(name, args) {
     case "tojson":
       return JSON.stringify(args[0]);
     case "contains":
-      return Array.isArray(args[0]) ? args[0].some((x) => lower(x) === lower(args[1])) : String(args[0]).toLowerCase().includes(String(args[1]).toLowerCase());
+      return Array.isArray(args[0]) ? args[0].some((x) => compare("==", x, args[1]) === true) : String(args[0]).toLowerCase().includes(String(args[1]).toLowerCase());
     case "startswith":
       return String(args[0]).toLowerCase().startsWith(String(args[1]).toLowerCase());
     case "endswith":
@@ -7747,7 +7809,7 @@ function evaluate(node, ctx) {
       return key === UNKNOWN ? UNKNOWN : get(evaluate(node.of, ctx), key);
     }
     case "call":
-      return call(node.name, node.args.map((a) => evaluate(a, ctx)));
+      return call(node.name, node.args.map((a) => evaluate(a, ctx)), ctx);
     case "!": {
       const v = evaluate(node.a, ctx);
       return v === UNKNOWN ? UNKNOWN : !truthy(v);
@@ -7770,30 +7832,14 @@ function evaluate(node, ctx) {
       const a = evaluate(node.a, ctx);
       const b = evaluate(node.b, ctx);
       if (a === UNKNOWN || b === UNKNOWN) return UNKNOWN;
-      const x = lower(a);
-      const y = lower(b);
-      switch (node.k) {
-        case "==":
-          return x === y;
-        case "!=":
-          return x !== y;
-        case "<":
-          return x < y;
-        case "<=":
-          return x <= y;
-        case ">":
-          return x > y;
-        case ">=":
-          return x >= y;
-        default:
-          return UNKNOWN;
-      }
+      return compare(node.k, a, b);
     }
   }
 }
 function valueOf(field, ctx, { isIf = false } = {}) {
   if (field === void 0) return void 0;
   if (Array.isArray(field)) return field.map((f) => valueOf(f, ctx));
+  if (field && typeof field === "object") return Object.fromEntries(Object.entries(field).map(([k, v]) => [k, valueOf(v, ctx)]));
   if (typeof field !== "string") return field;
   const whole = /^\s*\$\{\{([\s\S]*)\}\}\s*$/.exec(field);
   if (whole || isIf) {
@@ -7819,28 +7865,15 @@ function valueOf(field, ctx, { isIf = false } = {}) {
   }
   return field;
 }
-function forkPullRequestContext(repo = "owner/repo", event = "pull_request") {
-  const [owner, name] = String(repo).split("/");
+function forkPullRequestContext(repo = "owner/repo", event = "pull_request", { hasNeeds } = {}) {
+  const [owner] = String(repo).split("/");
   const pr = {
-    head: { repo: { full_name: `contributor/${name || "repo"}`, fork: true, owner: { login: "contributor" } }, ref: "patch", sha: "0".repeat(40), label: "contributor:patch" },
-    base: { repo: { full_name: repo, fork: false, owner: { login: owner } }, ref: "main" },
-    user: { login: "contributor" },
-    number: 1,
-    draft: false,
-    author_association: "CONTRIBUTOR"
+    head: { repo: { full_name: opaque([repo]), fork: true, owner: { login: opaque([owner]) } } },
+    base: { repo: { full_name: repo, fork: false, owner: { login: owner } } }
   };
   return {
-    github: {
-      repository: repo,
-      repository_owner: owner,
-      event_name: event,
-      actor: "contributor",
-      triggering_actor: "contributor",
-      head_ref: "patch",
-      base_ref: "main",
-      ref: "refs/pull/1/merge",
-      event: { pull_request: pr, action: "synchronize", sender: { login: "contributor" } }
-    }
+    [STATUS]: { hasNeeds },
+    github: { repository: repo, repository_owner: owner, event_name: event, event: { pull_request: pr } }
   };
 }
 
@@ -8042,8 +8075,9 @@ function picksSelfHosted(value, raw) {
     return value.some((v) => v === UNKNOWN) && mentions ? null : false;
   }
   if (value && typeof value === "object") {
-    const labels = value.labels === void 0 ? [] : [].concat(value.labels);
-    return picksSelfHosted(labels.length ? labels : UNKNOWN, raw);
+    if (value.labels === void 0) return false;
+    if (value.labels === UNKNOWN) return mentions ? null : false;
+    return picksSelfHosted([].concat(value.labels), raw);
   }
   return typeof value === "string" && /self-hosted/i.test(value);
 }
@@ -8053,17 +8087,21 @@ function forkReachableSelfHosted(doc, repo = "owner/repo") {
   const out = [];
   for (const [id, job] of Object.entries(doc.jobs || {})) {
     if (!job || typeof job !== "object" || job["runs-on"] === void 0) continue;
+    const hasNeeds = job.needs !== void 0 && !(Array.isArray(job.needs) && job.needs.length === 0);
     for (const event of events) {
+      const ctx = forkPullRequestContext(repo, event, { hasNeeds });
+      let checkoutCertain = true;
       if (event === "pull_request_target") {
-        const checksOutHead = stepsOfJob(job).some((st) => st && typeof st === "object" && /^actions\/checkout@/.test(String(st.uses || "")) && /pull_request\.head|head_ref|head\.sha/.test(JSON.stringify(st.with || {})));
-        if (!checksOutHead) continue;
+        const heads = stepsOfJob(job).filter((st) => st && typeof st === "object" && /^actions\/checkout@/.test(String(st.uses || "")) && /pull_request\.head|head_ref|head\.sha/.test(JSON.stringify(st.with || {})));
+        const runs = heads.map((st) => st.if === void 0 ? true : valueOf(st.if, ctx, { isIf: true })).filter((c) => c === UNKNOWN || c);
+        if (!runs.length) continue;
+        checkoutCertain = runs.some((c) => c !== UNKNOWN);
       }
-      const ctx = forkPullRequestContext(repo, event);
       const cond = job.if === void 0 ? true : valueOf(job.if, ctx, { isIf: true });
       if (cond !== UNKNOWN && !cond) continue;
       const picks = picksSelfHosted(valueOf(job["runs-on"], ctx), job["runs-on"]);
       if (picks === false) continue;
-      out.push({ job: id, runsOn: job["runs-on"], event, certain: cond !== UNKNOWN && picks === true });
+      out.push({ job: id, runsOn: job["runs-on"], event, certain: cond !== UNKNOWN && picks === true && checkoutCertain });
       break;
     }
   }
@@ -8224,7 +8262,7 @@ ${lines.join("\n")}` };
     example: "# on the existing actions/checkout step: fetch only the directories the job reads\n# (cone mode, the default: list directories; files at the root are always included)\nwith:\n  sparse-checkout: |\n    src\n    test"
   };
 }
-var FORK_TO_HOSTED = "github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest'";
+var FORK_TO_HOSTED = "github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest'";
 function forkGuardExample(runsOn) {
   if (typeof runsOn === "string") {
     const whole = /^\s*\$\{\{([\s\S]*)\}\}\s*$/.exec(runsOn);
@@ -9113,7 +9151,7 @@ function compareData(before, after) {
     billedTotals: { before: before.billed_minutes_week_sampled, after: after.billed_minutes_week_sampled }
   };
 }
-function compare(before, after) {
+function compare2(before, after) {
   const c = compareData(before, after);
   const L = [];
   L.push(`# CI comparison: ${c.sameRepo ? before.repo : `${before.repo} against ${after.repo}`}`, "");
@@ -9241,7 +9279,7 @@ function runCompare(paths, { stdout, stderr }) {
 `);
     return 1;
   }
-  stdout.write(compare(before, after));
+  stdout.write(compare2(before, after));
   return 0;
 }
 async function main(argv = process.argv.slice(2), { env = process.env, stdout = process.stdout, stderr = process.stderr, fetchImpl, cwd = process.cwd(), token: givenToken } = {}) {

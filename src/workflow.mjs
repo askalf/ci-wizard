@@ -262,8 +262,10 @@ function picksSelfHosted(value, raw) {
     return value.some((v) => v === UNKNOWN) && mentions ? null : false;
   }
   if (value && typeof value === 'object') {
-    const labels = value.labels === undefined ? [] : [].concat(value.labels);
-    return picksSelfHosted(labels.length ? labels : UNKNOWN, raw);
+    // A label object: its labels, evaluated (a group alone names no self-hosted label).
+    if (value.labels === undefined) return false;
+    if (value.labels === UNKNOWN) return mentions ? null : false;
+    return picksSelfHosted([].concat(value.labels), raw);
   }
   return typeof value === 'string' && /self-hosted/i.test(value);
 }
@@ -283,18 +285,24 @@ export function forkReachableSelfHosted(doc, repo = 'owner/repo') {
   const out = [];
   for (const [id, job] of Object.entries(doc.jobs || {})) {
     if (!job || typeof job !== 'object' || job['runs-on'] === undefined) continue;
+    const hasNeeds = job.needs !== undefined && !(Array.isArray(job.needs) && job.needs.length === 0);
     for (const event of events) {
+      const ctx = forkPullRequestContext(repo, event, { hasNeeds });
+      // On pull_request_target the job runs the base repository's code unless a step checks out the
+      // pull request's head, and that step only counts when its own if lets it run for a fork.
+      let checkoutCertain = true;
       if (event === 'pull_request_target') {
-        const checksOutHead = stepsOfJob(job).some((st) => st && typeof st === 'object' && /^actions\/checkout@/.test(String(st.uses || ''))
+        const heads = stepsOfJob(job).filter((st) => st && typeof st === 'object' && /^actions\/checkout@/.test(String(st.uses || ''))
           && /pull_request\.head|head_ref|head\.sha/.test(JSON.stringify(st.with || {})));
-        if (!checksOutHead) continue;
+        const runs = heads.map((st) => (st.if === undefined ? true : valueOf(st.if, ctx, { isIf: true }))).filter((c) => c === UNKNOWN || c);
+        if (!runs.length) continue;
+        checkoutCertain = runs.some((c) => c !== UNKNOWN);
       }
-      const ctx = forkPullRequestContext(repo, event);
       const cond = job.if === undefined ? true : valueOf(job.if, ctx, { isIf: true });
       if (cond !== UNKNOWN && !cond) continue;
       const picks = picksSelfHosted(valueOf(job['runs-on'], ctx), job['runs-on']);
       if (picks === false) continue;
-      out.push({ job: id, runsOn: job['runs-on'], event, certain: cond !== UNKNOWN && picks === true });
+      out.push({ job: id, runsOn: job['runs-on'], event, certain: cond !== UNKNOWN && picks === true && checkoutCertain });
       break;
     }
   }

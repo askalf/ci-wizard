@@ -210,13 +210,18 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **Fires when** a sampled workflow on `pull_request` has a job that, evaluated as GitHub would for
   a pull request from a fork, runs (its `if` is not false) and picks a self-hosted runner (its
   `runs-on` comes to a label list, string or label object naming `self-hosted`). The `if` and
-  `runs-on` expressions are evaluated (`src/expr.mjs`) against a fork's pull-request context, so a
-  guard counts by what it does, not by what it mentions: `head.repo.full_name != github.repository
+  `runs-on` expressions are evaluated (`src/expr.mjs`) against what every pull request from a fork
+  shares (the event, the base repository, a head repository that is a fork and is not the base);
+  the action, branches, author, draft state and the fork's own name vary and stay unknown. Status
+  functions are known only for a job without `needs` (`success()` true, `failure()` false);
+  comparisons of different types coerce to numbers as GitHub's do; a label object's labels are
+  evaluated too. So a guard counts by what it does, not by what it mentions: `head.repo.full_name != github.repository
   && 'ubuntu-latest' || …` is safe, the same with its branches reversed is not, `if:
   github.event.pull_request.head.repo.fork` runs the job for forks, and a job behind `if:
   github.event_name == 'push'` or `if: false` never runs for one. A `github.repository` check is no
   guard: a fork's pull_request run happens in the base repository. On `pull_request_target` a job
-  counts only when a step checks out the pull request's head.
+  counts only when a step checks out the pull request's head and that step's own `if` lets it run
+  for a fork.
 - **Confidence** confirmed on a public repository when the evaluation resolves; inferred when a
   value the audit cannot know (a `vars`, `matrix` or `inputs` value) decides it, or when the
   visibility could not be read. Not reported on a private or internal repository. GitHub's approval
@@ -224,7 +229,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   read, not the guard.
 - **Estimate** none: a risk, ranked first.
 - **Fix** send a fork's pull requests to a GitHub-hosted runner and keep the job's own runner
-  selection for everything else. The example wraps the job's `runs-on` unchanged (a whole
+  selection for everything else. The guard requires a pull request first (`github.event.pull_request
+  && …`), so push, schedule and dispatch runs keep their own runners. The example wraps the job's
+  `runs-on` unchanged (a whole
   expression in parentheses, a static label or list through `fromJSON`); a list with expressions
   inside or a runner group cannot be carried over unchanged, so then there is no example.
   *Trade-off:* a fork's checks then start slower, or are billed on a private repository, and a
