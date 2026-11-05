@@ -3,9 +3,9 @@
 // the cause; measured: the numbers show it; inferred: the cause is a likely reading), an
 // estimated weekly saving, and a fix written as an option with its trade-off. docs/rules.md
 // documents every rule, its threshold and its estimate.
-import { concurrencyGroupOf, categoryOf, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, workflowFacts } from './workflow.mjs';
+import { concurrencyGroupOf, categoryOf, forkReachableSelfHosted, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, workflowFacts } from './workflow.mjs';
 import { countBy, fmtS, median, pct, round, secs, sum } from './util.mjs';
-import { CANCEL_OUTDATED, ONE_RUN_PER_COMMIT, cacheExample, checkoutAdvice, managerOf, triggerExample } from './advice.mjs';
+import { CANCEL_OUTDATED, ONE_RUN_PER_COMMIT, cacheExample, checkoutAdvice, forkGuardExample, managerOf, triggerExample } from './advice.mjs';
 
 export const THRESHOLDS = {
   depsPerJobNoCache: 15,
@@ -208,6 +208,7 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     concurrency_group: concurrencyGroupOf(doc),
     events,
     installers: facts.installers,
+    fork_reachable: forkReachableSelfHosted(doc),
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3),
   };
@@ -222,6 +223,8 @@ const T = THRESHOLDS;
  * repository.
  */
 export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch = null, isPublic = false }) {
+  // isPublic: true, false, or 'private' when the repository is known not to be public; the billing
+  // rule needs true, and the fork rule skips only a repository known to be private.
   const F = [];
   // A timing from one or two runs can be an outlier; the evidence says so rather than hiding it.
   const thin = w.thin_sample ? ` (timed from only ${w.sampled_runs} successful run${w.sampled_runs === 1 ? '' : 's'})` : '';
@@ -360,14 +363,66 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
   // A public repository's standard hosted runners are free: its billed minutes cost nothing, so
   // the rule does not fire there.
   const billed = w.billed_minutes_week;
-  if (!isPublic && typeof billed === 'number' && w.hosted_share >= 0.5 && billed >= T.billedRatio * w.job_minutes_week && billed - w.job_minutes_week >= T.billedExcessWeek) {
+  if (isPublic !== true && typeof billed === 'number' && w.hosted_share >= 0.5 && billed >= T.billedRatio * w.job_minutes_week && billed - w.job_minutes_week >= T.billedExcessWeek) {
     const jobsWeek = w.jobs_per_run * (w.runs_week - (w.skipped_week || 0));
     add(0.5 * (billed - w.job_minutes_week), 'short hosted jobs bill a whole minute',
       `about ${Math.round(jobsWeek)} jobs a week averaging ${fmtS(w.median_job_s)}, but GitHub bills each hosted job rounded up to a whole minute: about ${Math.round(billed)} billed minutes a week for ${Math.round(w.job_minutes_week)} job-minutes`,
       'fewer, longer jobs: merge the short jobs of a run into one, run the workflow less often, or move it to a self-hosted runner',
       { tradeoff: 'a merged job reports one status where there were several; a self-hosted runner is yours to run, patch and secure', unit: 'billed' });
   }
+  // A fork's pull request that reaches a self-hosted runner runs a stranger's code on the host. On
+  // a public repository GitHub runs such a pull request without approval once its author has had
+  // one merged (the default policy), and the audit cannot read the repository's approval setting.
+  const reach = w.fork_reachable || [];
+  if (reach.length && isPublic !== 'private') {
+    const jobsText = reach.slice(0, 5).map((r) => `${r.job} (${r.labels.join(', ')}${r.event === 'pull_request_target' ? ', pull_request_target with the head checked out' : ''})`).join('; ');
+    add(0, 'fork pull requests run on self-hosted runners',
+      `${reach.length === 1 ? 'job' : 'jobs'} ${jobsText} ${reach.length === 1 ? 'runs' : 'run'} on a self-hosted runner for pull requests with no fork guard, so a pull request from a fork runs its code on your machine${isPublic === true ? '' : ' (if the repository is public; its visibility could not be read)'}`,
+      "send a fork's pull requests to a GitHub-hosted runner and keep the repository's own on its self-hosted labels; GitHub's approval of fork workflows is a second line, not the guard",
+      {
+        confidence: isPublic === true ? 'confirmed' : 'inferred',
+        tradeoff: "a fork's checks then run on a GitHub-hosted runner, slower to start or billed on a private repository, and a job that needs something only the self-hosted machine has must skip for forks",
+        example: forkGuardExample(reach[0].labels),
+        unit: 'risk',
+      });
+  }
   return F;
+}
+
+/**
+ * Self-hosted runners that took more than one sampled job. An ephemeral (just-in-time) runner
+ * registers anew for every job, so its runner id never repeats; a repeated id is a persistent
+ * runner, whose workspace, tool cache, processes and files can carry from one job to the next.
+ */
+export function runnerReuseFinding(samples) {
+  const byRunner = new Map();
+  let selfHostedJobs = 0;
+  for (const [wf, jobsPerRun] of samples) {
+    for (const jobs of jobsPerRun) {
+      for (const job of jobs) {
+        if (ranOnGitHubHosted(job) || job.runner_id == null || !Number(job.runner_id)) continue;
+        selfHostedJobs++;
+        const id = Number(job.runner_id);
+        if (!byRunner.has(id)) byRunner.set(id, { name: String(job.runner_name || id), jobs: 0, workflows: new Set() });
+        const r = byRunner.get(id);
+        r.jobs++;
+        r.workflows.add(wf);
+      }
+    }
+  }
+  const reused = [...byRunner.values()].filter((r) => r.jobs > 1).sort((a, b) => b.jobs - a.jobs);
+  if (!reused.length) return [];
+  const reusedJobs = sum(reused.map((r) => r.jobs));
+  const top = reused[0];
+  const workflows = [...new Set(reused.flatMap((r) => [...r.workflows]))];
+  return [{
+    saving: 0, unit: 'risk', confidence: 'measured', what: 'self-hosted runners reused across jobs',
+    workflow: workflows.length === 1 ? workflows[0] : `${workflows.length} workflows: ${workflows.slice(0, 5).join(', ')}${workflows.length > 5 ? ' and more' : ''}`,
+    evidence: `${reusedJobs} of ${selfHostedJobs} sampled self-hosted jobs ran on ${reused.length === 1 ? 'a runner' : `${reused.length} runners`} that took more than one job (${top.name} took ${top.jobs}), so those runners are persistent: a job can find the workspace, files, processes and tool cache the job before it left`,
+    fix: 'ephemeral runners: one job per registration (just-in-time configuration, or config.sh --ephemeral), each starting from a clean directory; keep start latency low with a warm runner waiting for the next job',
+    tradeoff: 'every job re-registers (seconds, hidden by a warm runner), and nothing a job leaves on disk survives for the next, so caches go through actions/cache or a read-only tool cache',
+    example: '',
+  }];
 }
 
 /** The rules that look across workflows: fan-out, small periodic jobs, reruns. */
@@ -438,7 +493,9 @@ export function groupFindings(F) {
     const evidence = wfs.length === 1 ? g.evidence : `${g.evidence} (shown for the largest; the same holds in the others)`;
     out.push({ ...g, workflow: where, evidence, workflows: undefined });
   }
-  return out.sort((a, b) => b.saving - a.saving);
+  // A security risk comes before any saving: it is the first thing to fix whatever the minutes say.
+  const risk = (f) => (f.unit === 'risk' ? 1 : 0);
+  return out.sort((a, b) => risk(b) - risk(a) || b.saving - a.saving);
 }
 
 /**
@@ -459,10 +516,10 @@ export function analyse(repo, data) {
     workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || '', week));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
-  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === 'public' })), ...repoFindings(workflows)];
+  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === 'public' ? true : data.visibility ? 'private' : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || new Map())];
   // A finding that saves under a minute a week is noise next to the rest; one that saves developer
   // wait has no minutes to compare and always stays.
-  const findings = groupFindings(raw).filter((f) => f.unit === 'wait' || f.saving >= T.minSavingWeek).map((f) => ({
+  const findings = groupFindings(raw).filter((f) => f.unit === 'wait' || f.unit === 'risk' || f.saving >= T.minSavingWeek).map((f) => ({
     saving_min_week: round(f.saving, 1), unit: f.unit || 'job', workflow: f.workflow, what: f.what, evidence: f.evidence,
     fix: f.fix, tradeoff: f.tradeoff || '', example: f.example || '', confidence: f.confidence,
   }));

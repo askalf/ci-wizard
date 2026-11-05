@@ -134,3 +134,11 @@ export function checkoutAdvice(checkout = {}) {
     example: '# on the existing actions/checkout step: fetch only the directories the job reads\n# (cone mode, the default: list directories; files at the root are always included)\nwith:\n  sparse-checkout: |\n    src\n    test',
   };
 }
+
+/**
+ * runs-on that keeps the repository's own pull requests on its self-hosted labels and sends a
+ * fork's to a GitHub-hosted runner, the form askalf's repositories use.
+ */
+export function forkGuardExample(labels = ['self-hosted']) {
+  return `runs-on: \${{ github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('${JSON.stringify(labels)}') }}`;
+}

@@ -39,6 +39,11 @@ minutes are that rounded figure for GitHub-hosted jobs (a job whose runner group
 Actions"); self-hosted jobs count 0. They sit beside job-minutes in the table, in `compare`, and
 in the short-hosted-jobs rule.
 
+**Risks first.** Two rules report a security and stability risk rather than a saving (unit
+`risk`): they rank before every saving and lead the report. They measure the method askalf/pitlane
+documents for self-hosted runners: a fork's pull request never reaches a self-hosted runner, and
+no two jobs share a runner.
+
 **Noise floor.** A finding whose estimated saving is under 1 minute a week is left out. Queue
 wait and matrix size save developer wait, not minutes, and always stay; the report says so.
 
@@ -199,6 +204,36 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **Fix** fewer, longer jobs: merge the short jobs of a run into one, run the workflow less often,
   or move it to a self-hosted runner. *Trade-off:* a merged job reports one status where there
   were several; a self-hosted runner is yours to run, patch and secure.
+
+## fork pull requests run on self-hosted runners
+
+- **Fires when** a sampled workflow runs on `pull_request` and one of its jobs has a `runs-on` that
+  can name `self-hosted` (a label list, a string, a label object or an expression) with no fork
+  guard, a check on the head repository (`head.repo.full_name`, `head.repo.fork`) in `runs-on` or
+  the job's `if`. A check on `github.repository` is not a fork guard: a fork's pull_request run
+  happens in the base repository. On `pull_request_target` it fires only when a step checks out
+  the pull request's head, since that event otherwise runs the base repository's code.
+- **Confidence** confirmed on a public repository; inferred when the visibility could not be read.
+  Not reported on a private or internal repository. GitHub's approval of fork workflows (by default
+  only a first-time contributor's) is a second line the audit cannot read, not the guard.
+- **Estimate** none: a risk, ranked first.
+- **Fix** send a fork's pull requests to a GitHub-hosted runner and keep the repository's own on its
+  self-hosted labels, with the example's `runs-on`. *Trade-off:* a fork's checks then start slower,
+  or are billed on a private repository, and a job that needs the self-hosted machine must skip for
+  forks.
+
+## self-hosted runners reused across jobs
+
+- **Fires when** one self-hosted runner registration (one runner id) took two or more of the sampled
+  jobs. An ephemeral, just-in-time runner registers anew for every job, so its id never repeats,
+  even when its name does; a repeated id is a persistent runner.
+- **Confidence** measured. One finding for the repository, listing the workflows.
+- **Estimate** none: a risk, ranked first. A job on a persistent runner can find the workspace,
+  files, processes and tool cache the job before it left.
+- **Fix** ephemeral runners: one job per registration (just-in-time configuration, or
+  `config.sh --ephemeral`), each from a clean directory, with a warm runner waiting so the start
+  stays fast. *Trade-off:* every job re-registers, and nothing a job leaves on disk survives for
+  the next, so caches go through `actions/cache` or a read-only tool cache.
 
 ## reruns
 

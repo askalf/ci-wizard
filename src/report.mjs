@@ -19,8 +19,10 @@ export function shareText(w, n = 3) {
 
 /** A wait finding saves developer wait; a report from before units existed marks one by a zero saving. */
 const isWait = (f) => f.unit === 'wait' || (!f.unit && !(f.saving_min_week >= 1));
+const isRisk = (f) => f.unit === 'risk';
 
 export function savingText(f) {
+  if (isRisk(f)) return 'a security and stability risk, not minutes';
   if (isWait(f)) return 'saves developer wait, not job minutes';
   const unit = f.unit === 'billed' ? 'billed' : 'job';
   if (!(f.saving_min_week >= 1)) return `under 1 ${unit}-min/week (estimate)`;
@@ -52,9 +54,10 @@ export function budgetText(a) {
 /** The opening paragraph: what to start with, and what the findings add up to against what was measured. */
 export function summary(a) {
   const L = [];
-  const waitOnly = a.findings.filter(isWait);
-  const jobFindings = a.findings.filter((f) => !isWait(f) && f.unit !== 'billed');
-  const billedFindings = a.findings.filter((f) => !isWait(f) && f.unit === 'billed');
+  const risks = a.findings.filter(isRisk);
+  const waitOnly = a.findings.filter((f) => !isRisk(f) && isWait(f));
+  const jobFindings = a.findings.filter((f) => !isRisk(f) && !isWait(f) && f.unit !== 'billed');
+  const billedFindings = a.findings.filter((f) => !isRisk(f) && !isWait(f) && f.unit === 'billed');
   const total = Math.round(a.job_minutes_week_sampled || 0);
   const billed = num(a.billed_minutes_week_sampled) ? Math.round(a.billed_minutes_week_sampled) : null;
   const free = a.visibility === 'public';
@@ -71,6 +74,7 @@ export function summary(a) {
   const top = a.findings[0];
   L.push(`**Start with:** ${top.what} in *${top.workflow}*: ${savingText(top)}.`, '');
   const parts = [];
+  if (risks.length) parts.push(`${plural(risks.length, 'finding')} ${risks.length === 1 ? 'is a security risk' : 'are security risks'} to fix before any saving`);
   if (jobFindings.length) {
     const saved = Math.round(a.saving_min_week_total ?? jobFindings.reduce((s, f) => s + f.saving_min_week, 0));
     const share = total > 0 ? ` (${Math.round((100 * saved) / total)}%)` : '';

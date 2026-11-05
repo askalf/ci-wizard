@@ -7736,6 +7736,34 @@ function workflowFacts(doc) {
     checkout
   };
 }
+function runsOnSelfHosted(runsOn) {
+  if (runsOn === void 0 || runsOn === null) return false;
+  if (Array.isArray(runsOn)) return runsOn.some((l) => /self-hosted/i.test(String(l)));
+  if (typeof runsOn === "object") return Array.isArray(runsOn.labels) ? runsOn.labels.some((l) => /self-hosted/i.test(String(l))) : /self-hosted/i.test(String(runsOn.labels || ""));
+  return /self-hosted/i.test(String(runsOn));
+}
+function selfHostedLabels(runsOn) {
+  const list = Array.isArray(runsOn) ? runsOn : runsOn && typeof runsOn === "object" ? [].concat(runsOn.labels || []) : [runsOn];
+  const labels = list.map(String).filter((l) => l && !l.includes("${{"));
+  return labels.length ? labels : ["self-hosted"];
+}
+var FORK_GUARD = /head\.repo\b|head_repository|\.fork\b/;
+function forkReachableSelfHosted(doc) {
+  const triggers = triggersOf(doc);
+  const onPr = triggers.includes("pull_request");
+  const onTarget = triggers.includes("pull_request_target");
+  if (!onPr && !onTarget) return [];
+  const out = [];
+  for (const [id, job] of Object.entries(doc.jobs || {})) {
+    if (!job || typeof job !== "object" || !runsOnSelfHosted(job["runs-on"])) continue;
+    const runsOnText = typeof job["runs-on"] === "string" ? job["runs-on"] : JSON.stringify(job["runs-on"]);
+    if (FORK_GUARD.test(runsOnText) || FORK_GUARD.test(String(job.if || ""))) continue;
+    const checksOutHead = stepsOfJob(job).some((st) => st && typeof st === "object" && /^actions\/checkout@/.test(String(st.uses || "")) && /pull_request\.head|head_ref|head\.sha/.test(JSON.stringify(st.with || {})));
+    if (onPr) out.push({ job: id, labels: selfHostedLabels(job["runs-on"]), event: "pull_request" });
+    else if (checksOutHead) out.push({ job: id, labels: selfHostedLabels(job["runs-on"]), event: "pull_request_target" });
+  }
+  return out;
+}
 
 // src/util.mjs
 function secs(a, b) {
@@ -7890,6 +7918,9 @@ ${lines.join("\n")}` };
     // (git rejects a file path there) and always includes the files at the repository root.
     example: "# on the existing actions/checkout step: fetch only the directories the job reads\n# (cone mode, the default: list directories; files at the root are always included)\nwith:\n  sparse-checkout: |\n    src\n    test"
   };
+}
+function forkGuardExample(labels = ["self-hosted"]) {
+  return `runs-on: \${{ github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('${JSON.stringify(labels)}') }}`;
 }
 
 // src/analyse.mjs
@@ -8071,6 +8102,7 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     concurrency_group: concurrencyGroupOf(doc),
     events,
     installers: facts.installers,
+    fork_reachable: forkReachableSelfHosted(doc),
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3)
   };
@@ -8232,7 +8264,7 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
     );
   }
   const billed = w.billed_minutes_week;
-  if (!isPublic && typeof billed === "number" && w.hosted_share >= 0.5 && billed >= T.billedRatio * w.job_minutes_week && billed - w.job_minutes_week >= T.billedExcessWeek) {
+  if (isPublic !== true && typeof billed === "number" && w.hosted_share >= 0.5 && billed >= T.billedRatio * w.job_minutes_week && billed - w.job_minutes_week >= T.billedExcessWeek) {
     const jobsWeek = w.jobs_per_run * (w.runs_week - (w.skipped_week || 0));
     add(
       0.5 * (billed - w.job_minutes_week),
@@ -8242,7 +8274,56 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
       { tradeoff: "a merged job reports one status where there were several; a self-hosted runner is yours to run, patch and secure", unit: "billed" }
     );
   }
+  const reach = w.fork_reachable || [];
+  if (reach.length && isPublic !== "private") {
+    const jobsText = reach.slice(0, 5).map((r) => `${r.job} (${r.labels.join(", ")}${r.event === "pull_request_target" ? ", pull_request_target with the head checked out" : ""})`).join("; ");
+    add(
+      0,
+      "fork pull requests run on self-hosted runners",
+      `${reach.length === 1 ? "job" : "jobs"} ${jobsText} ${reach.length === 1 ? "runs" : "run"} on a self-hosted runner for pull requests with no fork guard, so a pull request from a fork runs its code on your machine${isPublic === true ? "" : " (if the repository is public; its visibility could not be read)"}`,
+      "send a fork's pull requests to a GitHub-hosted runner and keep the repository's own on its self-hosted labels; GitHub's approval of fork workflows is a second line, not the guard",
+      {
+        confidence: isPublic === true ? "confirmed" : "inferred",
+        tradeoff: "a fork's checks then run on a GitHub-hosted runner, slower to start or billed on a private repository, and a job that needs something only the self-hosted machine has must skip for forks",
+        example: forkGuardExample(reach[0].labels),
+        unit: "risk"
+      }
+    );
+  }
   return F;
+}
+function runnerReuseFinding(samples) {
+  const byRunner = /* @__PURE__ */ new Map();
+  let selfHostedJobs = 0;
+  for (const [wf, jobsPerRun] of samples) {
+    for (const jobs of jobsPerRun) {
+      for (const job of jobs) {
+        if (ranOnGitHubHosted(job) || job.runner_id == null || !Number(job.runner_id)) continue;
+        selfHostedJobs++;
+        const id = Number(job.runner_id);
+        if (!byRunner.has(id)) byRunner.set(id, { name: String(job.runner_name || id), jobs: 0, workflows: /* @__PURE__ */ new Set() });
+        const r = byRunner.get(id);
+        r.jobs++;
+        r.workflows.add(wf);
+      }
+    }
+  }
+  const reused = [...byRunner.values()].filter((r) => r.jobs > 1).sort((a, b) => b.jobs - a.jobs);
+  if (!reused.length) return [];
+  const reusedJobs = sum(reused.map((r) => r.jobs));
+  const top = reused[0];
+  const workflows = [...new Set(reused.flatMap((r) => [...r.workflows]))];
+  return [{
+    saving: 0,
+    unit: "risk",
+    confidence: "measured",
+    what: "self-hosted runners reused across jobs",
+    workflow: workflows.length === 1 ? workflows[0] : `${workflows.length} workflows: ${workflows.slice(0, 5).join(", ")}${workflows.length > 5 ? " and more" : ""}`,
+    evidence: `${reusedJobs} of ${selfHostedJobs} sampled self-hosted jobs ran on ${reused.length === 1 ? "a runner" : `${reused.length} runners`} that took more than one job (${top.name} took ${top.jobs}), so those runners are persistent: a job can find the workspace, files, processes and tool cache the job before it left`,
+    fix: "ephemeral runners: one job per registration (just-in-time configuration, or config.sh --ephemeral), each starting from a clean directory; keep start latency low with a warm runner waiting for the next job",
+    tradeoff: "every job re-registers (seconds, hidden by a warm runner), and nothing a job leaves on disk survives for the next, so caches go through actions/cache or a read-only tool cache",
+    example: ""
+  }];
 }
 function repoFindings(workflows) {
   const F = [];
@@ -8318,7 +8399,8 @@ function groupFindings(F) {
     const evidence = wfs.length === 1 ? g.evidence : `${g.evidence} (shown for the largest; the same holds in the others)`;
     out.push({ ...g, workflow: where, evidence, workflows: void 0 });
   }
-  return out.sort((a, b) => b.saving - a.saving);
+  const risk = (f) => f.unit === "risk" ? 1 : 0;
+  return out.sort((a, b) => risk(b) - risk(a) || b.saving - a.saving);
 }
 function analyse(repo, data) {
   const week = 7 / data.coveredDays;
@@ -8332,8 +8414,8 @@ function analyse(repo, data) {
     workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || "", week));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
-  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" })), ...repoFindings(workflows)];
-  const findings = groupFindings(raw).filter((f) => f.unit === "wait" || f.saving >= T.minSavingWeek).map((f) => ({
+  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" ? true : data.visibility ? "private" : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || /* @__PURE__ */ new Map())];
+  const findings = groupFindings(raw).filter((f) => f.unit === "wait" || f.unit === "risk" || f.saving >= T.minSavingWeek).map((f) => ({
     saving_min_week: round(f.saving, 1),
     unit: f.unit || "job",
     workflow: f.workflow,
@@ -8371,7 +8453,9 @@ function shareText(w, n = 3) {
   return Object.entries(w.share || {}).slice(0, n).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(", ");
 }
 var isWait = (f) => f.unit === "wait" || !f.unit && !(f.saving_min_week >= 1);
+var isRisk = (f) => f.unit === "risk";
 function savingText(f) {
+  if (isRisk(f)) return "a security and stability risk, not minutes";
   if (isWait(f)) return "saves developer wait, not job minutes";
   const unit = f.unit === "billed" ? "billed" : "job";
   if (!(f.saving_min_week >= 1)) return `under 1 ${unit}-min/week (estimate)`;
@@ -8389,9 +8473,10 @@ function budgetText(a) {
 }
 function summary(a) {
   const L = [];
-  const waitOnly = a.findings.filter(isWait);
-  const jobFindings = a.findings.filter((f) => !isWait(f) && f.unit !== "billed");
-  const billedFindings = a.findings.filter((f) => !isWait(f) && f.unit === "billed");
+  const risks = a.findings.filter(isRisk);
+  const waitOnly = a.findings.filter((f) => !isRisk(f) && isWait(f));
+  const jobFindings = a.findings.filter((f) => !isRisk(f) && !isWait(f) && f.unit !== "billed");
+  const billedFindings = a.findings.filter((f) => !isRisk(f) && !isWait(f) && f.unit === "billed");
   const total = Math.round(a.job_minutes_week_sampled || 0);
   const billed = num(a.billed_minutes_week_sampled) ? Math.round(a.billed_minutes_week_sampled) : null;
   const free = a.visibility === "public";
@@ -8404,6 +8489,7 @@ function summary(a) {
   const top = a.findings[0];
   L.push(`**Start with:** ${top.what} in *${top.workflow}*: ${savingText(top)}.`, "");
   const parts = [];
+  if (risks.length) parts.push(`${plural(risks.length, "finding")} ${risks.length === 1 ? "is a security risk" : "are security risks"} to fix before any saving`);
   if (jobFindings.length) {
     const saved = Math.round(a.saving_min_week_total ?? jobFindings.reduce((s, f) => s + f.saving_min_week, 0));
     const share = total > 0 ? ` (${Math.round(100 * saved / total)}%)` : "";
@@ -8665,7 +8751,7 @@ var METRICS = [
   { key: "wait_p90", label: "Queue p90", time: true },
   { key: "tail_p50", label: "Tail p50", time: true }
 ];
-var REPO_WIDE = /* @__PURE__ */ new Set(["self-hosted wrap-up tail", "toolchain setup", "queue wait", "reruns", "many small scheduled jobs", "short hosted jobs bill a whole minute"]);
+var REPO_WIDE = /* @__PURE__ */ new Set(["self-hosted wrap-up tail", "toolchain setup", "queue wait", "reruns", "many small scheduled jobs", "short hosted jobs bill a whole minute", "self-hosted runners reused across jobs"]);
 var findingKey = (f) => REPO_WIDE.has(f.what) ? f.what : `${f.what}\0${f.workflow}`;
 var isNum = (v) => typeof v === "number" && Number.isFinite(v);
 function show(m, v) {

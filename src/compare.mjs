@@ -19,7 +19,7 @@ export const METRICS = [
 
 // Kinds the audit reports once per repository (grouped across workflows, or repository-wide):
 // their workflow text lists the workflows, which changes between runs, so they match by kind.
-const REPO_WIDE = new Set(['self-hosted wrap-up tail', 'toolchain setup', 'queue wait', 'reruns', 'many small scheduled jobs', 'short hosted jobs bill a whole minute']);
+const REPO_WIDE = new Set(['self-hosted wrap-up tail', 'toolchain setup', 'queue wait', 'reruns', 'many small scheduled jobs', 'short hosted jobs bill a whole minute', 'self-hosted runners reused across jobs']);
 const findingKey = (f) => (REPO_WIDE.has(f.what) ? f.what : `${f.what}\u0000${f.workflow}`);
 
 // A report file is edited by hand and written by other versions, so a measurement may be absent,

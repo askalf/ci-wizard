@@ -81,6 +81,11 @@ runs in the window, or an API error, 2 usage, 3 stopped near the rate limit.
 
 ## Reading the report
 
+- **Risks come first.** For self-hosted runners, two findings are about security and stability,
+  not minutes, and lead the report: a fork's pull request that can run on a self-hosted runner,
+  and runners that take more than one job (persistent, so jobs can see what the one before left).
+  They measure the method [askalf/pitlane](https://github.com/askalf/pitlane) documents.
+
 - **Start with** names the one finding to fix first, and the paragraph under it says what all the
   findings add up to against the job-minutes (and billed minutes) the sampled workflows use.
 - **What to fix first**: each finding says where it is, what it saves (job-minutes, billed
@@ -176,6 +181,9 @@ the same two permissions works through `GITHUB_TOKEN` or `GH_TOKEN`.
   larger runners, Windows and macOS cost more per minute than standard Linux, a plan's included
   minutes are not subtracted, and a public repository's standard runners are free (the report
   says so, and the short-hosted-jobs rule does not fire there).
+- **Fork exposure reads the sampled workflows.** Only the files of the workflows the audit samples
+  are checked for self-hosted jobs a fork can reach; a quiet workflow outside them is not. Runner
+  reuse is judged from the sampled jobs.
 - **Names and files.** A step is classified by its command when the workflow file gives one, by
   its name otherwise; reusable workflows and composite actions are read only as far as their
   calling step.

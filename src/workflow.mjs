@@ -240,3 +240,48 @@ export function workflowFacts(doc) {
     checkout,
   };
 }
+
+/** Whether a runs-on value can pick a self-hosted runner: a label list, a string or an expression naming self-hosted. */
+export function runsOnSelfHosted(runsOn) {
+  if (runsOn === undefined || runsOn === null) return false;
+  if (Array.isArray(runsOn)) return runsOn.some((l) => /self-hosted/i.test(String(l)));
+  if (typeof runsOn === 'object') return Array.isArray(runsOn.labels) ? runsOn.labels.some((l) => /self-hosted/i.test(String(l))) : /self-hosted/i.test(String(runsOn.labels || ''));
+  return /self-hosted/i.test(String(runsOn));
+}
+
+/** The self-hosted labels a runs-on value names, for the example that keeps them for the repository's own pull requests. */
+export function selfHostedLabels(runsOn) {
+  const list = Array.isArray(runsOn) ? runsOn : runsOn && typeof runsOn === 'object' ? [].concat(runsOn.labels || []) : [runsOn];
+  const labels = list.map(String).filter((l) => l && !l.includes('${{'));
+  return labels.length ? labels : ['self-hosted'];
+}
+
+// A fork guard tells a fork's pull request apart from the repository's own: it reads the head
+// repository (head.repo.full_name, head.repo.fork). A guard on github.repository is not one: a
+// fork's pull_request run happens in the base repository, so github.repository is the base.
+const FORK_GUARD = /head\.repo\b|head_repository|\.fork\b/;
+
+/**
+ * The jobs a fork's pull request can send to a self-hosted runner: on pull_request, any job whose
+ * runs-on can name self-hosted with no fork guard in runs-on or the job's if; on
+ * pull_request_target, such a job only when a step checks out the pull request's head, since the
+ * target event otherwise runs the base repository's code.
+ * @returns {{ job: string, labels: string[], event: string }[]}
+ */
+export function forkReachableSelfHosted(doc) {
+  const triggers = triggersOf(doc);
+  const onPr = triggers.includes('pull_request');
+  const onTarget = triggers.includes('pull_request_target');
+  if (!onPr && !onTarget) return [];
+  const out = [];
+  for (const [id, job] of Object.entries(doc.jobs || {})) {
+    if (!job || typeof job !== 'object' || !runsOnSelfHosted(job['runs-on'])) continue;
+    const runsOnText = typeof job['runs-on'] === 'string' ? job['runs-on'] : JSON.stringify(job['runs-on']);
+    if (FORK_GUARD.test(runsOnText) || FORK_GUARD.test(String(job.if || ''))) continue;
+    const checksOutHead = stepsOfJob(job).some((st) => st && typeof st === 'object' && /^actions\/checkout@/.test(String(st.uses || ''))
+      && /pull_request\.head|head_ref|head\.sha/.test(JSON.stringify(st.with || {})));
+    if (onPr) out.push({ job: id, labels: selfHostedLabels(job['runs-on']), event: 'pull_request' });
+    else if (checksOutHead) out.push({ job: id, labels: selfHostedLabels(job['runs-on']), event: 'pull_request_target' });
+  }
+  return out;
+}
