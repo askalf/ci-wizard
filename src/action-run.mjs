@@ -42,7 +42,8 @@ export async function run({ env = process.env, stdout = process.stdout, fetchImp
   const mdPath = join(dir, 'report.md');
   let a;
   try {
-    a = await audit({ repo, token, fetchImpl, days, workflows: Math.floor(workflows), perWorkflow: Math.floor(perWorkflow), now });
+    const only = input(env, 'only', '').split(',').map((v) => v.trim()).filter(Boolean);
+    a = await audit({ repo, token, fetchImpl, days, workflows: Math.floor(workflows), perWorkflow: Math.floor(perWorkflow), only, now });
   } catch (err) {
     if (err instanceof RateLimitError) {
       command(stdout, 'warning', `ci-wizard: ${err.message}; no report this run`);

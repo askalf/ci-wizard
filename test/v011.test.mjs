@@ -127,7 +127,7 @@ test('compare: per workflow, before, after and the change of each measurement', 
 
 test('compare: findings that disappeared and findings that appeared', () => {
   const md = compare(before, after);
-  assert.match(md, /- Gone: \*\*cache dependencies\*\* in \*CI\* \(was about 40 job-min\/week, estimate\)/);
+  assert.match(md, /- Gone: \*\*cache dependencies\*\* in \*CI\* \(was about 40 job-min\/week \(estimate\)\)/);
   assert.match(md, /- New: \*\*queue wait\*\* in \*CI\*: p90 wait for a runner 45 s\./);
   const c = compareData(before, after);
   assert.deepEqual([c.gone.length, c.appeared.length, c.both.length], [1, 1, 1]);

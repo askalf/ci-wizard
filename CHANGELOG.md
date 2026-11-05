@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+Expert guidance:
+
+- Every finding now carries its trade-off in the report, as docs/rules.md always described, and,
+  where the fix is a change to the workflow file, the YAML for it: the setup action's cache input
+  for the package manager the workflow installs with (npm, pnpm, yarn, pip, poetry, pipenv, uv,
+  go, bundler) or an actions/cache step keyed on the lockfile (cargo, bun, npm with no lockfile),
+  the concurrency block, the push trigger, or the checkout inputs.
+- slow checkout reads the checkout step: `fetch-depth: 0`, a `fetch-depth` above 1, `lfs`,
+  `submodules` or `fetch-tags` are named as the cause (confirmed); a default checkout, which
+  already fetches one commit, is no longer told to set `fetch-depth: 1`, and gets sparse-checkout
+  instead (inferred); with no checkout step to read, or a depth set by an expression, the cause is
+  reported as unknown.
+- The same-commit-twice rule reads the repository's default branch (one more API call): the push
+  trigger example names it, and when it cannot be read says to fill it in, instead of assuming
+  `main`, which would switch off push CI on a repository whose default branch is develop.
+- `compare` reports a finding that is gone in its own unit (job-minutes, billed minutes or
+  developer wait), not always as job-minutes.
+- The outdated-runs fix no longer suggests an inline `{ group: ${{ ... }} }` concurrency mapping,
+  which is not valid YAML; the example is a block.
+
+Measurement:
+
+- Runs are grouped by workflow id, not by run name. A pull request that adds a workflow gives its
+  runs the pull request's title, which split one workflow into two rows (this repository's Fuzz
+  appeared twice, once as "[hold] Fuzz the workflow, …"). Each workflow is labelled with the name
+  most of its runs carry; two workflows sharing a name get their path appended.
+- A finding that saves under 1 minute a week is left out. Queue wait and matrix size carry a
+  `wait` unit and stay, reported as developer wait; before, any saving that rounded below 1 was
+  mislabelled as developer wait.
+- **Billed minutes**: GitHub bills each hosted job rounded up to a whole minute. Each workflow
+  gets `billed_minutes_week` (self-hosted jobs count 0), the table a Billed min/week column, and
+  `compare` a billed row and total.
+- New rule **short hosted jobs bill a whole minute**: hosted workflows whose billed minutes are at
+  least twice their job-minutes, by 30 minutes a week or more. Its saving is in billed minutes,
+  and the report says so.
+- Developer wait is shown only for workflows somebody waits on (mostly push, pull request or merge
+  group runs); a scheduled or chained workflow shows none (`waited_on` in the JSON).
+- The queue-wait evidence says how many sampled jobs its p90 is over.
+
+Ease of use and understanding:
+
+- The report opens with **Start with** (the first finding and its saving), then what the findings
+  add up to. A finding that saves developer wait is no longer summed as "0 job-minutes".
+- Each finding is its own section: where, saves, confidence, why, fix, trade-off, YAML.
+- A legend explains the table: job-minutes against billed minutes, developer wait, queue, and each
+  share (work, deps, overhead, head, tail and the rest).
+- Step names drop their action ref (`Run actions/checkout@3d3c42e…` reads `Run actions/checkout`),
+  and steps under a second are left out of the longest steps.
+- `--only NAME` (CLI, repeatable or comma-separated) and the action's `only` input time just the
+  named workflows, for measuring one workflow before and after a change. Names match what GitHub
+  shows, so two workflows that share a name are both selected; a name with no runs is reported.
+- The HTML page carries the same: billed minutes, trade-offs, examples, the legend, and a
+  developer-wait tile taken from a workflow somebody waits on.
+
 - Fuzzing: three Jazzer.js targets run weekly and on every pull request that touches them
   (`.github/workflows/fuzz.yml`), over workflow files, API run history and saved report files, with
   a persistent corpus. Jazzer is installed from `.clusterfuzzlite/`, so the package keeps no

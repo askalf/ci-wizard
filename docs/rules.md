@@ -24,8 +24,31 @@ expression (`Test on ${{ matrix.node }}`) is matched to its command after GitHub
 measured time, never the result of running the fix; the formulas are below. Thresholds live in
 `THRESHOLDS` in `src/analyse.mjs`.
 
-**Grouping.** The wrap-up tail, toolchain and queue-wait rules fire per workflow and are reported
-once, listing the workflows, with the savings summed and the largest one's evidence shown.
+**Grouping.** The wrap-up tail, toolchain, queue-wait and short-hosted-jobs rules fire per
+workflow and are reported once, listing the workflows, with the savings summed and the largest
+one's evidence shown.
+
+**Trade-offs and examples.** Every finding carries the trade-off written below with its rule, and
+where a fix is a change to the workflow file, YAML for it: the setup action's cache input for the
+package manager the workflow installs with (from its run lines, or the lockfile the repository
+commits), the concurrency block, the push trigger, or the checkout step's inputs. Action versions
+are left out of the examples: pin the version, or full SHA, the workflow already uses.
+
+**Billed minutes.** GitHub bills a hosted job by the minute, each job rounded up on its own. Billed
+minutes are that rounded figure for GitHub-hosted jobs (a job whose runner group is "GitHub
+Actions"); self-hosted jobs count 0. They sit beside job-minutes in the table, in `compare`, and
+in the short-hosted-jobs rule.
+
+**Noise floor.** A finding whose estimated saving is under 1 minute a week is left out. Queue
+wait and matrix size save developer wait, not minutes, and always stay; the report says so.
+
+**Workflows.** Runs are grouped by workflow (its id, then its file), not by the run's name: runs a
+pull request makes for a workflow it adds can carry the pull request's title. A workflow is
+labelled with the name most of its runs carry.
+
+**Developer wait.** A run's wall time is developer wait only for a workflow somebody waits on: one
+that runs mostly on `push`, `pull_request`, `pull_request_target` or `merge_group`. For a workflow
+that runs on a clock, a dispatch or another workflow, the report shows no wait.
 
 ## cache dependencies
 
@@ -57,11 +80,18 @@ once, listing the workflows, with the savings summed and the largest one's evide
 ## slow checkout
 
 - **Fires when** checkout takes 12 s or more per job.
-- **Confidence** measured.
+- **Confidence** confirmed when the checkout step asks for more than one commit (`fetch-depth: 0`,
+  a `fetch-depth` above 1, `lfs: true`, `submodules`, `fetch-tags: true`; the evidence names
+  which). Inferred otherwise: `actions/checkout` fetches a single commit by default, so with none
+  of those the time is the repository's size, and the report does not tell such a workflow to set
+  `fetch-depth: 1`. When the file has no `actions/checkout` step to read (it is unavailable, or the
+  job checks out another way) or sets the depth by an expression, the report says the cause is not
+  known rather than guessing.
 - **Estimate** 50% of checkout time, times runs a week.
-- **Fix** `fetch-depth: 1` unless the job needs history; sparse checkout for large monorepos; no
-  tags or LFS by default. *Trade-off:* jobs that compute versions from tags or diff against a
-  base need the history they use.
+- **Fix** fetch only what the job uses: one commit (or the few it reads), and LFS objects,
+  submodules and tags only in the jobs that need them; for a default checkout, sparse-checkout the
+  paths the job reads. *Trade-off:* jobs that compute versions from tags or diff against a base
+  need the history they use; a sparse checkout breaks a job that reads a path outside its list.
 
 ## toolchain setup
 
@@ -81,6 +111,9 @@ once, listing the workflows, with the savings summed and the largest one's evide
   number is named too: it puts the push run (keyed by commit) and the pull request run in
   different groups, so neither cancels the other.
 - **Estimate** the duplicate commits a week, times job-minutes per run.
+- **Branches** "beyond the default branch" uses the repository's default branch as the API reports
+  it, or main and master when it cannot be read. The push-trigger example names that branch, and
+  when it is unknown says to fill it in, rather than guessing `main`.
 - **Fix** drop the extra patterns from the push trigger when every such branch gets a pull
   request, or key the concurrency group on the commit for both events, so the second run cancels
   the first. *Trade-off:* a branch pushed without a pull request then runs no CI until one is
@@ -152,6 +185,18 @@ once, listing the workflows, with the savings summed and the largest one's evide
 - **Estimate** their fixed cost, times (n - 1) / n: one job would pay it once per tick.
 - **Fix** run them as steps of one scheduled job. *Trade-off:* one failing check then shares a
   job, and a red status, with the others.
+
+## short hosted jobs bill a whole minute
+
+- **Fires when** most of the workflow's jobs ran on GitHub-hosted runners, its billed minutes are
+  at least twice its job-minutes, and the difference is 30 minutes a week or more. GitHub bills
+  each hosted job rounded up to a whole minute, so a job of 8 s bills as 60 s.
+- **Confidence** measured. Grouped across workflows like the wrap-up tail.
+- **Estimate** half of the billed minutes above the job-minutes, in **billed** minutes (the report
+  says so), not job-minutes.
+- **Fix** fewer, longer jobs: merge the short jobs of a run into one, run the workflow less often,
+  or move it to a self-hosted runner. *Trade-off:* a merged job reports one status where there
+  were several; a self-hosted runner is yours to run, patch and secure.
 
 ## reruns
 

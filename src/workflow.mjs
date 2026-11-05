@@ -157,6 +157,27 @@ function majorOf(uses) {
   return m ? Number(m[1]) : null;
 }
 
+/** The package managers a workflow installs with, from its run lines and setup actions, in a fixed order. */
+export function installersOf(runs, steps = []) {
+  const uses = steps.map((st) => String(st.uses || '')).join('\n');
+  const found = [];
+  const add = (name, hit) => {
+    if (hit && !found.includes(name)) found.push(name);
+  };
+  add('pnpm', /\bpnpm (install|i)\b/.test(runs) || /pnpm\/action-setup@/.test(uses));
+  add('yarn', /\byarn(\s+install\b|\s*$|\s+--)/m.test(runs));
+  add('npm', /\bnpm (ci|install|i)\b/.test(runs));
+  add('bun', /\bbun install\b/.test(runs));
+  add('uv', /\buv (sync|pip)\b/.test(runs) || /astral-sh\/setup-uv@/.test(uses));
+  add('poetry', /\bpoetry install\b/.test(runs));
+  add('pipenv', /\bpipenv (install|sync)\b/.test(runs));
+  add('pip', /\bpip3? install\b/.test(runs));
+  add('go', /\bgo (mod download|build|test)\b/.test(runs) || /actions\/setup-go@/.test(uses));
+  add('bundler', /\bbundle install\b/.test(runs) || /ruby\/setup-ruby@/.test(uses));
+  add('cargo', /\bcargo (fetch|build|test)\b/.test(runs));
+  return found;
+}
+
 /**
  * Cache, concurrency and install facts from the parsed file, so a commented-out line or a value
  * that switches a feature off never counts. A dependency cache is an actions/cache step, a setup
@@ -168,9 +189,29 @@ export function workflowFacts(doc) {
   let hasCache = false;
   let setupCache = false;
   let cachesNodeModules = false;
+  // What makes a checkout slow, as the file says: the whole history, LFS objects, submodules or
+  // every tag. actions/checkout fetches one commit with none of those by default.
+  // `inspected` says a checkout step was found to read; `depth` is the largest fetch-depth above 1
+  // it sets (null when every step fetches one commit), and `depthUnknown` a depth set by an
+  // expression, which cannot be read from the file.
+  const checkout = { inspected: false, fullHistory: false, depth: null, depthUnknown: false, lfs: false, submodules: false, tags: false };
   for (const st of steps) {
     const uses = String(st.uses || '');
     const inputs = st.with && typeof st.with === 'object' ? st.with : {};
+    if (/^actions\/checkout@/.test(uses)) {
+      checkout.inspected = true;
+      const rawDepth = inputs['fetch-depth'];
+      if (rawDepth !== undefined && rawDepth !== null && String(rawDepth).trim() !== '') {
+        const d = Number(String(rawDepth).trim());
+        if (d === 0) checkout.fullHistory = true;
+        else if (Number.isInteger(d) && d > 1) checkout.depth = Math.max(checkout.depth ?? 0, d);
+        else if (!Number.isInteger(d)) checkout.depthUnknown = true;
+      }
+      if (isOn(inputs.lfs)) checkout.lfs = true;
+      const sub = String(inputs.submodules ?? '').trim();
+      if (sub === 'recursive' || isOn(inputs.submodules)) checkout.submodules = true;
+      if (isOn(inputs['fetch-tags'])) checkout.tags = true;
+    }
     if (/^actions\/cache(\/restore)?@/.test(uses)) {
       hasCache = true;
       if (/node_modules/.test(String(inputs.path || ''))) cachesNodeModules = true;
@@ -194,6 +235,8 @@ export function workflowFacts(doc) {
     hasConcurrency: concurrencies.length > 0,
     cancels,
     npmInstallNoCi: /\bnpm (install|i)\b/.test(runs) && !/\bnpm ci\b/.test(runs),
+    installers: installersOf(runs, steps),
     preferOffline: runs.includes('--prefer-offline'),
+    checkout,
   };
 }

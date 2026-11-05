@@ -19,10 +19,13 @@ test('report: findings first, every saving called an estimate, and how it was me
   const md = report(sample());
   assert.match(md, /^# CI audit: owner\/repo/);
   assert.ok(md.indexOf('## What to fix first') < md.indexOf('## Where the time goes'));
-  assert.match(md, /\*\*cache dependencies\*\* in \*CI <main>\* \(confirmed by the workflow file\)/);
+  assert.match(md, /### 1\. cache dependencies\n\n\*\*Where:\*\* CI <main>/);
+  assert.match(md, /\*\*Confidence\*\* confirmed by the workflow file/);
   assert.match(md, /about \d+ job-min\/week \(estimate\)/);
   assert.match(md, /## How it was measured/);
-  for (const line of md.split('\n').filter((l) => /job-min\/week/.test(l) && /^\d+\./.test(l))) assert.match(line, /\(estimate\)|developer wait/);
+  const saves = md.split('\n').filter((l) => l.startsWith('**Saves**'));
+  assert.ok(saves.length >= 1);
+  for (const line of saves) assert.match(line, /\(estimate\)|developer wait/);
 });
 
 test('report: a pipe in a workflow name cannot break the table', () => {

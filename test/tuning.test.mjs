@@ -100,10 +100,11 @@ test('report: a summary of the estimated total against the measured total, and t
   const file = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Install\n        run: npm ci\n';
   const a = analyse('o/r', data({ workflows: [{ name: 'CI', runs: runs(20), jobsPerRun: [[job({ steps })]], file }] }));
   const md = report(a);
-  assert.match(md, /\*\*1 finding\*\*, together about \d+ of the \d+ job-minutes a week/);
+  assert.match(md, /\*\*Start with:\*\* cache dependencies in \*CI\*: about \d+ job-min\/week \(estimate\)/);
+  assert.match(md, /about \*\*\d+ job-minutes a week\*\*.*1 finding would save about \d+ of them \(\d+%\)/);
   assert.match(md, /upper bound/);
   assert.match(md, /## Next step: prove the fix/);
-  assert.ok(md.indexOf('**1 finding**') < md.indexOf('## What to fix first'));
+  assert.ok(md.indexOf('**Start with:**') < md.indexOf('## What to fix first'));
 });
 
 test('parseRepo: owner/repo, URLs and remotes', () => {

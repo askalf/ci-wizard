@@ -55,7 +55,8 @@ jobs:
 Pin it to the release commit's full SHA in your workflows. The report lands in the job summary
 and in `$RUNNER_TEMP/ci-wizard/report.md` (with `report.json` beside it). Inputs: `repository`
 (default: the one the workflow runs in), `token` (default: the job's token), `days` (7),
-`workflows` (8), `per-workflow` (5). Outputs: `report-path`, `findings`. The audit never fails
+`workflows` (8), `per-workflow` (5), `only` (workflow names, comma-separated, to time those
+instead of the busiest). Outputs: `report-path`, `findings`. The audit never fails
 the job for what it finds; it fails only when it cannot read the repository.
 
 ### From the command line
@@ -65,6 +66,7 @@ npx github:askalf/ci-wizard#v0.1.2 owner/repo
 npx github:askalf/ci-wizard#v0.1.2 https://github.com/owner/repo --save before.json
 npx github:askalf/ci-wizard#v0.1.2 owner/repo --days 14 --json > before.json
 npx github:askalf/ci-wizard#v0.1.2 owner/repo --html audit.html
+npx github:askalf/ci-wizard#v0.1.2 owner/repo --only CI --save before.json
 npx github:askalf/ci-wizard#v0.1.2 compare before.json after.json
 npx github:askalf/ci-wizard#v0.1.2 --version
 ```
@@ -72,9 +74,26 @@ npx github:askalf/ci-wizard#v0.1.2 --version
 The token comes from `GITHUB_TOKEN` or `GH_TOKEN`, or from `gh auth token` when the GitHub CLI is
 signed in. The repository is `owner/repo`, a GitHub URL or an SSH remote; left out, it is the
 origin of the git checkout you run in. Options: `--days`, `--workflows`, `--per-workflow`,
-`--json`, `--save <file>` (the JSON report beside the markdown, as a baseline for `compare`),
-`--html <file>`, `--version`. Exit codes: 0 report written, 1 the repository was not found or not readable, no
+`--only <name>` (time only the workflows named, by the name GitHub shows, so two workflows that
+share a name are both selected; repeat it or separate names with commas), `--json`, `--save <file>` (the JSON report beside the markdown, as a baseline
+for `compare`), `--html <file>`, `--version`. `ci-wizard --help` lists them all. Exit codes: 0 report written, 1 the repository was not found or not readable, no
 runs in the window, or an API error, 2 usage, 3 stopped near the rate limit.
+
+## Reading the report
+
+- **Start with** names the one finding to fix first, and the paragraph under it says what all the
+  findings add up to against the job-minutes (and billed minutes) the sampled workflows use.
+- **What to fix first**: each finding says where it is, what it saves (job-minutes, billed
+  minutes, or developer wait), how sure it is (*confirmed* by the workflow file, *measured*, or
+  *cause inferred*), why (the evidence), the fix, the fix's trade-off, and, where the fix is a
+  change to the workflow file, the YAML for it, written for the package manager and steps that
+  workflow already has.
+- **Where the time goes**: per workflow, runs a week, job-minutes, billed minutes (GitHub rounds
+  each hosted job up to a whole minute, so a run of short jobs bills far more than it runs),
+  developer wait (only for workflows somebody waits on), queue wait, and the biggest shares of job
+  time. The legend under the table explains each share; † marks a workflow timed from fewer than
+  3 runs, ‡ one nobody waits on.
+- **Next step: prove the fix**: save this report, make one change, measure again, and `compare`.
 
 ## The method
 
@@ -95,8 +114,8 @@ runs in the window, or an API error, 2 usage, 3 stopped near the rate limit.
 ## What it reads and what it needs
 
 - Up to 500 workflow runs from the window, the jobs and steps of the newest successful runs of
-  the busiest workflows, those workflows' files, and the repository's root listing (to see which
-  lockfile it commits). About 50 API calls for the defaults on a busy repository.
+  the busiest workflows, those workflows' files, the repository's root listing (to see which
+  lockfile it commits) and its default branch (for advice that names it). About 50 API calls for the defaults on a busy repository.
 - A token with **actions: read** and **contents: read**. The job's own `GITHUB_TOKEN` is enough
   for the repository a workflow runs in; a fine-grained token with those two permissions works
   from the command line. A repository the token cannot see reads as not found.
@@ -114,8 +133,11 @@ runs in the window, or an API error, 2 usage, 3 stopped near the rate limit.
   [docs/rules.md](docs/rules.md)), not from running the fix. `compare` on a run after the change
   is what proves one.
 - **GitHub-hosted and self-hosted differ.** The wrap-up tail and queue-wait rules mean different
-  things on each; the report says which runners a workflow used. Self-hosted runners far from
-  GitHub's service region pay more per uploaded log.
+  things on each, and only hosted jobs have billed minutes, so a workflow on self-hosted runners
+  shows 0 there. Self-hosted runners far from GitHub's service region pay more per uploaded log.
+- **Billed minutes are minutes, not money.** They round each hosted job up as GitHub does, but
+  larger runners, Windows and macOS cost more per minute than standard Linux, and a plan's
+  included minutes are not subtracted.
 - **Names and files.** A step is classified by its command when the workflow file gives one, by
   its name otherwise; reusable workflows and composite actions are read only as far as their
   calling step.

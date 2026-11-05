@@ -162,10 +162,11 @@ test('matrix size: many jobs and many job-minutes per run is an option, not a fa
 });
 
 test('self-hosted wrap-up tail: only on self-hosted runners, and only over 4 s', () => {
-  const self = audit([{ name: 'CI', runs: runs(10), jobsPerRun: [[job({ selfHosted: true, tail: 6 })]] }]);
+  // 100 runs a week: at 10 the 4 s excess saves under a minute a week, which the report leaves out.
+  const self = audit([{ name: 'CI', runs: runs(100), jobsPerRun: [[job({ selfHosted: true, tail: 6 })]] }]);
   assert.equal(find(self, 'self-hosted wrap-up tail').length, 1);
-  assert.equal(find(audit([{ name: 'CI', runs: runs(10), jobsPerRun: [[job({ selfHosted: false, tail: 6 })]] }]), 'self-hosted wrap-up tail').length, 0);
-  assert.equal(find(audit([{ name: 'CI', runs: runs(10), jobsPerRun: [[job({ selfHosted: true, tail: 3 })]] }]), 'self-hosted wrap-up tail').length, 0);
+  assert.equal(find(audit([{ name: 'CI', runs: runs(100), jobsPerRun: [[job({ selfHosted: false, tail: 6 })]] }]), 'self-hosted wrap-up tail').length, 0);
+  assert.equal(find(audit([{ name: 'CI', runs: runs(100), jobsPerRun: [[job({ selfHosted: true, tail: 3 })]] }]), 'self-hosted wrap-up tail').length, 0);
 });
 
 test('queue wait: a p90 over 30 s', () => {

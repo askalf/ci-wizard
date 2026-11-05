@@ -1,6 +1,7 @@
-// The markdown report: where the time goes, what to fix first, and how every number was measured.
-// Wording rules: a saving is always called an estimate, every finding carries its evidence and
-// its confidence, and a fix is written as an option with its trade-off.
+// The markdown report: what to start with, what to fix and why, where the time goes, and how
+// every number was measured. Wording rules: a saving is always called an estimate, every finding
+// carries its evidence and its confidence, and a fix is written as an option with its trade-off.
+// Reports saved by older versions lack some fields; every one of them renders without them.
 import { fmtS } from './util.mjs';
 
 const CONF = { confirmed: 'confirmed by the workflow file', inferred: 'cause inferred', measured: 'measured' };
@@ -9,56 +10,125 @@ const CONF = { confirmed: 'confirmed by the workflow file', inferred: 'cause inf
 // backslash followed by a column break.
 export const cell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
+const num = (v) => typeof v === 'number' && Number.isFinite(v);
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
 export function shareText(w, n = 3) {
-  return Object.entries(w.share).slice(0, n).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(', ');
+  return Object.entries(w.share || {}).slice(0, n).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(', ');
 }
 
+/** A wait finding saves developer wait; a report from before units existed marks one by a zero saving. */
+const isWait = (f) => f.unit === 'wait' || (!f.unit && !(f.saving_min_week >= 1));
+
 export function savingText(f) {
-  return f.saving_min_week >= 1 ? `about ${Math.round(f.saving_min_week)} job-min/week (estimate)` : 'saving: developer wait, not job minutes';
+  if (isWait(f)) return 'saves developer wait, not job minutes';
+  const unit = f.unit === 'billed' ? 'billed' : 'job';
+  if (!(f.saving_min_week >= 1)) return `under 1 ${unit}-min/week (estimate)`;
+  return `about ${Math.round(f.saving_min_week)} ${unit}-min/week (estimate)`;
+}
+
+/**
+ * A step name as a person reads it: `Run owner/action@<sha or tag>` loses its ref, which says
+ * nothing about where the time went and is often a 40-character SHA.
+ */
+export function stepLabel(name) {
+  return String(name).replace(/^(Run |Post Run )?([\w.-]+\/[\w./-]+)@\S+/, (_, run = '', action) => `${run}${action}`);
+}
+
+/** The opening paragraph: what to start with, and what the findings add up to against what was measured. */
+export function summary(a) {
+  const L = [];
+  const waitOnly = a.findings.filter(isWait);
+  const jobFindings = a.findings.filter((f) => !isWait(f) && f.unit !== 'billed');
+  const billedFindings = a.findings.filter((f) => !isWait(f) && f.unit === 'billed');
+  const total = Math.round(a.job_minutes_week_sampled || 0);
+  const billed = num(a.billed_minutes_week_sampled) ? Math.round(a.billed_minutes_week_sampled) : null;
+  const usage = `The sampled workflows use about **${total} job-minutes a week**${billed !== null && billed > 0 ? ` (${billed} billed minutes on GitHub-hosted runners, each job rounded up to a whole minute)` : ''}.`;
+  if (!a.findings.length) {
+    L.push(`${usage} Nothing crossed the thresholds in this sample: no fix is suggested.`);
+    return L;
+  }
+  const top = a.findings[0];
+  L.push(`**Start with:** ${top.what} in *${top.workflow}*: ${savingText(top)}.`, '');
+  const parts = [];
+  if (jobFindings.length) {
+    const saved = Math.round(a.saving_min_week_total ?? jobFindings.reduce((s, f) => s + f.saving_min_week, 0));
+    const share = total > 0 ? ` (${Math.round((100 * saved) / total)}%)` : '';
+    parts.push(`${plural(jobFindings.length, 'finding')} would save about ${saved} of them${share}`);
+  }
+  if (billedFindings.length) {
+    const saved = Math.round(billedFindings.reduce((s, f) => s + f.saving_min_week, 0));
+    parts.push(`${plural(billedFindings.length, 'finding')} would save about ${saved} billed minutes a week`);
+  }
+  if (waitOnly.length) parts.push(`${plural(waitOnly.length, 'finding')} would save developer wait rather than minutes`);
+  L.push(`${usage} ${parts.join('; ')}. Savings are estimates, and fixes can overlap, so they add up to an upper bound.`);
+  return L;
 }
 
 export function report(a, { maxFindings = 8 } = {}) {
   const L = [];
   L.push(`# CI audit: ${a.repo}`, '');
-  L.push(`Read-only, from GitHub's Actions API: ${a.runs_total} workflow runs over ${a.covered_days} days, the busiest workflows sampled job by job. Weekly figures scale the sampled window to 7 days. Savings are estimates, labelled with the evidence they come from.`, '');
+  L.push(...summary(a), '');
+  L.push(`Read-only, from GitHub's Actions API: ${a.runs_total} workflow runs over ${a.covered_days} days, and ${a.only && a.only.length ? `the ${plural(a.workflows.length, 'named workflow')}` : `the ${plural(a.workflows.length, 'busiest workflow')}`} timed job by job. Weekly figures scale that window to 7 days.`, '');
+  if (a.only && a.only.length) L.push(`Only the workflows named with \`--only\` were timed: ${a.only.join(', ')}. Repository-wide findings look at those alone.`, '');
+  if (a.only_missing && a.only_missing.length) L.push(`No runs in the window for ${a.only_missing.join(', ')}: check the workflow's name as GitHub shows it (its \`name:\` line), not its file name.`, '');
   if (a.window_truncated) L.push(`The ${a.runs_total}-run cap was reached, so the window covers ${a.covered_days} days rather than the days asked for; weekly figures are scaled from that shorter window and are noisier.`, '');
-  if (a.findings.length && a.job_minutes_week_sampled > 0) {
-    const total = a.saving_min_week_total ?? a.findings.reduce((s, f) => s + f.saving_min_week, 0);
-    const share = Math.round((100 * total) / a.job_minutes_week_sampled);
-    L.push(`**${a.findings.length} finding${a.findings.length === 1 ? '' : 's'}**, together about ${Math.round(total)} of the ${Math.round(a.job_minutes_week_sampled)} job-minutes a week the sampled workflows use (${share}%, estimate; fixes can overlap, so the sum is an upper bound).`, '');
+
+  if (a.findings.length) {
+    L.push('## What to fix first', '');
+    a.findings.slice(0, maxFindings).forEach((f, i) => {
+      L.push(`### ${i + 1}. ${f.what}`, '');
+      L.push(`**Where:** ${f.workflow}  `);
+      L.push(`**Saves** ${savingText(f)} · **Confidence** ${CONF[f.confidence] || f.confidence}  `);
+      L.push(`**Why:** ${f.evidence}.  `);
+      L.push(`**Fix:** ${f.fix}.${f.tradeoff ? '  ' : ''}`);
+      if (f.tradeoff) L.push(`**Trade-off:** ${f.tradeoff}.`);
+      if (f.example) L.push('', '```yaml', f.example, '```');
+      L.push('');
+    });
+    if (a.findings.length > maxFindings) L.push(`${plural(a.findings.length - maxFindings, 'smaller finding')} not shown; the JSON report (\`--json\`) lists all of them.`, '');
   }
-  L.push('## What to fix first', '');
-  if (!a.findings.length) L.push('Nothing crossed the thresholds in this sample.');
-  a.findings.slice(0, maxFindings).forEach((f, i) => {
-    L.push(`${i + 1}. **${f.what}** in *${f.workflow}* (${CONF[f.confidence] || f.confidence}): ${f.evidence}. ${savingText(f)}.  `);
-    L.push(`   Fix: ${f.fix}.`);
-  });
-  L.push('', '## Where the time goes', '');
-  L.push('| Workflow | Runs/week | Jobs/run | Job-min/run | Job-min/week | Developer wait p50 / p90 | Queue p50 / p90 | Biggest shares |');
+
+  L.push('## Where the time goes', '');
+  L.push('| Workflow | Runs/week | Job-min/run | Job-min/week | Billed min/week | Developer wait p50 / p90 | Queue p50 / p90 | Biggest shares |');
   L.push('| --- | --- | --- | --- | --- | --- | --- | --- |');
   for (const w of a.workflows) {
-    L.push(`| ${cell(w.workflow)}${w.thin_sample ? ' †' : ''} | ${Math.round(w.runs_week)} | ${w.jobs_per_run.toFixed(1)} | ${w.job_minutes_per_run.toFixed(1)} | ${Math.round(w.job_minutes_week)} | ${fmtS(w.wall_p50)} / ${fmtS(w.wall_p90)} | ${Math.round(w.wait_p50)} s / ${Math.round(w.wait_p90)} s | ${shareText(w)} |`);
+    const marks = `${w.thin_sample ? ' †' : ''}${w.waited_on === false ? ' ‡' : ''}`;
+    const wait = w.waited_on === false ? '-' : `${fmtS(w.wall_p50)} / ${fmtS(w.wall_p90)}`;
+    const billed = num(w.billed_minutes_week) ? String(Math.round(w.billed_minutes_week)) : '-';
+    L.push(`| ${cell(w.workflow)}${marks} | ${Math.round(w.runs_week)} | ${w.job_minutes_per_run.toFixed(1)} | ${Math.round(w.job_minutes_week)} | ${billed} | ${wait} | ${Math.round(w.wait_p50)} s / ${Math.round(w.wait_p90)} s | ${shareText(w)} |`);
   }
-  L.push('', `Sampled workflows total about **${Math.round(a.job_minutes_week_sampled)} job-minutes a week**. Developer wait is a successful run's wall time, start to finish.`);
-  const thin = a.workflows.filter((w) => w.thin_sample);
-  if (thin.length) L.push(`† Timed from fewer than 3 successful runs in the window, so its per-run figures can be an outlier; a longer \`--days\` window samples more.`);
   L.push('');
-  L.push('### The longest steps', '');
+  L.push('- **Job-minutes** are the time jobs ran. **Billed minutes** are what GitHub charges for its hosted runners: each job rounded up to a whole minute (self-hosted jobs count 0).');
+  L.push("- **Developer wait** is a successful run's wall time, start to finish. **Queue** is how long a job waited for a runner.");
+  L.push('- **Biggest shares** of job time: *work* is the job\'s own steps (tests, builds, scripts); *deps* dependency installs; *toolchain* runtime setup; *checkout*; *cache* restore and save; *artifacts* uploads and downloads; *overhead* the runner\'s "Set up job" and "Complete job"; *head* the wait before the first step starts; *tail* the time after the last step until the job reports done (log uploads).');
+  if (a.workflows.some((w) => w.thin_sample)) L.push('- † Timed from fewer than 3 successful runs in the window, so its per-run figures can be an outlier; a longer `--days` window samples more.');
+  if (a.workflows.some((w) => w.waited_on === false)) L.push('- ‡ Runs mostly from a schedule, a dispatch or another workflow: nobody waits on it, so its wall time is not developer wait.');
+  L.push('');
+
+  const stepLines = [];
   for (const w of a.workflows.slice(0, 4)) {
-    if (!w.top_steps.length) continue;
-    const steps = w.top_steps.map((t) => `${t.step} ${fmtS(t.median_s)}`).join('; ');
-    const facts = [w.has_cache ? 'caches dependencies' : 'no dependency cache found in the workflow file', w.cancels ? 'cancels outdated runs' : 'no cancel-in-progress'];
-    L.push(`- *${w.workflow}* (\`${w.path}\`): ${steps}. Workflow file: ${facts.join(', ')}.`);
+    const steps = (w.top_steps || []).filter((t) => t.median_s >= 1).map((t) => `${stepLabel(t.step)} ${fmtS(t.median_s)}`);
+    if (!steps.length) continue;
+    const facts = [w.has_cache ? 'caches dependencies' : 'no dependency cache', w.cancels ? 'cancels outdated runs' : 'no cancel-in-progress'];
+    stepLines.push(`- *${w.workflow}* (\`${w.path}\`): ${steps.join('; ')}. The workflow file: ${facts.join(', ')}.`);
   }
+  if (stepLines.length) L.push('### The longest steps (median)', '', ...stepLines, '');
+
   if (a.findings.length) {
-    L.push('', '## Next step: prove the fix', '');
-    L.push('Keep this report as a baseline (`ci-wizard owner/repo --save before.json`, or the action\'s `report.json`). Make one change, let it run for a few days, measure again with `--save after.json`, and run `ci-wizard compare before.json after.json`: per workflow, what moved, and which findings are gone.');
+    L.push('## Next step: prove the fix', '');
+    L.push('1. Keep this report as the baseline: `ci-wizard owner/repo --save before.json` (the action writes `report.json` beside this report).');
+    L.push('2. Make one change, the first finding above, and let it run for a few days.');
+    L.push('3. Measure again with `--save after.json` and run `ci-wizard compare before.json after.json`: per workflow, what moved, and which findings are gone.');
+    L.push('');
   }
-  L.push('', '## How it was measured', '');
-  L.push('- Job time = completed minus started; queue wait = started minus created; developer wait = a successful run\'s wall time. All from the Actions API, in whole seconds.');
-  L.push('- Steps grouped into runner overhead, checkout, toolchain, dependencies, cache, artifacts, docker and work, by the command the workflow file gives each step (its run or uses line) and otherwise by its name; time before the first step and after the last step counted separately.');
+  L.push('## How it was measured', '');
+  L.push("- Job time = completed minus started; queue wait = started minus created; developer wait = a successful run's wall time. All from the Actions API, in whole seconds.");
+  L.push('- Per-run figures are medians over the sampled successful runs of each workflow; queue and wait percentiles are over the sampled jobs and runs, so a p90 over a handful of them is close to the slowest one.');
+  L.push('- Billed minutes round each GitHub-hosted job up to a whole minute, as GitHub bills it; a job counts as GitHub-hosted when its runner group is "GitHub Actions".');
+  L.push('- Steps grouped into the categories above by the command the workflow file gives each step (its run or uses line) and otherwise by its name.');
   L.push('- Runs whose jobs were all skipped count as runs but cost no job-minutes. Duplicate runs = commits the workflow ran on both a push and a pull request event. Reruns = runs with a run attempt above 1. Outdated runs = a pull request run still going when a newer commit on the same branch started its run.');
-  L.push("- Cache and concurrency facts are read from the workflow file itself (actions/cache, a setup action's cache input, concurrency and cancel-in-progress).");
-  L.push('- Estimated savings: dependency cache 60% of install time when no cache runs, 30% when one runs but installs still dominate; checkout and toolchain 50%; duplicates, outdated runs and reruns their full job time; self-hosted tail the excess over 2 s; fixed-cost findings half of the fixed share. See docs/rules.md in the ci-wizard repository.');
+  L.push("- Cache, checkout and concurrency facts are read from the parsed workflow file (actions/cache, a setup action's cache input, the checkout step's inputs, concurrency and cancel-in-progress), so a commented-out line never counts.");
+  L.push('- Estimated savings: dependency cache 60% of install time when no cache runs, 30% when one runs but installs still dominate; checkout and toolchain 50%; duplicates, outdated runs and reruns their full job time; self-hosted tail the excess over 2 s; fixed-cost findings half of the fixed share; short hosted jobs half of the billed minutes above the job-minutes. See docs/rules.md in the ci-wizard repository.');
   return `${L.join('\n')}\n`;
 }

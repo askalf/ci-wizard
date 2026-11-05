@@ -7,11 +7,41 @@ import { NotFoundError } from './github.mjs';
 const LOCKFILES = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock', 'poetry.lock', 'uv.lock', 'Pipfile.lock', 'go.sum', 'Cargo.lock', 'Gemfile.lock'];
 
 /**
+ * Runs grouped by workflow, labelled by name. A run's `name` is not a stable key: the runs a pull
+ * request makes for a workflow it adds (or changes so it fails to load) can carry the pull
+ * request's title instead, which split one workflow into two rows. So runs group by workflow_id
+ * (then the file path, then the name), and each group is labelled with the name most of its runs
+ * carry, ties going to the newest run's. Two workflows that share a name get their path appended.
+ * @returns {Map<string, object[]>} label -> runs, newest first as the API lists them
+ */
+export function groupRuns(runs) {
+  const groups = new Map();
+  for (const r of runs) {
+    const key = r.workflow_id != null ? `id:${r.workflow_id}` : r.path ? `path:${String(r.path).split('@')[0]}` : `name:${r.name}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+  const labelled = [...groups.values()].map((rs) => {
+    const counts = new Map();
+    for (const r of rs) counts.set(r.name, (counts.get(r.name) || 0) + 1);
+    const best = Math.max(...counts.values());
+    // rs is newest first, so the first run with the top count names the group on a tie.
+    const name = String(rs.find((r) => counts.get(r.name) === best).name);
+    return { name, path: String(rs[0].path || '').split('@')[0], rs };
+  });
+  const taken = new Map();
+  for (const g of labelled) taken.set(g.name, (taken.get(g.name) || 0) + 1);
+  const out = new Map();
+  for (const g of labelled) out.set(taken.get(g.name) > 1 && g.path ? `${g.name} (${g.path})` : g.name, g.rs);
+  return out;
+}
+
+/**
  * @param {ReturnType<import('./github.mjs').createClient>} client
  * @param {string} repo owner/name
- * @param {{ days?: number, perWorkflow?: number, workflows?: number, now?: Date, maxPages?: number, onProgress?: (msg: string) => void }} [o]
+ * @param {{ days?: number, perWorkflow?: number, workflows?: number, only?: string[], now?: Date, maxPages?: number, onProgress?: (msg: string) => void }} [o]
  */
-export async function collect(client, repo, { days = 7, perWorkflow = 5, workflows = 8, now = new Date(), maxPages = 5, onProgress = () => {} } = {}) {
+export async function collect(client, repo, { days = 7, perWorkflow = 5, workflows = 8, only = [], now = new Date(), maxPages = 5, onProgress = () => {} } = {}) {
   const since = new Date(now.getTime() - days * 86400e3).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const runs = [];
   let truncated = false;
@@ -35,13 +65,18 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, workflo
   const oldest = Math.min(...runs.map((r) => Date.parse(r.created_at)));
   const coveredDays = truncated ? Math.max(0.25, (now.getTime() - oldest) / 86400e3) : days;
 
-  const byWf = new Map();
-  for (const r of runs) {
-    if (!byWf.has(r.name)) byWf.set(r.name, []);
-    byWf.get(r.name).push(r);
-  }
+  const byWf = groupRuns(runs);
   // The busiest workflows, sampled from their newest successful completed runs.
-  const top = [...byWf.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, workflows);
+  // With `only`, the named workflows (matched by name, ignoring case) instead of the busiest.
+  const wanted = only.map((n) => String(n).trim().toLowerCase()).filter(Boolean);
+  const ranked = [...byWf.entries()].sort((a, b) => b[1].length - a[1].length);
+  // A name matches a workflow by the name its runs carry, which is what GitHub shows, not by the
+  // report's label: two workflows both named Build are labelled with their paths, and --only Build
+  // selects both of them.
+  const namesOf = (label, rs) => new Set([String(label).toLowerCase(), ...rs.map((r) => String(r.name).toLowerCase())]);
+  const matches = (label, rs, n) => namesOf(label, rs).has(String(n).trim().toLowerCase());
+  const top = wanted.length ? ranked.filter(([label, rs]) => wanted.some((n) => matches(label, rs, n))) : ranked.slice(0, workflows);
+  const onlyMissing = wanted.length ? only.filter((n) => String(n).trim() && !ranked.some(([label, rs]) => matches(label, rs, n))) : [];
   const samples = new Map();
   let n = 0;
   for (const [wf, rs] of top) {
@@ -62,8 +97,12 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, workflo
       files.set(path, (await client.getRaw(`repos/${repo}/contents/${path}`)) || '');
     }
   }
+  // The default branch, for advice that names it (a push trigger limited to it). Unknown when the
+  // token cannot read the repository's metadata; the advice then says to fill it in.
+  const meta = await client.get(`repos/${repo}`);
+  const defaultBranch = meta && typeof meta.default_branch === 'string' ? meta.default_branch : null;
   const root = (await client.get(`repos/${repo}/contents/`)) || [];
   const names = new Set((Array.isArray(root) ? root : []).map((x) => x && x.name));
   const lockfiles = LOCKFILES.filter((f) => names.has(f)).sort();
-  return { runs, byWf, samples, coveredDays, truncated, since, files, lockfiles };
+  return { runs, byWf, samples, coveredDays, truncated, since, files, lockfiles, defaultBranch, only: wanted.length ? only : [], onlyMissing };
 }

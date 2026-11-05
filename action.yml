@@ -25,6 +25,10 @@ inputs:
     description: How many recent successful runs of each sampled workflow to time step by step.
     required: false
     default: '5'
+  only:
+    description: 'Time only these workflows, by the name GitHub shows, separated by commas. Default: the busiest ones.'
+    required: false
+    default: ''
 outputs:
   report-path:
     description: Path of the markdown report on the runner.

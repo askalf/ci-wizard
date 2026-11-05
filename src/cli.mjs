@@ -12,7 +12,7 @@ import { audit, html, NotFoundError, report, RateLimitError, REPO_RE } from './i
 import { compare } from './compare.mjs';
 import { VERSION } from './version.mjs';
 
-const USAGE = `usage: ci-wizard [owner/repo] [--days 7] [--workflows 8] [--per-workflow 5] [--json] [--html out.html] [--save out.json]
+const USAGE = `usage: ci-wizard [owner/repo] [--days 7] [--workflows 8] [--per-workflow 5] [--only NAME] [--json] [--html out.html] [--save out.json]
        ci-wizard compare before.json after.json
        ci-wizard --version
 
@@ -24,6 +24,8 @@ Token: GITHUB_TOKEN or GH_TOKEN, else \`gh auth token\`.
   --days N           days of runs to read (default 7; up to 500 runs are read)
   --workflows N      busiest workflows to time job by job (default 8)
   --per-workflow N   newest successful runs of each to time (default 5)
+  --only NAME        time only these workflows, by the name GitHub shows (repeat it, or
+                     separate names with commas); for measuring one workflow before and after
   --json             print the report as JSON instead of markdown
   --save FILE        also save the JSON report, as a baseline for compare
   --html FILE        also write the report as an HTML page
@@ -125,6 +127,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, st
       options: {
         days: { type: 'string', default: '7' },
         workflows: { type: 'string', default: '8' },
+        only: { type: 'string', multiple: true, default: [] },
         'per-workflow': { type: 'string', default: '5' },
         json: { type: 'boolean', default: false },
         html: { type: 'string' },
@@ -184,7 +187,8 @@ export async function main(argv = process.argv.slice(2), { env = process.env, st
   const onProgress = live ? (msg) => stderr.write(`\r\x1b[Kci-wizard: ${msg}...`) : undefined;
   let a;
   try {
-    a = await audit({ repo, token, fetchImpl, days, workflows, perWorkflow, onProgress });
+    const only = values.only.flatMap((v) => v.split(',')).map((v) => v.trim()).filter(Boolean);
+    a = await audit({ repo, token, fetchImpl, days, workflows, perWorkflow, only, onProgress });
   } catch (err) {
     if (live) stderr.write('\r\x1b[K');
     stderr.write(`ci-wizard: ${err.message}\n`);

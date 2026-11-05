@@ -1,6 +1,7 @@
 // One self-contained HTML page for one or more audits: verdict tiles, ranked findings, then the
 // evidence tables. Every value from GitHub (workflow and step names, file text) is escaped.
 import { fmtS } from './util.mjs';
+import { savingText, stepLabel } from './report.mjs';
 
 const CONF = { confirmed: ['good', 'confirmed in the workflow file'], measured: ['info', 'measured'], inferred: ['warn', 'cause inferred'] };
 
@@ -12,24 +13,38 @@ export function esc(x) {
 
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
+// Code blocks: escaped like any other text, but without the inline-code rewrite.
+const escPre = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const num = (v) => typeof v === 'number' && Number.isFinite(v);
+
 function section(a) {
   const id = slug(a.repo);
   const total = a.job_minutes_week_sampled;
-  const saves = a.findings.reduce((s, f) => s + f.saving_min_week, 0);
-  const main = a.workflows[0];
+  const saves = a.saving_min_week_total ?? a.findings.filter((f) => !f.unit || f.unit === 'job').reduce((s, f) => s + f.saving_min_week, 0);
+  // Developer wait only means something for a workflow somebody waits on (push, pull request).
+  const waited = a.workflows.find((w) => w.waited_on !== false);
   const tiles = [
     [Math.round(total).toLocaleString('en-US'), 'job-minutes a week', 'busiest workflows, sampled'],
+    ...(num(a.billed_minutes_week_sampled) && a.billed_minutes_week_sampled > 0
+      ? [[Math.round(a.billed_minutes_week_sampled).toLocaleString('en-US'), 'billed minutes a week', 'GitHub-hosted, each job rounded up']] : []),
     [Math.round(saves).toLocaleString('en-US'), 'job-minutes a week', 'estimated recoverable'],
     [String(a.findings.length), 'findings', 'ranked by estimated saving'],
-    [main ? fmtS(main.wall_p50) : '-', 'developer wait', main ? `median run of ${esc(main.workflow)}` : ''],
+    [waited ? fmtS(waited.wall_p50) : '-', 'developer wait', waited ? `median run of ${esc(waited.workflow)}` : 'no workflow anyone waits on'],
   ].map(([v, l, s]) => `<div class="tile"><div class="v num">${v}</div><div class="l">${l}</div><div class="s">${s}</div></div>`).join('');
   const finds = a.findings.slice(0, 8).map((f, i) => {
     const [cls, label] = CONF[f.confidence] || ['info', f.confidence];
-    const save = f.saving_min_week >= 1 ? `about ${Math.round(f.saving_min_week).toLocaleString('en-US')} job-min a week` : 'saves developer wait, not job minutes';
-    return `<li class="find"><div class="rank num">${i + 1}</div><div class="fbody"><div class="fhead"><h4>${esc(f.what)}</h4><span class="chip ${cls}">${label}</span><span class="save">${save} <em>(estimate)</em></span></div><div class="where">${esc(f.workflow)}</div><p>${esc(f.evidence)}.</p><p class="fix"><b>Fix</b> ${esc(f.fix)}.</p></div></li>`;
+    const trade = f.tradeoff ? `<p class="trade"><b>Trade-off</b> ${esc(f.tradeoff)}.</p>` : '';
+    const example = f.example ? `<pre class="example"><code>${escPre(f.example)}</code></pre>` : '';
+    return `<li class="find"><div class="rank num">${i + 1}</div><div class="fbody"><div class="fhead"><h4>${esc(f.what)}</h4><span class="chip ${cls}">${label}</span><span class="save">${esc(savingText(f))}</span></div><div class="where">${esc(f.workflow)}</div><p>${esc(f.evidence)}.</p><p class="fix"><b>Fix</b> ${esc(f.fix)}.</p>${trade}${example}</div></li>`;
   }).join('') || '<li class="find"><div class="fbody"><p>Nothing crossed the thresholds in this sample.</p></div></li>';
-  const rows = a.workflows.map((w) => `<tr><td>${esc(w.workflow)}${w.thin_sample ? ' <span title="timed from fewer than 3 successful runs">†</span>' : ''}</td><td class="n">${Math.round(w.runs_week)}</td><td class="n">${w.jobs_per_run.toFixed(1)}</td><td class="n">${w.job_minutes_per_run.toFixed(1)}</td><td class="n">${Math.round(w.job_minutes_week).toLocaleString('en-US')}</td><td class="n">${fmtS(w.wall_p50)} / ${fmtS(w.wall_p90)}</td><td class="n">${Math.round(w.wait_p50)} s / ${Math.round(w.wait_p90)} s</td><td>${Object.entries(w.share).slice(0, 3).map(([k, v]) => `${esc(k)} ${Math.round(v * 100)}%`).join(', ')}</td></tr>`).join('');
-  const steps = a.workflows.slice(0, 4).filter((w) => w.top_steps.length).map((w) => `<li><b>${esc(w.workflow)}</b>: ${w.top_steps.map((t) => `${esc(t.step)} ${fmtS(t.median_s)}`).join('; ')} <span class="muted">(${w.has_cache ? 'caches dependencies' : 'no dependency cache in the workflow file'}, ${w.cancels ? 'cancels outdated runs' : 'no cancel-in-progress'})</span></li>`).join('');
+  const rows = a.workflows.map((w) => {
+    const marks = `${w.thin_sample ? ' <span title="timed from fewer than 3 successful runs">†</span>' : ''}${w.waited_on === false ? ' <span title="runs from a schedule, a dispatch or another workflow: nobody waits on it">‡</span>' : ''}`;
+    const wait = w.waited_on === false ? '-' : `${fmtS(w.wall_p50)} / ${fmtS(w.wall_p90)}`;
+    const billed = num(w.billed_minutes_week) ? Math.round(w.billed_minutes_week).toLocaleString('en-US') : '-';
+    return `<tr><td>${esc(w.workflow)}${marks}</td><td class="n">${Math.round(w.runs_week)}</td><td class="n">${w.job_minutes_per_run.toFixed(1)}</td><td class="n">${Math.round(w.job_minutes_week).toLocaleString('en-US')}</td><td class="n">${billed}</td><td class="n">${wait}</td><td class="n">${Math.round(w.wait_p50)} s / ${Math.round(w.wait_p90)} s</td><td>${Object.entries(w.share || {}).slice(0, 3).map(([k, v]) => `${esc(k)} ${Math.round(v * 100)}%`).join(', ')}</td></tr>`;
+  }).join('');
+  const steps = a.workflows.slice(0, 4).map((w) => [w, (w.top_steps || []).filter((t) => t.median_s >= 1)]).filter(([, t]) => t.length)
+    .map(([w, t]) => `<li><b>${esc(w.workflow)}</b>: ${t.map((x) => `${esc(stepLabel(x.step))} ${fmtS(x.median_s)}`).join('; ')} <span class="muted">(${w.has_cache ? 'caches dependencies' : 'no dependency cache in the workflow file'}, ${w.cancels ? 'cancels outdated runs' : 'no cancel-in-progress'})</span></li>`).join('');
   return `
 <section class="repo" id="${id}" aria-labelledby="${id}-h">
   <div class="rhead"><h2 id="${id}-h">${esc(a.repo)}</h2>
@@ -38,9 +53,9 @@ function section(a) {
   <h3>What to fix first</h3>
   <ol class="finds">${finds}</ol>
   <h3>Where the time goes</h3>
-  <div class="tbl"><table><thead><tr><th>Workflow</th><th>Runs/wk</th><th>Jobs/run</th><th>Job-min/run</th><th>Job-min/wk</th><th>Developer wait p50 / p90</th><th>Queue p50 / p90</th><th>Biggest shares</th></tr></thead><tbody>${rows}</tbody></table></div>
-  <h3>The longest steps</h3>
-  <ul class="steps">${steps}</ul>
+  <div class="tbl"><table><thead><tr><th>Workflow</th><th>Runs/wk</th><th>Job-min/run</th><th>Job-min/wk</th><th>Billed min/wk</th><th>Developer wait p50 / p90</th><th>Queue p50 / p90</th><th>Biggest shares</th></tr></thead><tbody>${rows}</tbody></table></div>
+  <p class="legend muted">Billed minutes round each GitHub-hosted job up to a whole minute, as GitHub bills it. Shares: <i>work</i> the job's own steps, <i>deps</i> installs, <i>overhead</i> the runner's set-up and wrap-up steps, <i>head</i> the wait before the first step, <i>tail</i> the time after the last step until the job reports done. † fewer than 3 runs timed. ‡ nobody waits on it (a schedule, a dispatch or another workflow).</p>
+  ${steps ? `<h3>The longest steps</h3>\n  <ul class="steps">${steps}</ul>` : ''}
 </section>`;
 }
 
@@ -104,7 +119,11 @@ nav a:hover, nav a:focus-visible { border-color: var(--signal); color: var(--sig
 .save { font: 500 13px/1.4 var(--mono); color: var(--ink); margin-left: auto; }
 .save em { font-style: normal; color: var(--muted); }
 .fix { border-top: 1px dashed var(--rule); padding-top: 6px; }
-.fix b { color: var(--signal); margin-right: 6px; }
+.fix b, .trade b { color: var(--signal); margin-right: 6px; }
+.trade { color: var(--muted); }
+pre.example { margin: 8px 0 0; padding: 10px 12px; background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; overflow-x: auto; }
+pre.example code { border: 0; padding: 0; background: none; white-space: pre; overflow-wrap: normal; }
+.legend { font-size: 13px; margin-top: 8px; }
 .chip { font: 500 12px/1 var(--mono); padding: 4px 8px; border-radius: 999px; white-space: nowrap; }
 .chip.good { background: var(--good-soft); color: var(--good); }
 .chip.warn { background: var(--warn-soft); color: var(--warn); }
@@ -153,7 +172,7 @@ export function html(audits, { title = 'CI Wizard Audit' } = {}) {
 ${audits.map(section).join('')}
 <footer>
   <span>Job time = completed minus started; queue wait = started minus created; developer wait = a successful run's wall time. Weekly figures scale each repository's sampled window to 7 days.</span>
-  <span>Estimated savings: dependency cache 60% of install time when no cache runs, 30% when one runs but installs still dominate; duplicates, outdated runs and reruns their full job time; fixed-cost findings half of the fixed share. Nothing is written to any repository.</span>
+  <span>Estimated savings: dependency cache 60% of install time when no cache runs, 30% when one runs but installs still dominate; checkout and toolchain 50%; duplicates, outdated runs and reruns their full job time; self-hosted tail the excess over 2 s; fixed-cost findings half of the fixed share; short hosted jobs half of the billed minutes above the job-minutes. Nothing is written to any repository.</span>
 </footer>
 </div>
 </body>
