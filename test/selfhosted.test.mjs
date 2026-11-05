@@ -212,3 +212,17 @@ test('pull_request_target: a head checkout counts only when its own if lets it r
   assert.deepEqual(reach(target('github.event.pull_request.head.repo.full_name == github.repository')), []);
   assert.deepEqual(reach(target("contains(github.event.pull_request.labels.*.name, 'safe')")), ['t:pull_request_target:possible']);
 });
+
+test('a head checkout behind if: failure() runs after a failing step: possible, even with no needs', () => {
+  const wfText = 'on: [pull_request_target]\njobs:\n  t:\n    runs-on: [self-hosted]\n    steps:\n      - run: exit 1\n      - uses: actions/checkout@v7\n        if: failure()\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n      - run: make\n';
+  assert.deepEqual(reach(wfText), ['t:pull_request_target:possible']);
+});
+
+test('functions of a partly known value are unknown: toJSON of a fork pull request', async () => {
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', "    if: contains(toJSON(github.event.pull_request), 'trusted-user')\n")), ['test:pull_request:possible']);
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', "    if: contains(format('{0}', github.event.pull_request.head.repo.full_name), 'trusted')\n")), ['test:pull_request:possible']);
+  // A value parsed from JSON is fully known, so its functions still compute.
+  const { evaluate, parseExpr, completeContext } = await import('../src/expr.mjs');
+  assert.equal(evaluate(parseExpr(`contains(toJSON(fromJSON('{"a":"trusted"}')), 'trusted')`), completeContext({})), true);
+  assert.equal(evaluate(parseExpr(`contains(fromJSON('["self-hosted","x"]'), 'x')`), completeContext({})), true);
+});

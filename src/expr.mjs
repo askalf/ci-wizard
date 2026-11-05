@@ -153,6 +153,24 @@ const get = (obj, key) => {
   return obj[COMPLETE] ? null : UNKNOWN;
 };
 
+/** Whether a value is known in full: no unknown or opaque part, and every object complete. */
+function fullyKnown(v) {
+  if (v === UNKNOWN || isOpaque(v)) return false;
+  if (Array.isArray(v)) return v.every(fullyKnown);
+  if (v && typeof v === 'object') return Boolean(v[COMPLETE]) && Object.values(v).every(fullyKnown);
+  return true;
+}
+
+/** Marks every object in a value as complete: a value parsed from JSON is known in full. */
+function markComplete(v) {
+  if (Array.isArray(v)) v.forEach(markComplete);
+  else if (v && typeof v === 'object') {
+    v[COMPLETE] = true;
+    Object.values(v).forEach(markComplete);
+  }
+  return v;
+}
+
 /** GitHub's number coercion for comparisons of different types: null 0, booleans 1 and 0, strings parsed, others NaN. */
 function toNumber(v) {
   if (v === null) return 0;
@@ -215,10 +233,13 @@ function call(name, args, ctx) {
     return UNKNOWN;
   }
   if (name === 'cancelled') return UNKNOWN;
-  if (args.some((a) => a === UNKNOWN || isOpaque(a))) return UNKNOWN;
+  // A function of a value that is not fully known (an unknown, an opaque value, or an object with
+  // fields left out of the context) cannot be computed: toJSON of a partial pull request would
+  // serialize its unknown fields as absent.
+  if (!args.every(fullyKnown)) return UNKNOWN;
   switch (name) {
     case 'fromjson':
-      try { return JSON.parse(String(args[0])); } catch { return UNKNOWN; }
+      try { return markComplete(JSON.parse(String(args[0]))); } catch { return UNKNOWN; }
     case 'tojson': return JSON.stringify(args[0]);
     case 'contains':
       return Array.isArray(args[0]) ? args[0].some((x) => compare('==', x, args[1]) === true) : String(args[0]).toLowerCase().includes(String(args[1]).toLowerCase());

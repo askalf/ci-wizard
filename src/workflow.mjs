@@ -294,7 +294,10 @@ export function forkReachableSelfHosted(doc, repo = 'owner/repo') {
       if (event === 'pull_request_target') {
         const heads = stepsOfJob(job).filter((st) => st && typeof st === 'object' && /^actions\/checkout@/.test(String(st.uses || ''))
           && /pull_request\.head|head_ref|head\.sha/.test(JSON.stringify(st.with || {})));
-        const runs = heads.map((st) => (st.if === undefined ? true : valueOf(st.if, ctx, { isIf: true }))).filter((c) => c === UNKNOWN || c);
+        // A step's status functions follow the steps before it, which can fail, so success() and
+        // failure() are unknown there whatever the job's needs.
+        const stepCtx = forkPullRequestContext(repo, event);
+        const runs = heads.map((st) => (st.if === undefined ? true : valueOf(st.if, stepCtx, { isIf: true }))).filter((c) => c === UNKNOWN || c);
         if (!runs.length) continue;
         checkoutCertain = runs.some((c) => c !== UNKNOWN);
       }

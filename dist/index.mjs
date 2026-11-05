@@ -7711,6 +7711,20 @@ var get = (obj, key) => {
   if (hit !== void 0) return obj[hit];
   return obj[COMPLETE] ? null : UNKNOWN;
 };
+function fullyKnown(v) {
+  if (v === UNKNOWN || isOpaque(v)) return false;
+  if (Array.isArray(v)) return v.every(fullyKnown);
+  if (v && typeof v === "object") return Boolean(v[COMPLETE]) && Object.values(v).every(fullyKnown);
+  return true;
+}
+function markComplete(v) {
+  if (Array.isArray(v)) v.forEach(markComplete);
+  else if (v && typeof v === "object") {
+    v[COMPLETE] = true;
+    Object.values(v).forEach(markComplete);
+  }
+  return v;
+}
 function toNumber(v) {
   if (v === null) return 0;
   if (typeof v === "boolean") return v ? 1 : 0;
@@ -7769,11 +7783,11 @@ function call(name, args, ctx) {
     return UNKNOWN;
   }
   if (name === "cancelled") return UNKNOWN;
-  if (args.some((a) => a === UNKNOWN || isOpaque(a))) return UNKNOWN;
+  if (!args.every(fullyKnown)) return UNKNOWN;
   switch (name) {
     case "fromjson":
       try {
-        return JSON.parse(String(args[0]));
+        return markComplete(JSON.parse(String(args[0])));
       } catch {
         return UNKNOWN;
       }
@@ -8088,7 +8102,8 @@ function forkReachableSelfHosted(doc, repo = "owner/repo") {
       let checkoutCertain = true;
       if (event === "pull_request_target") {
         const heads = stepsOfJob(job).filter((st) => st && typeof st === "object" && /^actions\/checkout@/.test(String(st.uses || "")) && /pull_request\.head|head_ref|head\.sha/.test(JSON.stringify(st.with || {})));
-        const runs = heads.map((st) => st.if === void 0 ? true : valueOf(st.if, ctx, { isIf: true })).filter((c) => c === UNKNOWN || c);
+        const stepCtx = forkPullRequestContext(repo, event);
+        const runs = heads.map((st) => st.if === void 0 ? true : valueOf(st.if, stepCtx, { isIf: true })).filter((c) => c === UNKNOWN || c);
         if (!runs.length) continue;
         checkoutCertain = runs.some((c) => c !== UNKNOWN);
       }
