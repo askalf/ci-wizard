@@ -8550,7 +8550,7 @@ No workflow runs in the last ${days} days, so there is nothing to measure yet.
   if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, md);
   setOutput(env, "report-path", mdPath);
   setOutput(env, "findings", String(a ? a.findings.length : 0));
-  stdout.write(a ? `ci-wizard: ${a.runs_total} runs over ${a.covered_days} d, ${a.findings.length} findings, ${a && budgetText(a) || `${a.api_calls} API calls`}; report in the job summary and ${mdPath}
+  stdout.write(a ? `ci-wizard: ${a.runs_total} runs over ${a.covered_days} d, ${a.findings.length} findings, ${budgetText(a) || `${a.api_calls} API calls`}; report in the job summary and ${mdPath}
 ` : `ci-wizard: no runs in the window for ${repo}
 `);
   return 0;

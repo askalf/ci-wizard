@@ -4,7 +4,7 @@
 
 API budget:
 
-- Every run reports the budget it drew on, from GitHub's `x-ratelimit-limit` header: the calls
+- Every report states the budget it drew on, from GitHub's `x-ratelimit-limit` header: the calls
   made and what the token had left of its hourly limit ("41 API calls, 959 of 1000 left this
   hour"), in the CLI's summary line, the action's log, the report's "How it was measured" and the
   JSON (`rate_limit`). On a budget of 1,000 or less it names the larger one: a GitHub App's

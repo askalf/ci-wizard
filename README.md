@@ -120,8 +120,8 @@ runs in the window, or an API error, 2 usage, 3 stopped near the rate limit.
   for the repository a workflow runs in; a fine-grained token with those two permissions works
   from the command line. A repository the token cannot see reads as not found.
 - The client stops before the token's rate limit runs out and says how many calls were left, so
-  an audit never spends the budget a team's own CI needs. Every run reports the budget it drew on
-  ("41 API calls, 959 of 1000 left this hour").
+  an audit never spends the budget a team's own CI needs. Every report states the budget it drew
+  on ("41 API calls, 959 of 1000 left this hour"); an audit that finds no runs writes no report.
 - `compare` reads two saved reports and needs no token.
 
 ### Rate limits: a GitHub App token for a larger budget
