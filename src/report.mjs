@@ -145,7 +145,14 @@ export function report(a, { maxFindings = 8 } = {}) {
   }
   L.push('## How it was measured', '');
   const budget = budgetText(a);
-  if (budget) L.push(`- API budget: ${budget}. An audit sends no request once the token has 25 calls or fewer left, so it always leaves at least 25 for the repository's own CI.`);
+  // The reserve is enforced against the remaining count GitHub reports; without one the client
+  // has nothing to hold it against, and the report says so instead of promising it.
+  if (budget) {
+    const known = num(a.rate_limit && a.rate_limit.remaining);
+    L.push(`- API budget: ${budget}. ${known
+      ? "An audit sends no request once the token has 25 calls or fewer left, so it always leaves at least 25 for the repository's own CI."
+      : 'GitHub reported no remaining count, so the 25-call reserve an audit normally keeps could not be enforced.'}`);
+  }
   L.push("- Job time = completed minus started; queue wait = started minus created; developer wait = a successful run's wall time. All from the Actions API, in whole seconds.");
   L.push('- Per-run figures are medians over the sampled successful runs of each workflow; queue and wait percentiles are over the sampled jobs and runs, so a p90 over a handful of them is close to the slowest one.');
   L.push('- Billed minutes round each GitHub-hosted job up to a whole minute, as GitHub bills it; a job counts as GitHub-hosted when its runner group is "GitHub Actions".');

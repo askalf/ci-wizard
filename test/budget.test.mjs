@@ -132,3 +132,23 @@ test('a request that fails without an answer counts as spent, so a retry cannot 
   assert.equal(tries, 3);
   assert.equal(flaky.remaining, null);
 });
+
+test('limit-only answers: the audit runs, and the report says the reserve could not be enforced', async () => {
+  const { audit } = await import('../src/index.mjs');
+  // Every answer carries the limit and no remaining count, so the client never holds a count.
+  const fetchImpl = async (url) => {
+    const path = url.replace('https://api.github.com/', '');
+    const body = path.startsWith('repos/o/r/actions/runs?') ? { workflow_runs: runs(3) }
+      : path.startsWith('repos/o/r/actions/runs/') ? { jobs: [job()] }
+        : path.startsWith('repos/o/r/contents/') ? [] : { default_branch: 'main', visibility: 'private' };
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'x-ratelimit-limit': '60' } });
+  };
+  const a = await audit({ repo: 'o/r', token: 'x', fetchImpl, now: new Date('2026-01-12T10:00:00Z') });
+  assert.deepEqual(a.rate_limit, { limit: 60, remaining: null });
+  const md = report(a);
+  assert.match(md, /- API budget: \d+ API calls, hourly limit 60, remaining not reported; .*GitHub reported no remaining count, so the 25-call reserve an audit normally keeps could not be enforced\./);
+  assert.doesNotMatch(md, /always leaves at least 25/);
+  // With a remaining count the guarantee is stated.
+  a.rate_limit = { limit: 1000, remaining: 900 };
+  assert.match(report(a), /always leaves at least 25 for the repository's own CI/);
+});
