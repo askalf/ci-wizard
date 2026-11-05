@@ -3,13 +3,18 @@
 // rate limit runs out (RateLimitError says how many calls were left and when the limit resets),
 // so an audit never burns the budget a team's own CI needs.
 
+/** Where a larger budget comes from, for a stop near the limit. */
+export const RATE_LIMIT_HINT = "a GitHub App's installation token has its own budget of 5,000 or more an hour, against a workflow's GITHUB_TOKEN's 1,000 (the README's \"Rate limits\" section)";
+
 export class RateLimitError extends Error {
-  constructor(remaining, resetAt) {
+  constructor(remaining, resetAt, limit = null) {
     const when = resetAt ? ` (resets at ${resetAt.toISOString()})` : '';
-    super(`stopped near the GitHub API rate limit: ${remaining} calls left${when}`);
+    const of = limit ? ` of ${limit} an hour` : '';
+    super(`stopped near the GitHub API rate limit: ${remaining} calls left${of}${when}; ${RATE_LIMIT_HINT}`);
     this.name = 'RateLimitError';
     this.remaining = remaining;
     this.resetAt = resetAt;
+    this.limit = limit;
   }
 }
 
@@ -42,9 +47,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'https://api.github.com', minRemaining = 25, backoffMs = [1000, 3000] } = {}) {
   let calls = 0;
   let remaining = null;
+  // The token's hourly budget as GitHub reports it (x-ratelimit-limit): 1,000 for a workflow's
+  // GITHUB_TOKEN, 5,000 for a person's token, 5,000 or more for a GitHub App installation, 60 with
+  // no token. It says which budget an audit drew on, and so whether a larger one is available.
+  let limit = null;
 
   async function request(path, { raw = false } = {}) {
-    if (remaining !== null && remaining < minRemaining) throw new RateLimitError(remaining, null);
+    if (remaining !== null && remaining < minRemaining) throw new RateLimitError(remaining, null, limit);
     const headers = {
       Accept: raw ? 'application/vnd.github.raw' : 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
@@ -66,11 +75,13 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
       }
       const left = res.headers.get('x-ratelimit-remaining');
       if (left !== null) remaining = Number(left);
+      const cap = res.headers.get('x-ratelimit-limit');
+      if (cap !== null && Number.isFinite(Number(cap))) limit = Number(cap);
       const reset = res.headers.get('x-ratelimit-reset');
       const resetAt = reset ? new Date(Number(reset) * 1000) : null;
       if (res.status === 404) return null;
       if ((res.status === 403 || res.status === 429) && (remaining === 0 || res.headers.get('retry-after'))) {
-        throw new RateLimitError(remaining ?? 0, resetAt);
+        throw new RateLimitError(remaining ?? 0, resetAt, limit);
       }
       if (res.status >= 500 && attempt < backoffMs.length) {
         await sleep(backoffMs[attempt]);
@@ -98,6 +109,9 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
     },
     get remaining() {
       return remaining;
+    },
+    get limit() {
+      return limit;
     },
   };
 }

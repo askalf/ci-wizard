@@ -7372,13 +7372,16 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 // src/github.mjs
+var RATE_LIMIT_HINT = `a GitHub App's installation token has its own budget of 5,000 or more an hour, against a workflow's GITHUB_TOKEN's 1,000 (the README's "Rate limits" section)`;
 var RateLimitError = class extends Error {
-  constructor(remaining, resetAt) {
+  constructor(remaining, resetAt, limit = null) {
     const when = resetAt ? ` (resets at ${resetAt.toISOString()})` : "";
-    super(`stopped near the GitHub API rate limit: ${remaining} calls left${when}`);
+    const of = limit ? ` of ${limit} an hour` : "";
+    super(`stopped near the GitHub API rate limit: ${remaining} calls left${of}${when}; ${RATE_LIMIT_HINT}`);
     this.name = "RateLimitError";
     this.remaining = remaining;
     this.resetAt = resetAt;
+    this.limit = limit;
   }
 };
 var NotFoundError = class extends Error {
@@ -7399,8 +7402,9 @@ var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://api.github.com", minRemaining = 25, backoffMs = [1e3, 3e3] } = {}) {
   let calls = 0;
   let remaining = null;
+  let limit = null;
   async function request(path, { raw = false } = {}) {
-    if (remaining !== null && remaining < minRemaining) throw new RateLimitError(remaining, null);
+    if (remaining !== null && remaining < minRemaining) throw new RateLimitError(remaining, null, limit);
     const headers = {
       Accept: raw ? "application/vnd.github.raw" : "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
@@ -7422,11 +7426,13 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
       }
       const left = res.headers.get("x-ratelimit-remaining");
       if (left !== null) remaining = Number(left);
+      const cap = res.headers.get("x-ratelimit-limit");
+      if (cap !== null && Number.isFinite(Number(cap))) limit = Number(cap);
       const reset = res.headers.get("x-ratelimit-reset");
       const resetAt = reset ? new Date(Number(reset) * 1e3) : null;
       if (res.status === 404) return null;
       if ((res.status === 403 || res.status === 429) && (remaining === 0 || res.headers.get("retry-after"))) {
-        throw new RateLimitError(remaining ?? 0, resetAt);
+        throw new RateLimitError(remaining ?? 0, resetAt, limit);
       }
       if (res.status >= 500 && attempt < backoffMs.length) {
         await sleep(backoffMs[attempt]);
@@ -7451,6 +7457,9 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
     },
     get remaining() {
       return remaining;
+    },
+    get limit() {
+      return limit;
     }
   };
 }
@@ -8368,6 +8377,13 @@ function savingText(f) {
 function stepLabel(name) {
   return String(name).replace(/^(Run |Post Run )?([\w.-]+\/[\w./-]+)@\S+/, (_, run2 = "", action) => `${run2}${action}`);
 }
+function budgetText(a) {
+  const r = a.rate_limit;
+  if (!r || !num(r.limit)) return "";
+  const left = num(r.remaining) ? `${r.remaining} of ${r.limit}` : `a limit of ${r.limit}`;
+  const app = r.limit <= 1e3 ? "; a GitHub App's token has its own 5,000 or more" : "";
+  return `${num(a.api_calls) ? `${a.api_calls} API calls, ` : ""}${left} left this hour${app}`;
+}
 function summary(a) {
   const L = [];
   const waitOnly = a.findings.filter(isWait);
@@ -8452,6 +8468,8 @@ function report(a, { maxFindings = 8 } = {}) {
     L.push("");
   }
   L.push("## How it was measured", "");
+  const budget = budgetText(a);
+  if (budget) L.push(`- API budget: ${budget}. An audit stops before the token runs out, so it never spends what the repository's own CI needs.`);
   L.push("- Job time = completed minus started; queue wait = started minus created; developer wait = a successful run's wall time. All from the Actions API, in whole seconds.");
   L.push("- Per-run figures are medians over the sampled successful runs of each workflow; queue and wait percentiles are over the sampled jobs and runs, so a p90 over a handful of them is close to the slowest one.");
   L.push('- Billed minutes round each GitHub-hosted job up to a whole minute, as GitHub bills it; a job counts as GitHub-hosted when its runner group is "GitHub Actions".');
@@ -8472,6 +8490,7 @@ async function audit({ repo, token, fetchImpl, days = 7, workflows = 8, perWorkf
   if (!data) return null;
   const a = analyse(repo, data);
   a.api_calls = c.calls;
+  a.rate_limit = { limit: c.limit ?? null, remaining: c.remaining ?? null };
   return a;
 }
 
@@ -8531,7 +8550,7 @@ No workflow runs in the last ${days} days, so there is nothing to measure yet.
   if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, md);
   setOutput(env, "report-path", mdPath);
   setOutput(env, "findings", String(a ? a.findings.length : 0));
-  stdout.write(a ? `ci-wizard: ${a.runs_total} runs over ${a.covered_days} d, ${a.findings.length} findings, ${a.api_calls} API calls; report in the job summary and ${mdPath}
+  stdout.write(a ? `ci-wizard: ${a.runs_total} runs over ${a.covered_days} d, ${a.findings.length} findings, ${a && budgetText(a) || `${a.api_calls} API calls`}; report in the job summary and ${mdPath}
 ` : `ci-wizard: no runs in the window for ${repo}
 `);
   return 0;

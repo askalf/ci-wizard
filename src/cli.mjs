@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { audit, html, NotFoundError, report, RateLimitError, REPO_RE } from './index.mjs';
+import { budgetText } from './report.mjs';
 import { compare } from './compare.mjs';
 import { VERSION } from './version.mjs';
 
@@ -203,7 +204,8 @@ export async function main(argv = process.argv.slice(2), { env = process.env, st
   if (values.html) writeFileSync(values.html, html([a], { title: `CI audit: ${repo}` }));
   if (values.save) writeFileSync(values.save, `${JSON.stringify(a, null, 1)}\n`);
   stdout.write(values.json ? `${JSON.stringify(a, null, 1)}\n` : report(a));
-  stderr.write(`ci-wizard: ${a.runs_total} runs over ${a.covered_days} d, ${a.workflows.length} workflows sampled, ${a.findings.length} findings, ${a.api_calls} API calls\n`);
+  const budget = budgetText(a);
+  stderr.write(`ci-wizard: ${a.runs_total} runs over ${a.covered_days} d, ${a.workflows.length} workflows sampled, ${a.findings.length} findings, ${budget || `${a.api_calls} API calls`}\n`);
   if (values.save) stderr.write(`ci-wizard: saved ${values.save}; after a change has run a while, save another report and run \`ci-wizard compare ${values.save} <after>.json\`\n`);
   return 0;
 }

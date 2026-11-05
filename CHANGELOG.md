@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+API budget:
+
+- Every run reports the budget it drew on, from GitHub's `x-ratelimit-limit` header: the calls
+  made and what the token had left of its hourly limit ("41 API calls, 959 of 1000 left this
+  hour"), in the CLI's summary line, the action's log, the report's "How it was measured" and the
+  JSON (`rate_limit`). On a budget of 1,000 or less it names the larger one: a GitHub App's
+  installation token, 5,000 or more an hour.
+- A stop near the rate limit says the hourly limit it hit and how to get a larger budget.
+- The README's "Rate limits" section sets up a GitHub App token for the action, with the pinned
+  `actions/create-github-app-token` step and the two read permissions an audit needs.
+
 Expert guidance:
 
 - Every finding now carries its trade-off in the report, as docs/rules.md always described, and,

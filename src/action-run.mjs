@@ -4,6 +4,7 @@
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { audit, report, RateLimitError, REPO_RE } from './index.mjs';
+import { budgetText } from './report.mjs';
 
 /** Inputs as the runner passes them: INPUT_<NAME> with the name upper-cased and spaces as underscores. */
 export function input(env, name, fallback = '') {
@@ -59,6 +60,6 @@ export async function run({ env = process.env, stdout = process.stdout, fetchImp
   if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, md);
   setOutput(env, 'report-path', mdPath);
   setOutput(env, 'findings', String(a ? a.findings.length : 0));
-  stdout.write(a ? `ci-wizard: ${a.runs_total} runs over ${a.covered_days} d, ${a.findings.length} findings, ${a.api_calls} API calls; report in the job summary and ${mdPath}\n` : `ci-wizard: no runs in the window for ${repo}\n`);
+  stdout.write(a ? `ci-wizard: ${a.runs_total} runs over ${a.covered_days} d, ${a.findings.length} findings, ${(a && budgetText(a)) || `${a.api_calls} API calls`}; report in the job summary and ${mdPath}\n` : `ci-wizard: no runs in the window for ${repo}\n`);
   return 0;
 }

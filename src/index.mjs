@@ -24,5 +24,7 @@ export async function audit({ repo, token, fetchImpl, days = 7, workflows = 8, p
   if (!data) return null;
   const a = analyse(repo, data);
   a.api_calls = c.calls;
+  // The budget the audit drew on: the token's hourly limit and what was left after it.
+  a.rate_limit = { limit: c.limit ?? null, remaining: c.remaining ?? null };
   return a;
 }

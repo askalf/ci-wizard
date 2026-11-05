@@ -35,6 +35,19 @@ export function stepLabel(name) {
   return String(name).replace(/^(Run |Post Run )?([\w.-]+\/[\w./-]+)@\S+/, (_, run = '', action) => `${run}${action}`);
 }
 
+/**
+ * The API budget an audit drew on, as one clause: the calls made and what the token had left of its
+ * hourly limit, with the App route when the budget is a workflow token's 1,000 or less. Empty when
+ * GitHub sent no limit (an old report, or a fake client).
+ */
+export function budgetText(a) {
+  const r = a.rate_limit;
+  if (!r || !num(r.limit)) return '';
+  const left = num(r.remaining) ? `${r.remaining} of ${r.limit}` : `a limit of ${r.limit}`;
+  const app = r.limit <= 1000 ? "; a GitHub App's token has its own 5,000 or more" : '';
+  return `${num(a.api_calls) ? `${a.api_calls} API calls, ` : ''}${left} left this hour${app}`;
+}
+
 /** The opening paragraph: what to start with, and what the findings add up to against what was measured. */
 export function summary(a) {
   const L = [];
@@ -130,6 +143,8 @@ export function report(a, { maxFindings = 8 } = {}) {
     L.push('');
   }
   L.push('## How it was measured', '');
+  const budget = budgetText(a);
+  if (budget) L.push(`- API budget: ${budget}. An audit stops before the token runs out, so it never spends what the repository's own CI needs.`);
   L.push("- Job time = completed minus started; queue wait = started minus created; developer wait = a successful run's wall time. All from the Actions API, in whole seconds.");
   L.push('- Per-run figures are medians over the sampled successful runs of each workflow; queue and wait percentiles are over the sampled jobs and runs, so a p90 over a handful of them is close to the slowest one.');
   L.push('- Billed minutes round each GitHub-hosted job up to a whole minute, as GitHub bills it; a job counts as GitHub-hosted when its runner group is "GitHub Actions".');
