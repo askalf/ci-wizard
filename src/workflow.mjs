@@ -2,7 +2,7 @@
 // triggers, the push branch patterns and the concurrency group. A file that does not parse yields
 // no facts, never an error: the audit then falls back to the step names the API reports.
 import { parse } from 'yaml';
-import { UNKNOWN, forkPullRequestContext, valueOf } from './expr.mjs';
+import { UNKNOWN, forkPullRequestContext, opaqueTag, valueOf } from './expr.mjs';
 
 /** Step categories, matched on a lower-cased step name or command (a "Post " step counts with what it posts for). */
 const CATS = [
@@ -292,14 +292,30 @@ export function forkReachableSelfHosted(doc, repo = 'owner/repo') {
       // pull request's head, and that step only counts when its own if lets it run for a fork.
       let checkoutCertain = true;
       if (event === 'pull_request_target') {
-        const heads = stepsOfJob(job).filter((st) => st && typeof st === 'object' && /^actions\/checkout@/.test(String(st.uses || ''))
-          && /pull_request\.head|head_ref|head\.sha/.test(JSON.stringify(st.with || {})));
         // A step's status functions follow the steps before it, which can fail, so success() and
         // failure() are unknown there whatever the job's needs.
         const stepCtx = forkPullRequestContext(repo, event);
-        const runs = heads.map((st) => (st.if === undefined ? true : valueOf(st.if, stepCtx, { isIf: true }))).filter((c) => c === UNKNOWN || c);
-        if (!runs.length) continue;
-        checkoutCertain = runs.some((c) => c !== UNKNOWN);
+        // Each checkout step that runs for a fork, judged by what its ref and repository come to:
+        // the head's commit or branch, or the head repository, is the fork's code (certain); the
+        // base's, or a literal, is not; anything unresolved is possible.
+        const verdicts = stepsOfJob(job)
+          .filter((st) => st && typeof st === 'object' && /^actions\/checkout@/.test(String(st.uses || '')))
+          .map((st) => {
+            const cond = st.if === undefined ? true : valueOf(st.if, stepCtx, { isIf: true });
+            if (cond !== UNKNOWN && !cond) return 'no';
+            const inputs = st.with && typeof st.with === 'object' ? st.with : {};
+            const ref = inputs.ref === undefined ? null : valueOf(inputs.ref, stepCtx);
+            const repoIn = inputs.repository === undefined ? null : valueOf(inputs.repository, stepCtx);
+            const isHead = (v) => ['head', 'head-repo'].includes(opaqueTag(v));
+            let which;
+            if (isHead(ref) || isHead(repoIn)) which = 'yes';
+            else if (ref === UNKNOWN || repoIn === UNKNOWN) which = 'maybe';
+            else which = 'no';
+            if (which === 'yes' && cond === UNKNOWN) which = 'maybe';
+            return which;
+          });
+        if (!verdicts.some((v) => v !== 'no')) continue;
+        checkoutCertain = verdicts.includes('yes');
       }
       const cond = job.if === undefined ? true : valueOf(job.if, ctx, { isIf: true });
       if (cond !== UNKNOWN && !cond) continue;

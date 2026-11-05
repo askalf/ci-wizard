@@ -2379,14 +2379,14 @@ var require_bool = __commonJS({
 var require_stringifyNumber = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyNumber.js"(exports) {
     "use strict";
-    function stringifyNumber({ format, minFractionDigits, tag, value }) {
+    function stringifyNumber({ format: format2, minFractionDigits, tag, value }) {
       if (typeof value === "bigint")
         return String(value);
       const num2 = typeof value === "number" ? value : Number(value);
       if (!isFinite(num2))
         return isNaN(num2) ? ".nan" : num2 < 0 ? "-.inf" : ".inf";
       let n = Object.is(value, -0) ? "-0" : JSON.stringify(value);
-      if (!format && minFractionDigits && (!tag || tag === "tag:yaml.org,2002:float") && /^-?\d/.test(n) && !n.includes("e")) {
+      if (!format2 && minFractionDigits && (!tag || tag === "tag:yaml.org,2002:float") && /^-?\d/.test(n) && !n.includes("e")) {
         let i = n.indexOf(".");
         if (i < 0) {
           i = n.length;
@@ -7550,8 +7550,11 @@ var import_yaml = __toESM(require_dist(), 1);
 // src/expr.mjs
 var UNKNOWN = /* @__PURE__ */ Symbol("unknown");
 var COMPLETE = /* @__PURE__ */ Symbol("complete");
-function opaque(differsFrom = []) {
-  return { [OPAQUE]: true, differsFrom: differsFrom.map((v) => String(v).toLowerCase()) };
+function opaque(differsFrom = [], tag = null) {
+  return { [OPAQUE]: true, differsFrom: differsFrom.map((v) => String(v).toLowerCase()), tag };
+}
+function opaqueTag(v) {
+  return isOpaque(v) ? v.tag : null;
 }
 var OPAQUE = /* @__PURE__ */ Symbol("opaque");
 var STATUS = /* @__PURE__ */ Symbol("status");
@@ -7715,6 +7718,33 @@ var get = (obj, key) => {
   if (hit !== void 0) return obj[hit];
   return obj[COMPLETE] ? null : UNKNOWN;
 };
+function format(template, values) {
+  let out = "";
+  for (let i = 0; i < template.length; i++) {
+    const c = template[i];
+    if (c === "{" && template[i + 1] === "{") {
+      out += "{";
+      i++;
+      continue;
+    }
+    if (c === "}" && template[i + 1] === "}") {
+      out += "}";
+      i++;
+      continue;
+    }
+    if (c === "{") {
+      const m = /^\{(\d+)\}/.exec(template.slice(i));
+      if (!m || Number(m[1]) >= values.length) return UNKNOWN;
+      const v = values[Number(m[1])];
+      out += v === null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
+      i += m[0].length - 1;
+      continue;
+    }
+    if (c === "}") return UNKNOWN;
+    out += c;
+  }
+  return out;
+}
 function fullyKnown(v) {
   if (v === UNKNOWN || isOpaque(v)) return false;
   if (Array.isArray(v)) return v.every(fullyKnown);
@@ -7804,7 +7834,7 @@ function call(name, args, ctx) {
     case "endswith":
       return String(args[0]).toLowerCase().endsWith(String(args[1]).toLowerCase());
     case "format":
-      return String(args[0]).replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n) + 1] ?? ""));
+      return format(String(args[0]), args.slice(1));
     default:
       return UNKNOWN;
   }
@@ -7880,14 +7910,14 @@ function valueOf(field, ctx, { isIf = false } = {}) {
 }
 function forkPullRequestContext(repo = "owner/repo", event = "pull_request", { hasNeeds } = {}) {
   const [owner] = String(repo).split("/");
+  const head = opaque([], "head");
   const pr = {
-    head: { repo: { full_name: opaque([repo]), fork: true, owner: { login: opaque([owner]) } } },
-    base: { repo: { full_name: repo, fork: false, owner: { login: owner } } }
+    head: { repo: { full_name: opaque([repo], "head-repo"), fork: true, owner: { login: opaque([owner]) } }, sha: head, ref: head },
+    base: { repo: { full_name: repo, owner: { login: owner } }, sha: opaque([], "base"), ref: opaque([], "base") }
   };
-  return {
-    [STATUS]: { hasNeeds },
-    github: { repository: repo, repository_owner: owner, event_name: event, event: { pull_request: pr } }
-  };
+  const github = { repository: repo, repository_owner: owner, event_name: event, event: { pull_request: pr }, head_ref: head };
+  if (event === "pull_request_target") github.sha = opaque([], "base");
+  return { [STATUS]: { hasNeeds }, github };
 }
 
 // src/workflow.mjs
@@ -8105,11 +8135,23 @@ function forkReachableSelfHosted(doc, repo = "owner/repo") {
       const ctx = forkPullRequestContext(repo, event, { hasNeeds });
       let checkoutCertain = true;
       if (event === "pull_request_target") {
-        const heads = stepsOfJob(job).filter((st) => st && typeof st === "object" && /^actions\/checkout@/.test(String(st.uses || "")) && /pull_request\.head|head_ref|head\.sha/.test(JSON.stringify(st.with || {})));
         const stepCtx = forkPullRequestContext(repo, event);
-        const runs = heads.map((st) => st.if === void 0 ? true : valueOf(st.if, stepCtx, { isIf: true })).filter((c) => c === UNKNOWN || c);
-        if (!runs.length) continue;
-        checkoutCertain = runs.some((c) => c !== UNKNOWN);
+        const verdicts = stepsOfJob(job).filter((st) => st && typeof st === "object" && /^actions\/checkout@/.test(String(st.uses || ""))).map((st) => {
+          const cond2 = st.if === void 0 ? true : valueOf(st.if, stepCtx, { isIf: true });
+          if (cond2 !== UNKNOWN && !cond2) return "no";
+          const inputs = st.with && typeof st.with === "object" ? st.with : {};
+          const ref = inputs.ref === void 0 ? null : valueOf(inputs.ref, stepCtx);
+          const repoIn = inputs.repository === void 0 ? null : valueOf(inputs.repository, stepCtx);
+          const isHead = (v) => ["head", "head-repo"].includes(opaqueTag(v));
+          let which;
+          if (isHead(ref) || isHead(repoIn)) which = "yes";
+          else if (ref === UNKNOWN || repoIn === UNKNOWN) which = "maybe";
+          else which = "no";
+          if (which === "yes" && cond2 === UNKNOWN) which = "maybe";
+          return which;
+        });
+        if (!verdicts.some((v) => v !== "no")) continue;
+        checkoutCertain = verdicts.includes("yes");
       }
       const cond = job.if === void 0 ? true : valueOf(job.if, ctx, { isIf: true });
       if (cond !== UNKNOWN && !cond) continue;

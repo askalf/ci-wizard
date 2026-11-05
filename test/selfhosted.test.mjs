@@ -226,3 +226,33 @@ test('functions of a partly known value are unknown: toJSON of a fork pull reque
   assert.equal(evaluate(parseExpr(`contains(toJSON(fromJSON('{"a":"trusted"}')), 'trusted')`), completeContext({})), true);
   assert.equal(evaluate(parseExpr(`contains(fromJSON('["self-hosted","x"]'), 'x')`), completeContext({})), true);
 });
+
+test('pull_request_target: the checkout is judged by the revision it selects for a fork', () => {
+  const target = (ref, repository = '') => `on: [pull_request_target]\njobs:\n  t:\n    runs-on: [self-hosted]\n    steps:\n      - uses: actions/checkout@v7\n        with:\n          ref: "${ref}"\n${repository ? `          repository: "${repository}"\n` : ''}      - run: make\n`;
+  // The base commit for forks, the head otherwise: not the fork's code.
+  assert.deepEqual(reach(target('${{ github.event.pull_request.head.repo.fork && github.sha || github.event.pull_request.head.sha }}')), []);
+  // The reverse picks the fork's head.
+  assert.deepEqual(reach(target('${{ github.event.pull_request.head.repo.fork && github.event.pull_request.head.sha || github.sha }}')), ['t:pull_request_target:certain']);
+  assert.deepEqual(reach(target('${{ github.head_ref }}')), ['t:pull_request_target:certain']);
+  // The head repository checked out by name is the fork's code too.
+  assert.deepEqual(reach(target('main', '${{ github.event.pull_request.head.repo.full_name }}')), ['t:pull_request_target:certain']);
+  // A merge ref built from the pull request number is unresolved: possible.
+  assert.deepEqual(reach(target('refs/pull/${{ github.event.pull_request.number }}/merge')), ['t:pull_request_target:possible']);
+  // A literal ref, or none, is the base repository's code.
+  assert.deepEqual(reach(target('main')), []);
+});
+
+test('the base repository may itself be a fork: base.repo.fork is unknown', () => {
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', '    if: github.event.pull_request.base.repo.fork\n')), ['test:pull_request:possible']);
+});
+
+test('format: doubled braces are literal braces, and malformed templates are unknown', async () => {
+  const { evaluate, parseExpr, completeContext, UNKNOWN } = await import('../src/expr.mjs');
+  const ev = (e) => evaluate(parseExpr(e), completeContext({}));
+  assert.equal(ev("format('{{{0}}}', 'x')"), '{x}');
+  assert.equal(ev("format('{{{0}}}', 'x') == '{x}'"), true);
+  assert.equal(ev("format('{0}-{1}', 'a', 'b')"), 'a-b');
+  assert.equal(ev("format('{0', 'a')"), UNKNOWN);
+  assert.equal(ev("format('{2}', 'a')"), UNKNOWN);
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', "    if: format('{{{0}}}', 'x') == '{x}'\n")), ['test:pull_request:certain']);
+});

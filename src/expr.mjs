@@ -19,8 +19,13 @@ export const COMPLETE = Symbol('complete');
  * repository's, and nothing else about it is known. Truthy (a full name is never empty); equal to
  * none of `differsFrom`; anything else about it is unknown.
  */
-export function opaque(differsFrom = []) {
-  return { [OPAQUE]: true, differsFrom: differsFrom.map((v) => String(v).toLowerCase()) };
+export function opaque(differsFrom = [], tag = null) {
+  return { [OPAQUE]: true, differsFrom: differsFrom.map((v) => String(v).toLowerCase()), tag };
+}
+
+/** The tag of an opaque value ('head' for the pull request's head commit or branch, 'base' for the base's), or null. */
+export function opaqueTag(v) {
+  return isOpaque(v) ? v.tag : null;
 }
 const OPAQUE = Symbol('opaque');
 
@@ -153,6 +158,30 @@ const get = (obj, key) => {
   return obj[COMPLETE] ? null : UNKNOWN;
 };
 
+/**
+ * GitHub's format(): {N} is the Nth argument, {{ and }} are literal braces. Anything else with a
+ * brace is malformed, and unknown rather than a guessed string.
+ */
+function format(template, values) {
+  let out = '';
+  for (let i = 0; i < template.length; i++) {
+    const c = template[i];
+    if (c === '{' && template[i + 1] === '{') { out += '{'; i++; continue; }
+    if (c === '}' && template[i + 1] === '}') { out += '}'; i++; continue; }
+    if (c === '{') {
+      const m = /^\{(\d+)\}/.exec(template.slice(i));
+      if (!m || Number(m[1]) >= values.length) return UNKNOWN;
+      const v = values[Number(m[1])];
+      out += v === null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+      i += m[0].length - 1;
+      continue;
+    }
+    if (c === '}') return UNKNOWN;
+    out += c;
+  }
+  return out;
+}
+
 /** Whether a value is known in full: no unknown or opaque part, and every object complete. */
 function fullyKnown(v) {
   if (v === UNKNOWN || isOpaque(v)) return false;
@@ -245,7 +274,7 @@ function call(name, args, ctx) {
       return Array.isArray(args[0]) ? args[0].some((x) => compare('==', x, args[1]) === true) : String(args[0]).toLowerCase().includes(String(args[1]).toLowerCase());
     case 'startswith': return String(args[0]).toLowerCase().startsWith(String(args[1]).toLowerCase());
     case 'endswith': return String(args[0]).toLowerCase().endsWith(String(args[1]).toLowerCase());
-    case 'format': return String(args[0]).replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n) + 1] ?? ''));
+    case 'format': return format(String(args[0]), args.slice(1));
     default: return UNKNOWN;
   }
 }
@@ -330,14 +359,18 @@ export function valueOf(field, ctx, { isIf = false } = {}) {
  */
 export function forkPullRequestContext(repo = 'owner/repo', event = 'pull_request', { hasNeeds } = {}) {
   const [owner] = String(repo).split('/');
+  // The head's commit and branch are opaque values tagged 'head', the base's tagged 'base', so a
+  // checkout's ref can be told apart without knowing either. github.sha is the base commit on
+  // pull_request_target (on pull_request it is a merge commit holding the head's code). Whether
+  // the base repository is itself a fork is not known from its name.
+  const head = opaque([], 'head');
   const pr = {
-    head: { repo: { full_name: opaque([repo]), fork: true, owner: { login: opaque([owner]) } } },
-    base: { repo: { full_name: repo, fork: false, owner: { login: owner } } },
+    head: { repo: { full_name: opaque([repo], 'head-repo'), fork: true, owner: { login: opaque([owner]) } }, sha: head, ref: head },
+    base: { repo: { full_name: repo, owner: { login: owner } }, sha: opaque([], 'base'), ref: opaque([], 'base') },
   };
-  return {
-    [STATUS]: { hasNeeds },
-    github: { repository: repo, repository_owner: owner, event_name: event, event: { pull_request: pr } },
-  };
+  const github = { repository: repo, repository_owner: owner, event_name: event, event: { pull_request: pr }, head_ref: head };
+  if (event === 'pull_request_target') github.sha = opaque([], 'base');
+  return { [STATUS]: { hasNeeds }, github };
 }
 
 /** A fully known context, for testing what an expression does on other events: absent fields are null. */
