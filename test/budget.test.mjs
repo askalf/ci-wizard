@@ -34,7 +34,10 @@ test('a stop near the limit names the budget and the App route', async () => {
 test('budgetText: calls and what was left, with the App route only for a small budget', () => {
   assert.equal(budgetText({ api_calls: 41, rate_limit: { limit: 1000, remaining: 959 } }), "41 API calls, 959 of 1000 left this hour; a GitHub App's token has its own 5,000 or more");
   assert.equal(budgetText({ api_calls: 41, rate_limit: { limit: 5000, remaining: 4959 } }), '41 API calls, 4959 of 5000 left this hour');
-  assert.equal(budgetText({ api_calls: 3, rate_limit: { limit: 60, remaining: null } }), "3 API calls, a limit of 60 left this hour; a GitHub App's token has its own 5,000 or more");
+  // A limit with no remaining count is never shown as what is left.
+  const noRemaining = budgetText({ api_calls: 3, rate_limit: { limit: 60, remaining: null } });
+  assert.equal(noRemaining, "3 API calls, hourly limit 60, remaining not reported; a GitHub App's token has its own 5,000 or more");
+  assert.doesNotMatch(noRemaining, /left/);
   assert.equal(budgetText({ api_calls: 41 }), '');
   assert.equal(budgetText({ rate_limit: { limit: null, remaining: 5 } }), '');
 });

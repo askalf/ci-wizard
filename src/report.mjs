@@ -43,9 +43,10 @@ export function stepLabel(name) {
 export function budgetText(a) {
   const r = a.rate_limit;
   if (!r || !num(r.limit)) return '';
-  const left = num(r.remaining) ? `${r.remaining} of ${r.limit}` : `a limit of ${r.limit}`;
+  // Without a remaining count the limit is all that is known: it is never presented as what is left.
+  const left = num(r.remaining) ? `${r.remaining} of ${r.limit} left this hour` : `hourly limit ${r.limit}, remaining not reported`;
   const app = r.limit <= 1000 ? "; a GitHub App's token has its own 5,000 or more" : '';
-  return `${num(a.api_calls) ? `${a.api_calls} API calls, ` : ''}${left} left this hour${app}`;
+  return `${num(a.api_calls) ? `${a.api_calls} API calls, ` : ''}${left}${app}`;
 }
 
 /** The opening paragraph: what to start with, and what the findings add up to against what was measured. */
