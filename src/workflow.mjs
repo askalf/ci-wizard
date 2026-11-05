@@ -273,26 +273,24 @@ function picksSelfHosted(value, raw) {
 /**
  * Whether a checkout, for a fork's pull request on pull_request_target, fetches the fork's code,
  * from its ref and repository together: 'yes', 'no' or 'maybe'.
- * - The head commit is the fork's code from whichever repository it is fetched.
- * - The base's commit or branch is the base's code, even fetched from the fork.
- * - The head branch name is the fork's code only fetched from the fork; from the base repository
- *   it names the base's own branch of that name.
- * - The fork with no ref, or a literal ref, is the fork's branch: its code.
- * - The base repository (the default) with no ref or a literal ref is the base's code.
+ * - A commit is the same code from any repository: the head commit is the fork's, the base commit
+ *   is not.
+ * - A branch name (the head's, the base's, a literal, or none for the default branch) is whatever
+ *   that branch holds in the repository it is fetched from: the fork's code from the fork, the
+ *   base's from the base repository or another fixed one.
  * Anything unresolved is 'maybe'.
  */
 export function checkoutRunsForkCode(ref, repository, baseRepo) {
   const refTag = opaqueTag(ref);
-  const repoTag = opaqueTag(repository);
   if (refTag === 'head-sha') return 'yes';
-  if (refTag === 'base') return 'no';
+  if (refTag === 'base-sha') return 'no';
+  if (ref === UNKNOWN || (ref !== null && typeof ref !== 'string' && !refTag)) return 'maybe';
   if (repository === UNKNOWN) return 'maybe';
-  const fromFork = repoTag === 'head-repo';
-  const fromBase = repository === null || (typeof repository === 'string' && repository.toLowerCase() === String(baseRepo).toLowerCase());
-  if (!fromFork && !fromBase) return repoTag ? 'maybe' : 'no';
-  if (refTag === 'head-ref') return fromFork ? 'yes' : 'no';
-  if (ref === UNKNOWN || (ref !== null && typeof ref !== 'string')) return 'maybe';
-  return fromFork ? 'yes' : 'no';
+  const repoTag = opaqueTag(repository);
+  if (repoTag === 'head-repo') return 'yes';
+  if (repoTag) return 'maybe';
+  if (repository !== null && typeof repository !== 'string') return 'maybe';
+  return 'no';
 }
 
 /**

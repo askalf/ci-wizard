@@ -221,9 +221,11 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   github.event_name == 'push'` or `if: false` never runs for one. A `github.repository` check is no
   guard: a fork's pull_request run happens in the base repository. On `pull_request_target` a job
   counts only when a checkout step whose own `if` lets it run for a fork fetches the fork's code,
-  judged from its `ref` and `repository` together: the head commit is the fork's code from any
-  repository; the base's commit or branch is not, even from the fork; the head branch name is the
-  fork's code only from the fork; the fork with no ref or a literal ref is its code.
+  judged from its `ref` and `repository` together: a commit is the same code from any repository
+  (the head commit is the fork's, the base commit is not), and a branch name (the head's, the
+  base's, a literal, or the default branch) is whatever that branch holds in the repository it is
+  fetched from, so the fork's code from the fork. A string built around a value the audit cannot
+  know (the fork owner's login) is unknown.
 - **Confidence** confirmed on a public repository when the evaluation resolves; inferred when a
   value the audit cannot know (a `vars`, `matrix` or `inputs` value) decides it, or when the
   visibility could not be read. Not reported on a private or internal repository. GitHub's approval

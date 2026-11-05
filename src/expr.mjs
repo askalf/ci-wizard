@@ -23,7 +23,7 @@ export function opaque(differsFrom = [], tag = null) {
   return { [OPAQUE]: true, differsFrom: differsFrom.map((v) => String(v).toLowerCase()), tag };
 }
 
-/** The tag of an opaque value (head-sha, head-ref, head-repo, base), or null. */
+/** The tag of an opaque value (head-sha, head-ref, base-sha, base-ref, head-repo), or null. */
 export function opaqueTag(v) {
   return isOpaque(v) ? v.tag : null;
 }
@@ -343,8 +343,10 @@ export function valueOf(field, ctx, { isIf = false } = {}) {
     const out = field.replace(/\$\{\{([\s\S]*?)\}\}/g, (_, e) => {
       let v;
       try { v = evaluate(parseExpr(e), ctx); } catch { v = UNKNOWN; }
-      if (v === UNKNOWN) unknown = true;
-      return v === UNKNOWN ? '' : String(v ?? '');
+      // An opaque value (the fork's name, a commit) has no text of its own, so a string built
+      // around one is unknown, never '[object Object]'.
+      if (v === UNKNOWN || isOpaque(v) || (v && typeof v === 'object')) unknown = true;
+      return unknown ? '' : String(v ?? '');
     });
     return unknown ? UNKNOWN : out;
   }
@@ -363,16 +365,16 @@ export function forkPullRequestContext(repo = 'owner/repo', event = 'pull_reques
   // checkout's ref can be told apart without knowing either. github.sha is the base commit on
   // pull_request_target (on pull_request it is a merge commit holding the head's code). Whether
   // the base repository is itself a fork is not known from its name.
-  // The head's commit is tagged head-sha (the fork's code from whichever repository it is fetched),
-  // its branch name head-ref (the fork's code only when fetched from the fork), the fork itself
-  // head-repo, and the base's commit and branch base.
+  // Commits and branch names are tagged apart: a commit (head-sha, base-sha) is the same code from
+  // any repository, a branch name (head-ref, base-ref) is whatever that branch holds in the
+  // repository it is fetched from. The fork itself is head-repo.
   const headRef = opaque([], 'head-ref');
   const pr = {
     head: { repo: { full_name: opaque([repo], 'head-repo'), fork: true, owner: { login: opaque([owner]) } }, sha: opaque([], 'head-sha'), ref: headRef },
-    base: { repo: { full_name: repo, owner: { login: owner } }, sha: opaque([], 'base'), ref: opaque([], 'base') },
+    base: { repo: { full_name: repo, owner: { login: owner } }, sha: opaque([], 'base-sha'), ref: opaque([], 'base-ref') },
   };
   const github = { repository: repo, repository_owner: owner, event_name: event, event: { pull_request: pr }, head_ref: headRef };
-  if (event === 'pull_request_target') github.sha = opaque([], 'base');
+  if (event === 'pull_request_target') github.sha = opaque([], 'base-sha');
   return { [STATUS]: { hasNeeds }, github };
 }
 

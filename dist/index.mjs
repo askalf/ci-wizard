@@ -7897,8 +7897,8 @@ function valueOf(field, ctx, { isIf = false } = {}) {
       } catch {
         v = UNKNOWN;
       }
-      if (v === UNKNOWN) unknown = true;
-      return v === UNKNOWN ? "" : String(v ?? "");
+      if (v === UNKNOWN || isOpaque(v) || v && typeof v === "object") unknown = true;
+      return unknown ? "" : String(v ?? "");
     });
     return unknown ? UNKNOWN : out;
   }
@@ -7909,10 +7909,10 @@ function forkPullRequestContext(repo = "owner/repo", event = "pull_request", { h
   const headRef = opaque([], "head-ref");
   const pr = {
     head: { repo: { full_name: opaque([repo], "head-repo"), fork: true, owner: { login: opaque([owner]) } }, sha: opaque([], "head-sha"), ref: headRef },
-    base: { repo: { full_name: repo, owner: { login: owner } }, sha: opaque([], "base"), ref: opaque([], "base") }
+    base: { repo: { full_name: repo, owner: { login: owner } }, sha: opaque([], "base-sha"), ref: opaque([], "base-ref") }
   };
   const github = { repository: repo, repository_owner: owner, event_name: event, event: { pull_request: pr }, head_ref: headRef };
-  if (event === "pull_request_target") github.sha = opaque([], "base");
+  if (event === "pull_request_target") github.sha = opaque([], "base-sha");
   return { [STATUS]: { hasNeeds }, github };
 }
 
@@ -8122,16 +8122,15 @@ function picksSelfHosted(value, raw) {
 }
 function checkoutRunsForkCode(ref, repository, baseRepo) {
   const refTag = opaqueTag(ref);
-  const repoTag = opaqueTag(repository);
   if (refTag === "head-sha") return "yes";
-  if (refTag === "base") return "no";
+  if (refTag === "base-sha") return "no";
+  if (ref === UNKNOWN || ref !== null && typeof ref !== "string" && !refTag) return "maybe";
   if (repository === UNKNOWN) return "maybe";
-  const fromFork = repoTag === "head-repo";
-  const fromBase = repository === null || typeof repository === "string" && repository.toLowerCase() === String(baseRepo).toLowerCase();
-  if (!fromFork && !fromBase) return repoTag ? "maybe" : "no";
-  if (refTag === "head-ref") return fromFork ? "yes" : "no";
-  if (ref === UNKNOWN || ref !== null && typeof ref !== "string") return "maybe";
-  return fromFork ? "yes" : "no";
+  const repoTag = opaqueTag(repository);
+  if (repoTag === "head-repo") return "yes";
+  if (repoTag) return "maybe";
+  if (repository !== null && typeof repository !== "string") return "maybe";
+  return "no";
 }
 function forkReachableSelfHosted(doc, repo = "owner/repo") {
   const triggers = triggersOf(doc);

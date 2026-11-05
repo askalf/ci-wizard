@@ -268,7 +268,8 @@ test('checkoutRunsForkCode: repository and revision together', async () => {
   const headSha = opaque([], 'head-sha');
   const headRef = opaque([], 'head-ref');
   const fork = opaque(['o/r'], 'head-repo');
-  const base = opaque([], 'base');
+  const base = opaque([], 'base-sha');
+  const baseRef = opaque([], 'base-ref');
   assert.equal(checkoutRunsForkCode(headSha, null, 'o/r'), 'yes');
   assert.equal(checkoutRunsForkCode(headSha, fork, 'o/r'), 'yes');
   assert.equal(checkoutRunsForkCode(base, fork, 'o/r'), 'no');
@@ -282,4 +283,20 @@ test('checkoutRunsForkCode: repository and revision together', async () => {
   assert.equal(checkoutRunsForkCode(UNKNOWN, null, 'o/r'), 'maybe');
   assert.equal(checkoutRunsForkCode(headRef, UNKNOWN, 'o/r'), 'maybe');
   assert.equal(checkoutRunsForkCode(UNKNOWN, fork, 'o/r'), 'maybe');
+  // The base's branch name from the fork is the fork's version of that branch.
+  assert.equal(checkoutRunsForkCode(baseRef, fork, 'o/r'), 'yes');
+  assert.equal(checkoutRunsForkCode(baseRef, null, 'o/r'), 'no');
+});
+
+test('pull_request_target: base.ref from the fork is the fork\'s branch; a repository built around the fork owner is unknown', () => {
+  const target = (ref, repository) => `on: [pull_request_target]\njobs:\n  t:\n    runs-on: [self-hosted]\n    steps:\n      - uses: actions/checkout@v7\n        with:\n          ref: "${ref}"\n          repository: "${repository}"\n      - run: make\n`;
+  assert.deepEqual(reach(target('${{ github.event.pull_request.base.ref }}', '${{ github.event.pull_request.head.repo.full_name }}')), ['t:pull_request_target:certain']);
+  assert.deepEqual(reach(target('${{ github.sha }}', '${{ github.event.pull_request.head.repo.full_name }}')), []);
+  assert.deepEqual(reach(target('main', '${{ github.event.pull_request.head.repo.owner.login }}/r')), ['t:pull_request_target:possible']);
+});
+
+test('interpolation around an opaque value is unknown, never [object Object]', async () => {
+  const { valueOf, forkPullRequestContext, UNKNOWN } = await import('../src/expr.mjs');
+  assert.equal(valueOf('${{ github.event.pull_request.head.repo.owner.login }}/r', forkPullRequestContext('o/r')), UNKNOWN);
+  assert.equal(valueOf('refs/heads/${{ github.event.pull_request.base.repo.full_name }}', forkPullRequestContext('o/r')), 'refs/heads/o/r');
 });
