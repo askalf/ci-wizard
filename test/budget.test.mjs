@@ -60,3 +60,50 @@ test('the report and the CLI say what budget the audit drew on', async () => {
   assert.match(o.err, /\d+ API calls, 4990 of 5000 left this hour\n/);
   assert.doesNotMatch(o.err, /GitHub App/);
 });
+
+test('the reserve holds before every attempt, retries included: no request at minRemaining or below', async () => {
+  let sent = 0;
+  // First answer: 26 left. Then the server fails, so the client would retry; the retry must not go
+  // out, because the failed attempt brought the token to the reserve.
+  const fetchImpl = async () => {
+    sent++;
+    const left = String(27 - sent);
+    return sent === 1
+      ? new Response('{}', { status: 200, headers: { 'x-ratelimit-limit': '1000', 'x-ratelimit-remaining': left } })
+      : new Response('{}', { status: 502, headers: { 'x-ratelimit-limit': '1000', 'x-ratelimit-remaining': left } });
+  };
+  const c = createClient({ fetchImpl, minRemaining: 25, backoffMs: [0, 0] });
+  await c.get('a'); // 26 left
+  await assert.rejects(c.get('b'), RateLimitError); // one attempt at 26 -> 25 left, then the retry stops
+  assert.equal(sent, 2);
+  assert.equal(c.remaining, 25);
+});
+
+test('the action logs the budget when GitHub sends the headers, and the call count when it does not', async () => {
+  const { mkdtempSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { run: runAction } = await import('../src/action-run.mjs');
+  const fetchFor = (headers) => async (url) => {
+    const path = url.replace('https://api.github.com/', '');
+    const body = path.startsWith('repos/o/r/actions/runs?') ? { workflow_runs: runs(3) }
+      : path.startsWith('repos/o/r/actions/runs/') ? { jobs: [job()] }
+        : path.startsWith('repos/o/r/contents/') ? [] : { default_branch: 'main', visibility: 'private' };
+    return new Response(JSON.stringify(body), { status: 200, headers });
+  };
+  const go = async (headers) => {
+    const dir = mkdtempSync(join(tmpdir(), 'ciw-budget-'));
+    const summary = join(dir, 'summary.md');
+    let out = '';
+    const env = { INPUT_REPOSITORY: 'o/r', INPUT_TOKEN: 'x', RUNNER_TEMP: dir, GITHUB_STEP_SUMMARY: summary };
+    assert.equal(await runAction({ env, stdout: { write: (s) => (out += s) }, fetchImpl: fetchFor(headers) }), 0);
+    return { out, summary: readFileSync(summary, 'utf8'), json: JSON.parse(readFileSync(join(dir, 'ci-wizard', 'report.json'), 'utf8')) };
+  };
+  const withHeaders = await go({ 'x-ratelimit-limit': '1000', 'x-ratelimit-remaining': '980' });
+  assert.match(withHeaders.out, /\d+ API calls, 980 of 1000 left this hour; a GitHub App's token has its own 5,000 or more; report in the job summary/);
+  assert.match(withHeaders.summary, /- API budget: \d+ API calls, 980 of 1000 left this hour/);
+  assert.deepEqual(withHeaders.json.rate_limit, { limit: 1000, remaining: 980 });
+  const without = await go({});
+  assert.match(without.out, /findings, \d+ API calls; report in the job summary/);
+  assert.doesNotMatch(without.summary, /API budget/);
+});

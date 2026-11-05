@@ -1,7 +1,7 @@
 // A small GitHub REST client: GET only, because an audit never writes. It retries a 5xx or a
-// network error twice with a short backoff, answers a 404 as null, and stops before the token's
-// rate limit runs out (RateLimitError says how many calls were left and when the limit resets),
-// so an audit never burns the budget a team's own CI needs.
+// network error twice with a short backoff, answers a 404 as null, and sends no request once the
+// token has minRemaining calls or fewer left (RateLimitError says how many were left and when the
+// limit resets), so an audit always leaves that reserve for the repository's own CI.
 
 /** Where a larger budget comes from, for a stop near the limit. */
 export const RATE_LIMIT_HINT = "a GitHub App's installation token has its own budget of 5,000 or more an hour, against a workflow's GITHUB_TOKEN's 1,000 (the README's \"Rate limits\" section)";
@@ -41,7 +41,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * @param {string} [o.token] a token with actions:read and contents:read on the repository
  * @param {typeof fetch} [o.fetchImpl]
  * @param {string} [o.baseUrl]
- * @param {number} [o.minRemaining] stop when the token has fewer calls left than this
+ * @param {number} [o.minRemaining] calls always left for others: no request is sent once the token has this many or fewer
  * @param {number[]} [o.backoffMs] wait before each retry
  */
 export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'https://api.github.com', minRemaining = 25, backoffMs = [1000, 3000] } = {}) {
@@ -53,7 +53,6 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
   let limit = null;
 
   async function request(path, { raw = false } = {}) {
-    if (remaining !== null && remaining < minRemaining) throw new RateLimitError(remaining, null, limit);
     const headers = {
       Accept: raw ? 'application/vnd.github.raw' : 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
@@ -62,6 +61,10 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
     if (token) headers.Authorization = `Bearer ${token}`;
     const url = `${baseUrl}/${path.replace(/^\//, '')}`;
     for (let attempt = 0; ; attempt++) {
+      // Checked before every attempt, retries included: a request is only sent while more than
+      // minRemaining calls are left, and costs one, so the audit always leaves at least
+      // minRemaining for the repository's own CI.
+      if (remaining !== null && remaining <= minRemaining) throw new RateLimitError(remaining, null, limit);
       let res;
       try {
         calls++;
@@ -96,7 +99,7 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
         }
         throw new GitHubError(res.status, path, msg);
       }
-      // An answer that leaves the token under minRemaining is still returned; the next call stops.
+      // An answer that brings the token down to minRemaining is still returned; the next attempt stops.
       return raw ? res.text() : res.json();
     }
   }

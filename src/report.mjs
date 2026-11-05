@@ -144,7 +144,7 @@ export function report(a, { maxFindings = 8 } = {}) {
   }
   L.push('## How it was measured', '');
   const budget = budgetText(a);
-  if (budget) L.push(`- API budget: ${budget}. An audit stops before the token runs out, so it never spends what the repository's own CI needs.`);
+  if (budget) L.push(`- API budget: ${budget}. An audit sends no request once the token has 25 calls or fewer left, so it always leaves at least 25 for the repository's own CI.`);
   L.push("- Job time = completed minus started; queue wait = started minus created; developer wait = a successful run's wall time. All from the Actions API, in whole seconds.");
   L.push('- Per-run figures are medians over the sampled successful runs of each workflow; queue and wait percentiles are over the sampled jobs and runs, so a p90 over a handful of them is close to the slowest one.');
   L.push('- Billed minutes round each GitHub-hosted job up to a whole minute, as GitHub bills it; a job counts as GitHub-hosted when its runner group is "GitHub Actions".');
