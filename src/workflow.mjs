@@ -271,6 +271,31 @@ function picksSelfHosted(value, raw) {
 }
 
 /**
+ * Whether a checkout, for a fork's pull request on pull_request_target, fetches the fork's code,
+ * from its ref and repository together: 'yes', 'no' or 'maybe'.
+ * - The head commit is the fork's code from whichever repository it is fetched.
+ * - The base's commit or branch is the base's code, even fetched from the fork.
+ * - The head branch name is the fork's code only fetched from the fork; from the base repository
+ *   it names the base's own branch of that name.
+ * - The fork with no ref, or a literal ref, is the fork's branch: its code.
+ * - The base repository (the default) with no ref or a literal ref is the base's code.
+ * Anything unresolved is 'maybe'.
+ */
+export function checkoutRunsForkCode(ref, repository, baseRepo) {
+  const refTag = opaqueTag(ref);
+  const repoTag = opaqueTag(repository);
+  if (refTag === 'head-sha') return 'yes';
+  if (refTag === 'base') return 'no';
+  if (repository === UNKNOWN) return 'maybe';
+  const fromFork = repoTag === 'head-repo';
+  const fromBase = repository === null || (typeof repository === 'string' && repository.toLowerCase() === String(baseRepo).toLowerCase());
+  if (!fromFork && !fromBase) return repoTag ? 'maybe' : 'no';
+  if (refTag === 'head-ref') return fromFork ? 'yes' : 'no';
+  if (ref === UNKNOWN || (ref !== null && typeof ref !== 'string')) return 'maybe';
+  return fromFork ? 'yes' : 'no';
+}
+
+/**
  * The jobs a pull request from a fork can send to a self-hosted runner, found by evaluating each
  * job's `if` and `runs-on` as GitHub would for such a pull request (src/expr.mjs): a job whose
  * `if` is false for it never runs, and a runs-on that picks a GitHub-hosted runner for it is safe,
@@ -306,11 +331,7 @@ export function forkReachableSelfHosted(doc, repo = 'owner/repo') {
             const inputs = st.with && typeof st.with === 'object' ? st.with : {};
             const ref = inputs.ref === undefined ? null : valueOf(inputs.ref, stepCtx);
             const repoIn = inputs.repository === undefined ? null : valueOf(inputs.repository, stepCtx);
-            const isHead = (v) => ['head', 'head-repo'].includes(opaqueTag(v));
-            let which;
-            if (isHead(ref) || isHead(repoIn)) which = 'yes';
-            else if (ref === UNKNOWN || repoIn === UNKNOWN) which = 'maybe';
-            else which = 'no';
+            let which = checkoutRunsForkCode(ref, repoIn, repo);
             if (which === 'yes' && cond === UNKNOWN) which = 'maybe';
             return which;
           });

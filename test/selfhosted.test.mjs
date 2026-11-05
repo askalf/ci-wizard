@@ -233,9 +233,14 @@ test('pull_request_target: the checkout is judged by the revision it selects for
   assert.deepEqual(reach(target('${{ github.event.pull_request.head.repo.fork && github.sha || github.event.pull_request.head.sha }}')), []);
   // The reverse picks the fork's head.
   assert.deepEqual(reach(target('${{ github.event.pull_request.head.repo.fork && github.event.pull_request.head.sha || github.sha }}')), ['t:pull_request_target:certain']);
-  assert.deepEqual(reach(target('${{ github.head_ref }}')), ['t:pull_request_target:certain']);
-  // The head repository checked out by name is the fork's code too.
+  // The head branch name is the fork's code only fetched from the fork.
+  assert.deepEqual(reach(target('${{ github.head_ref }}')), []);
+  assert.deepEqual(reach(target('${{ github.head_ref }}', '${{ github.event.pull_request.head.repo.full_name }}')), ['t:pull_request_target:certain']);
+  // The fork checked out at a literal branch is the fork's code; at the base commit it is not.
   assert.deepEqual(reach(target('main', '${{ github.event.pull_request.head.repo.full_name }}')), ['t:pull_request_target:certain']);
+  assert.deepEqual(reach(target('${{ github.sha }}', '${{ github.event.pull_request.head.repo.full_name }}')), []);
+  // The head commit is the fork's code from the base repository too.
+  assert.deepEqual(reach(target('${{ github.event.pull_request.head.sha }}', 'o/r')), ['t:pull_request_target:certain']);
   // A merge ref built from the pull request number is unresolved: possible.
   assert.deepEqual(reach(target('refs/pull/${{ github.event.pull_request.number }}/merge')), ['t:pull_request_target:possible']);
   // A literal ref, or none, is the base repository's code.
@@ -255,4 +260,26 @@ test('format: doubled braces are literal braces, and malformed templates are unk
   assert.equal(ev("format('{0', 'a')"), UNKNOWN);
   assert.equal(ev("format('{2}', 'a')"), UNKNOWN);
   assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', "    if: format('{{{0}}}', 'x') == '{x}'\n")), ['test:pull_request:certain']);
+});
+
+test('checkoutRunsForkCode: repository and revision together', async () => {
+  const { opaque, UNKNOWN } = await import('../src/expr.mjs');
+  const { checkoutRunsForkCode } = await import('../src/workflow.mjs');
+  const headSha = opaque([], 'head-sha');
+  const headRef = opaque([], 'head-ref');
+  const fork = opaque(['o/r'], 'head-repo');
+  const base = opaque([], 'base');
+  assert.equal(checkoutRunsForkCode(headSha, null, 'o/r'), 'yes');
+  assert.equal(checkoutRunsForkCode(headSha, fork, 'o/r'), 'yes');
+  assert.equal(checkoutRunsForkCode(base, fork, 'o/r'), 'no');
+  assert.equal(checkoutRunsForkCode(headRef, null, 'o/r'), 'no');
+  assert.equal(checkoutRunsForkCode(headRef, 'o/r', 'o/r'), 'no');
+  assert.equal(checkoutRunsForkCode(headRef, fork, 'o/r'), 'yes');
+  assert.equal(checkoutRunsForkCode(null, fork, 'o/r'), 'yes');
+  assert.equal(checkoutRunsForkCode('main', fork, 'o/r'), 'yes');
+  assert.equal(checkoutRunsForkCode(null, null, 'o/r'), 'no');
+  assert.equal(checkoutRunsForkCode('main', 'other/tools', 'o/r'), 'no');
+  assert.equal(checkoutRunsForkCode(UNKNOWN, null, 'o/r'), 'maybe');
+  assert.equal(checkoutRunsForkCode(headRef, UNKNOWN, 'o/r'), 'maybe');
+  assert.equal(checkoutRunsForkCode(UNKNOWN, fork, 'o/r'), 'maybe');
 });

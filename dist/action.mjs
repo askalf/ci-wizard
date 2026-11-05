@@ -7910,12 +7910,12 @@ function valueOf(field, ctx, { isIf = false } = {}) {
 }
 function forkPullRequestContext(repo = "owner/repo", event = "pull_request", { hasNeeds } = {}) {
   const [owner] = String(repo).split("/");
-  const head = opaque([], "head");
+  const headRef = opaque([], "head-ref");
   const pr = {
-    head: { repo: { full_name: opaque([repo], "head-repo"), fork: true, owner: { login: opaque([owner]) } }, sha: head, ref: head },
+    head: { repo: { full_name: opaque([repo], "head-repo"), fork: true, owner: { login: opaque([owner]) } }, sha: opaque([], "head-sha"), ref: headRef },
     base: { repo: { full_name: repo, owner: { login: owner } }, sha: opaque([], "base"), ref: opaque([], "base") }
   };
-  const github = { repository: repo, repository_owner: owner, event_name: event, event: { pull_request: pr }, head_ref: head };
+  const github = { repository: repo, repository_owner: owner, event_name: event, event: { pull_request: pr }, head_ref: headRef };
   if (event === "pull_request_target") github.sha = opaque([], "base");
   return { [STATUS]: { hasNeeds }, github };
 }
@@ -8124,6 +8124,19 @@ function picksSelfHosted(value, raw) {
   }
   return typeof value === "string" && /self-hosted/i.test(value);
 }
+function checkoutRunsForkCode(ref, repository, baseRepo) {
+  const refTag = opaqueTag(ref);
+  const repoTag = opaqueTag(repository);
+  if (refTag === "head-sha") return "yes";
+  if (refTag === "base") return "no";
+  if (repository === UNKNOWN) return "maybe";
+  const fromFork = repoTag === "head-repo";
+  const fromBase = repository === null || typeof repository === "string" && repository.toLowerCase() === String(baseRepo).toLowerCase();
+  if (!fromFork && !fromBase) return repoTag ? "maybe" : "no";
+  if (refTag === "head-ref") return fromFork ? "yes" : "no";
+  if (ref === UNKNOWN || ref !== null && typeof ref !== "string") return "maybe";
+  return fromFork ? "yes" : "no";
+}
 function forkReachableSelfHosted(doc, repo = "owner/repo") {
   const triggers = triggersOf(doc);
   const events = ["pull_request", "pull_request_target"].filter((e) => triggers.includes(e));
@@ -8142,11 +8155,7 @@ function forkReachableSelfHosted(doc, repo = "owner/repo") {
           const inputs = st.with && typeof st.with === "object" ? st.with : {};
           const ref = inputs.ref === void 0 ? null : valueOf(inputs.ref, stepCtx);
           const repoIn = inputs.repository === void 0 ? null : valueOf(inputs.repository, stepCtx);
-          const isHead = (v) => ["head", "head-repo"].includes(opaqueTag(v));
-          let which;
-          if (isHead(ref) || isHead(repoIn)) which = "yes";
-          else if (ref === UNKNOWN || repoIn === UNKNOWN) which = "maybe";
-          else which = "no";
+          let which = checkoutRunsForkCode(ref, repoIn, repo);
           if (which === "yes" && cond2 === UNKNOWN) which = "maybe";
           return which;
         });
