@@ -36,7 +36,9 @@ Measurement:
   `compare` a billed row and total.
 - New rule **short hosted jobs bill a whole minute**: hosted workflows whose billed minutes are at
   least twice their job-minutes, by 30 minutes a week or more. Its saving is in billed minutes,
-  and the report says so.
+  and the report says so. It does not fire on a public repository, whose standard hosted runners
+  are free; the report says so beside the billed figure (`visibility` in the JSON, read from the
+  repository's metadata).
 - Developer wait is shown only for workflows somebody waits on (mostly push, pull request or merge
   group runs); a scheduled or chained workflow shows none (`waited_on` in the JSON).
 - The queue-wait evidence says how many sampled jobs its p90 is over.

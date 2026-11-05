@@ -101,8 +101,11 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, workflo
   // token cannot read the repository's metadata; the advice then says to fill it in.
   const meta = await client.get(`repos/${repo}`);
   const defaultBranch = meta && typeof meta.default_branch === 'string' ? meta.default_branch : null;
+  // Standard GitHub-hosted runners are free for public repositories, so billed minutes only cost
+  // money on a private or internal one. Null when the metadata cannot be read.
+  const visibility = meta && typeof meta.visibility === 'string' ? meta.visibility : meta && typeof meta.private === 'boolean' ? (meta.private ? 'private' : 'public') : null;
   const root = (await client.get(`repos/${repo}/contents/`)) || [];
   const names = new Set((Array.isArray(root) ? root : []).map((x) => x && x.name));
   const lockfiles = LOCKFILES.filter((f) => names.has(f)).sort();
-  return { runs, byWf, samples, coveredDays, truncated, since, files, lockfiles, defaultBranch, only: wanted.length ? only : [], onlyMissing };
+  return { runs, byWf, samples, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, only: wanted.length ? only : [], onlyMissing };
 }

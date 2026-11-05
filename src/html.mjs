@@ -26,7 +26,7 @@ function section(a) {
   const tiles = [
     [Math.round(total).toLocaleString('en-US'), 'job-minutes a week', 'busiest workflows, sampled'],
     ...(num(a.billed_minutes_week_sampled) && a.billed_minutes_week_sampled > 0
-      ? [[Math.round(a.billed_minutes_week_sampled).toLocaleString('en-US'), 'billed minutes a week', 'GitHub-hosted, each job rounded up']] : []),
+      ? [[Math.round(a.billed_minutes_week_sampled).toLocaleString('en-US'), 'billed minutes a week', a.visibility === 'public' ? 'free here: a public repository' : 'GitHub-hosted, each job rounded up']] : []),
     [Math.round(saves).toLocaleString('en-US'), 'job-minutes a week', 'estimated recoverable'],
     [String(a.findings.length), 'findings', 'ranked by estimated saving'],
     [waited ? fmtS(waited.wall_p50) : '-', 'developer wait', waited ? `median run of ${esc(waited.workflow)}` : 'no workflow anyone waits on'],

@@ -188,7 +188,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 
 ## short hosted jobs bill a whole minute
 
-- **Fires when** most of the workflow's jobs ran on GitHub-hosted runners, its billed minutes are
+- **Fires when** the repository is not public (standard GitHub-hosted runners are free for public
+  repositories, so their billed minutes cost nothing there), most of the workflow's jobs ran on
+  GitHub-hosted runners, its billed minutes are
   at least twice its job-minutes, and the difference is 30 minutes a week or more. GitHub bills
   each hosted job rounded up to a whole minute, so a job of 8 s bills as 60 s.
 - **Confidence** measured. Grouped across workflows like the wrap-up tail.

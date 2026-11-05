@@ -136,8 +136,9 @@ runs in the window, or an API error, 2 usage, 3 stopped near the rate limit.
   things on each, and only hosted jobs have billed minutes, so a workflow on self-hosted runners
   shows 0 there. Self-hosted runners far from GitHub's service region pay more per uploaded log.
 - **Billed minutes are minutes, not money.** They round each hosted job up as GitHub does, but
-  larger runners, Windows and macOS cost more per minute than standard Linux, and a plan's
-  included minutes are not subtracted.
+  larger runners, Windows and macOS cost more per minute than standard Linux, a plan's included
+  minutes are not subtracted, and a public repository's standard runners are free (the report
+  says so, and the short-hosted-jobs rule does not fire there).
 - **Names and files.** A step is classified by its command when the workflow file gives one, by
   its name otherwise; reusable workflows and composite actions are read only as far as their
   calling step.

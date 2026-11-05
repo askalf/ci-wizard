@@ -221,7 +221,7 @@ const T = THRESHOLDS;
  * or 'wait' (developer wait, no minutes). The example is YAML for the fix, tailored to the
  * repository.
  */
-export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch = null }) {
+export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch = null, isPublic = false }) {
   const F = [];
   // A timing from one or two runs can be an outlier; the evidence says so rather than hiding it.
   const thin = w.thin_sample ? ` (timed from only ${w.sampled_runs} successful run${w.sampled_runs === 1 ? '' : 's'})` : '';
@@ -357,8 +357,10 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
 
   // GitHub rounds each hosted job up to a whole minute, so a run of short jobs bills far more
   // than it runs. Only GitHub-hosted jobs count; old reports without billed minutes never fire.
+  // A public repository's standard hosted runners are free: its billed minutes cost nothing, so
+  // the rule does not fire there.
   const billed = w.billed_minutes_week;
-  if (typeof billed === 'number' && w.hosted_share >= 0.5 && billed >= T.billedRatio * w.job_minutes_week && billed - w.job_minutes_week >= T.billedExcessWeek) {
+  if (!isPublic && typeof billed === 'number' && w.hosted_share >= 0.5 && billed >= T.billedRatio * w.job_minutes_week && billed - w.job_minutes_week >= T.billedExcessWeek) {
     const jobsWeek = w.jobs_per_run * (w.runs_week - (w.skipped_week || 0));
     add(0.5 * (billed - w.job_minutes_week), 'short hosted jobs bill a whole minute',
       `about ${Math.round(jobsWeek)} jobs a week averaging ${fmtS(w.median_job_s)}, but GitHub bills each hosted job rounded up to a whole minute: about ${Math.round(billed)} billed minutes a week for ${Math.round(w.job_minutes_week)} job-minutes`,
@@ -457,7 +459,7 @@ export function analyse(repo, data) {
     workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || '', week));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
-  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null })), ...repoFindings(workflows)];
+  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === 'public' })), ...repoFindings(workflows)];
   // A finding that saves under a minute a week is noise next to the rest; one that saves developer
   // wait has no minutes to compare and always stays.
   const findings = groupFindings(raw).filter((f) => f.unit === 'wait' || f.saving >= T.minSavingWeek).map((f) => ({
@@ -468,6 +470,7 @@ export function analyse(repo, data) {
     repo,
     covered_days: round(data.coveredDays, 2),
     window_truncated: Boolean(data.truncated),
+    visibility: data.visibility || null,
     only: data.only || [],
     only_missing: data.onlyMissing || [],
     runs_total: data.runs.length,

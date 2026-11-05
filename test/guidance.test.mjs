@@ -338,3 +338,28 @@ test('collect reads the default branch from the repository, and carries on witho
   const without = await collect(createClient({ fetchImpl: fakeFetch(base) }), 'o/r', { now });
   assert.equal(without.defaultBranch, null);
 });
+
+test('billed minutes on a public repository: free standard runners, so no billing finding and the report says why', () => {
+  const jobs = Array.from({ length: 4 }, () => shortJob());
+  const at = (visibility) => analyse('o/r', { ...data({ workflows: [{ name: 'Lint', runs: runs(100, { event: 'pull_request' }), jobsPerRun: [jobs, jobs, jobs], file: lintFile }] }), visibility });
+  const pub = at('public');
+  assert.equal(find(pub, 'short hosted jobs bill a whole minute').length, 0);
+  assert.equal(pub.billed_minutes_week_sampled, 400);
+  const md = report(pub);
+  assert.match(md, /free on a public repository's standard runners/);
+  assert.match(md, /This repository is public, so its standard GitHub-hosted runners are free/);
+  assert.match(html([pub]), /free here: a public repository/);
+  // Private, and unknown visibility (metadata unreadable), keep the finding.
+  assert.equal(find(at('private'), 'short hosted jobs bill a whole minute').length, 1);
+  assert.equal(find(at(null), 'short hosted jobs bill a whole minute').length, 1);
+  assert.doesNotMatch(report(at('private')), /free on a public repository/);
+});
+
+test('collect reads visibility, from visibility or from the private flag', async () => {
+  const base = { 'repos/o/r/actions/runs?': { workflow_runs: runs(3) }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents/': [] };
+  const now = new Date(Date.parse(t(7 * 86400)));
+  const get = async (meta) => (await collect(createClient({ fetchImpl: fakeFetch({ ...base, 'repos/o/r': (p) => (p === 'repos/o/r' ? meta : undefined) }) }), 'o/r', { now })).visibility;
+  assert.equal(await get({ visibility: 'internal', private: true }), 'internal');
+  assert.equal(await get({ private: false }), 'public');
+  assert.equal(await get({ private: true }), 'private');
+});

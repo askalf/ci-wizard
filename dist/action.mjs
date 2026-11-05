@@ -7526,10 +7526,11 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, workflows = 8,
   }
   const meta = await client.get(`repos/${repo}`);
   const defaultBranch = meta && typeof meta.default_branch === "string" ? meta.default_branch : null;
+  const visibility = meta && typeof meta.visibility === "string" ? meta.visibility : meta && typeof meta.private === "boolean" ? meta.private ? "private" : "public" : null;
   const root = await client.get(`repos/${repo}/contents/`) || [];
   const names = new Set((Array.isArray(root) ? root : []).map((x) => x && x.name));
   const lockfiles = LOCKFILES.filter((f) => names.has(f)).sort();
-  return { runs, byWf, samples, coveredDays, truncated, since, files, lockfiles, defaultBranch, only: wanted.length ? only : [], onlyMissing };
+  return { runs, byWf, samples, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, only: wanted.length ? only : [], onlyMissing };
 }
 
 // src/workflow.mjs
@@ -8061,7 +8062,7 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
   };
 }
 var T = THRESHOLDS;
-function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch = null }) {
+function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch = null, isPublic = false }) {
   const F = [];
   const thin = w.thin_sample ? ` (timed from only ${w.sampled_runs} successful run${w.sampled_runs === 1 ? "" : "s"})` : "";
   const add = (saving, what, evidence, fix, { confidence = "measured", tradeoff = "", example = "", unit = "job" } = {}) => F.push({
@@ -8217,7 +8218,7 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
     );
   }
   const billed = w.billed_minutes_week;
-  if (typeof billed === "number" && w.hosted_share >= 0.5 && billed >= T.billedRatio * w.job_minutes_week && billed - w.job_minutes_week >= T.billedExcessWeek) {
+  if (!isPublic && typeof billed === "number" && w.hosted_share >= 0.5 && billed >= T.billedRatio * w.job_minutes_week && billed - w.job_minutes_week >= T.billedExcessWeek) {
     const jobsWeek = w.jobs_per_run * (w.runs_week - (w.skipped_week || 0));
     add(
       0.5 * (billed - w.job_minutes_week),
@@ -8317,7 +8318,7 @@ function analyse(repo, data) {
     workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || "", week));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
-  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null })), ...repoFindings(workflows)];
+  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" })), ...repoFindings(workflows)];
   const findings = groupFindings(raw).filter((f) => f.unit === "wait" || f.saving >= T.minSavingWeek).map((f) => ({
     saving_min_week: round(f.saving, 1),
     unit: f.unit || "job",
@@ -8333,6 +8334,7 @@ function analyse(repo, data) {
     repo,
     covered_days: round(data.coveredDays, 2),
     window_truncated: Boolean(data.truncated),
+    visibility: data.visibility || null,
     only: data.only || [],
     only_missing: data.onlyMissing || [],
     runs_total: data.runs.length,
@@ -8371,7 +8373,9 @@ function summary(a) {
   const billedFindings = a.findings.filter((f) => !isWait(f) && f.unit === "billed");
   const total = Math.round(a.job_minutes_week_sampled || 0);
   const billed = num(a.billed_minutes_week_sampled) ? Math.round(a.billed_minutes_week_sampled) : null;
-  const usage = `The sampled workflows use about **${total} job-minutes a week**${billed !== null && billed > 0 ? ` (${billed} billed minutes on GitHub-hosted runners, each job rounded up to a whole minute)` : ""}.`;
+  const free = a.visibility === "public";
+  const billedNote = billed !== null && billed > 0 ? free ? ` (${billed} minutes on GitHub-hosted runners as GitHub rounds them, free on a public repository's standard runners)` : ` (${billed} billed minutes on GitHub-hosted runners, each job rounded up to a whole minute)` : "";
+  const usage = `The sampled workflows use about **${total} job-minutes a week**${billedNote}.`;
   if (!a.findings.length) {
     L.push(`${usage} Nothing crossed the thresholds in this sample: no fix is suggested.`);
     return L;
@@ -8424,7 +8428,7 @@ function report(a, { maxFindings = 8 } = {}) {
     L.push(`| ${cell(w.workflow)}${marks} | ${Math.round(w.runs_week)} | ${w.job_minutes_per_run.toFixed(1)} | ${Math.round(w.job_minutes_week)} | ${billed} | ${wait} | ${Math.round(w.wait_p50)} s / ${Math.round(w.wait_p90)} s | ${shareText(w)} |`);
   }
   L.push("");
-  L.push("- **Job-minutes** are the time jobs ran. **Billed minutes** are what GitHub charges for its hosted runners: each job rounded up to a whole minute (self-hosted jobs count 0).");
+  L.push("- **Job-minutes** are the time jobs ran. **Billed minutes** are what GitHub charges for its hosted runners: each job rounded up to a whole minute (self-hosted jobs count 0)." + (a.visibility === "public" ? " This repository is public, so its standard GitHub-hosted runners are free and these minutes cost nothing; they matter for private repositories and larger runners." : ""));
   L.push("- **Developer wait** is a successful run's wall time, start to finish. **Queue** is how long a job waited for a runner.");
   L.push(`- **Biggest shares** of job time: *work* is the job's own steps (tests, builds, scripts); *deps* dependency installs; *toolchain* runtime setup; *checkout*; *cache* restore and save; *artifacts* uploads and downloads; *overhead* the runner's "Set up job" and "Complete job"; *head* the wait before the first step starts; *tail* the time after the last step until the job reports done (log uploads).`);
   if (a.workflows.some((w) => w.thin_sample)) L.push("- † Timed from fewer than 3 successful runs in the window, so its per-run figures can be an outlier; a longer `--days` window samples more.");
