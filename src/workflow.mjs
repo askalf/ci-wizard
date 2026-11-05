@@ -2,6 +2,7 @@
 // triggers, the push branch patterns and the concurrency group. A file that does not parse yields
 // no facts, never an error: the audit then falls back to the step names the API reports.
 import { parse } from 'yaml';
+import { UNKNOWN, forkPullRequestContext, valueOf } from './expr.mjs';
 
 /** Step categories, matched on a lower-cased step name or command (a "Post " step counts with what it posts for). */
 const CATS = [
@@ -249,39 +250,53 @@ export function runsOnSelfHosted(runsOn) {
   return /self-hosted/i.test(String(runsOn));
 }
 
-/** The self-hosted labels a runs-on value names, for the example that keeps them for the repository's own pull requests. */
-export function selfHostedLabels(runsOn) {
-  const list = Array.isArray(runsOn) ? runsOn : runsOn && typeof runsOn === 'object' ? [].concat(runsOn.labels || []) : [runsOn];
-  const labels = list.map(String).filter((l) => l && !l.includes('${{'));
-  return labels.length ? labels : ['self-hosted'];
+/**
+ * Whether a resolved runs-on value picks a self-hosted runner: true, false, or null when part of it
+ * could not be resolved and the resolved part does not already say self-hosted.
+ */
+function picksSelfHosted(value, raw) {
+  const mentions = /self-hosted/i.test(typeof raw === 'string' ? raw : JSON.stringify(raw ?? ''));
+  if (value === UNKNOWN) return mentions ? null : false;
+  if (Array.isArray(value)) {
+    if (value.some((v) => typeof v === 'string' && /self-hosted/i.test(v))) return true;
+    return value.some((v) => v === UNKNOWN) && mentions ? null : false;
+  }
+  if (value && typeof value === 'object') {
+    const labels = value.labels === undefined ? [] : [].concat(value.labels);
+    return picksSelfHosted(labels.length ? labels : UNKNOWN, raw);
+  }
+  return typeof value === 'string' && /self-hosted/i.test(value);
 }
 
-// A fork guard tells a fork's pull request apart from the repository's own: it reads the head
-// repository (head.repo.full_name, head.repo.fork). A guard on github.repository is not one: a
-// fork's pull_request run happens in the base repository, so github.repository is the base.
-const FORK_GUARD = /head\.repo\b|head_repository|\.fork\b/;
-
 /**
- * The jobs a fork's pull request can send to a self-hosted runner: on pull_request, any job whose
- * runs-on can name self-hosted with no fork guard in runs-on or the job's if; on
- * pull_request_target, such a job only when a step checks out the pull request's head, since the
- * target event otherwise runs the base repository's code.
- * @returns {{ job: string, labels: string[], event: string }[]}
+ * The jobs a pull request from a fork can send to a self-hosted runner, found by evaluating each
+ * job's `if` and `runs-on` as GitHub would for such a pull request (src/expr.mjs): a job whose
+ * `if` is false for it never runs, and a runs-on that picks a GitHub-hosted runner for it is safe,
+ * whatever else the expression mentions. On pull_request_target the job counts only when a step
+ * checks out the pull request's head, since that event otherwise runs the base repository's code.
+ * `certain` is false when the if or runs-on could not be fully resolved (a vars or matrix value).
+ * @returns {{ job: string, runsOn: unknown, event: string, certain: boolean }[]}
  */
-export function forkReachableSelfHosted(doc) {
+export function forkReachableSelfHosted(doc, repo = 'owner/repo') {
   const triggers = triggersOf(doc);
-  const onPr = triggers.includes('pull_request');
-  const onTarget = triggers.includes('pull_request_target');
-  if (!onPr && !onTarget) return [];
+  const events = ['pull_request', 'pull_request_target'].filter((e) => triggers.includes(e));
   const out = [];
   for (const [id, job] of Object.entries(doc.jobs || {})) {
-    if (!job || typeof job !== 'object' || !runsOnSelfHosted(job['runs-on'])) continue;
-    const runsOnText = typeof job['runs-on'] === 'string' ? job['runs-on'] : JSON.stringify(job['runs-on']);
-    if (FORK_GUARD.test(runsOnText) || FORK_GUARD.test(String(job.if || ''))) continue;
-    const checksOutHead = stepsOfJob(job).some((st) => st && typeof st === 'object' && /^actions\/checkout@/.test(String(st.uses || ''))
-      && /pull_request\.head|head_ref|head\.sha/.test(JSON.stringify(st.with || {})));
-    if (onPr) out.push({ job: id, labels: selfHostedLabels(job['runs-on']), event: 'pull_request' });
-    else if (checksOutHead) out.push({ job: id, labels: selfHostedLabels(job['runs-on']), event: 'pull_request_target' });
+    if (!job || typeof job !== 'object' || job['runs-on'] === undefined) continue;
+    for (const event of events) {
+      if (event === 'pull_request_target') {
+        const checksOutHead = stepsOfJob(job).some((st) => st && typeof st === 'object' && /^actions\/checkout@/.test(String(st.uses || ''))
+          && /pull_request\.head|head_ref|head\.sha/.test(JSON.stringify(st.with || {})));
+        if (!checksOutHead) continue;
+      }
+      const ctx = forkPullRequestContext(repo, event);
+      const cond = job.if === undefined ? true : valueOf(job.if, ctx, { isIf: true });
+      if (cond !== UNKNOWN && !cond) continue;
+      const picks = picksSelfHosted(valueOf(job['runs-on'], ctx), job['runs-on']);
+      if (picks === false) continue;
+      out.push({ job: id, runsOn: job['runs-on'], event, certain: cond !== UNKNOWN && picks === true });
+      break;
+    }
   }
   return out;
 }

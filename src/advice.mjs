@@ -135,10 +135,24 @@ export function checkoutAdvice(checkout = {}) {
   };
 }
 
+const FORK_TO_HOSTED = "github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest'";
+
 /**
- * runs-on that keeps the repository's own pull requests on its self-hosted labels and sends a
- * fork's to a GitHub-hosted runner, the form askalf's repositories use.
+ * runs-on that sends a fork's pull requests to a GitHub-hosted runner and keeps the job's own
+ * runner selection, unchanged, for everything else. A whole-expression runs-on is wrapped as it is;
+ * a static label or list goes through fromJSON. A list or label object with expressions inside
+ * (a matrix label, a runner group) cannot be carried into one expression without changing it, so
+ * there is no example then (empty string), rather than one that drops a constraint.
  */
-export function forkGuardExample(labels = ['self-hosted']) {
-  return `runs-on: \${{ github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('${JSON.stringify(labels)}') }}`;
+export function forkGuardExample(runsOn) {
+  if (typeof runsOn === 'string') {
+    const whole = /^\s*\$\{\{([\s\S]*)\}\}\s*$/.exec(runsOn);
+    if (whole) return `runs-on: \${{ ${FORK_TO_HOSTED} || (${whole[1].trim()}) }}`;
+    if (runsOn.includes('${{')) return '';
+    return `runs-on: \${{ ${FORK_TO_HOSTED} || '${runsOn.replace(/'/g, "''")}' }}`;
+  }
+  if (Array.isArray(runsOn) && runsOn.every((l) => typeof l === 'string' && !l.includes('${{'))) {
+    return `runs-on: \${{ ${FORK_TO_HOSTED} || fromJSON('${JSON.stringify(runsOn).replace(/'/g, "''")}') }}`;
+  }
+  return '';
 }

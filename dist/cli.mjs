@@ -7547,6 +7547,304 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, workflows = 8,
 
 // src/workflow.mjs
 var import_yaml = __toESM(require_dist(), 1);
+
+// src/expr.mjs
+var UNKNOWN = /* @__PURE__ */ Symbol("unknown");
+function tokenize(src) {
+  const tokens = [];
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+    if (c === "'") {
+      let j = i + 1;
+      let s = "";
+      for (; ; ) {
+        if (j >= src.length) throw new Error("unterminated string");
+        if (src[j] === "'") {
+          if (src[j + 1] === "'") {
+            s += "'";
+            j += 2;
+            continue;
+          }
+          break;
+        }
+        s += src[j++];
+      }
+      tokens.push({ t: "lit", v: s });
+      i = j + 1;
+      continue;
+    }
+    const two = src.slice(i, i + 2);
+    if (["==", "!=", "<=", ">=", "&&", "||"].includes(two)) {
+      tokens.push({ t: "op", v: two });
+      i += 2;
+      continue;
+    }
+    if ("!<>()[].,".includes(c)) {
+      tokens.push({ t: "op", v: c });
+      i++;
+      continue;
+    }
+    const num3 = /^-?(0x[0-9a-f]+|\d+(\.\d+)?(e[+-]?\d+)?)/i.exec(src.slice(i));
+    if (num3 && (c === "-" || /\d/.test(c))) {
+      tokens.push({ t: "lit", v: Number(num3[0]) });
+      i += num3[0].length;
+      continue;
+    }
+    const id = /^[A-Za-z_][A-Za-z0-9_-]*/.exec(src.slice(i));
+    if (id) {
+      const w = id[0];
+      if (w === "true" || w === "false") tokens.push({ t: "lit", v: w === "true" });
+      else if (w === "null") tokens.push({ t: "lit", v: null });
+      else tokens.push({ t: "id", v: w });
+      i += w.length;
+      continue;
+    }
+    if (c === "*") {
+      tokens.push({ t: "op", v: "*" });
+      i++;
+      continue;
+    }
+    throw new Error(`unexpected ${c}`);
+  }
+  return tokens;
+}
+function parseExpr(src) {
+  const tokens = tokenize(src);
+  let p = 0;
+  const peek = (v) => tokens[p] && tokens[p].t === "op" && tokens[p].v === v;
+  const eat = (v) => {
+    if (!peek(v)) throw new Error(`expected ${v}`);
+    p++;
+  };
+  function or() {
+    let left = and();
+    while (peek("||")) {
+      p++;
+      left = { k: "||", a: left, b: and() };
+    }
+    return left;
+  }
+  function and() {
+    let left = cmp();
+    while (peek("&&")) {
+      p++;
+      left = { k: "&&", a: left, b: cmp() };
+    }
+    return left;
+  }
+  function cmp() {
+    const left = unary();
+    for (const op of ["==", "!=", "<=", ">=", "<", ">"]) {
+      if (peek(op)) {
+        p++;
+        return { k: op, a: left, b: unary() };
+      }
+    }
+    return left;
+  }
+  function unary() {
+    if (peek("!")) {
+      p++;
+      return { k: "!", a: unary() };
+    }
+    return postfix(primary());
+  }
+  function primary() {
+    const tok = tokens[p++];
+    if (!tok) throw new Error("unexpected end");
+    if (tok.t === "lit") return { k: "lit", v: tok.v };
+    if (tok.t === "op" && tok.v === "(") {
+      const e = or();
+      eat(")");
+      return e;
+    }
+    if (tok.t === "id") {
+      if (peek("(")) {
+        p++;
+        const args = [];
+        if (!peek(")")) {
+          args.push(or());
+          while (peek(",")) {
+            p++;
+            args.push(or());
+          }
+        }
+        eat(")");
+        return { k: "call", name: tok.v.toLowerCase(), args };
+      }
+      return { k: "ctx", path: [tok.v] };
+    }
+    throw new Error(`unexpected ${tok.v}`);
+  }
+  function postfix(node) {
+    for (; ; ) {
+      if (peek(".")) {
+        p++;
+        const tok = tokens[p++];
+        if (!tok || tok.t !== "id" && !(tok.t === "op" && tok.v === "*")) throw new Error("expected a property");
+        node = { k: "prop", of: node, key: tok.v };
+      } else if (peek("[")) {
+        p++;
+        const key = or();
+        eat("]");
+        node = { k: "index", of: node, key };
+      } else return node;
+    }
+  }
+  const tree = or();
+  if (p !== tokens.length) throw new Error("trailing input");
+  return tree;
+}
+var truthy = (v) => v !== UNKNOWN && !(v === false || v === null || v === 0 || v === "" || Number.isNaN(v));
+var falsy = (v) => v !== UNKNOWN && !truthy(v);
+var lower = (v) => typeof v === "string" ? v.toLowerCase() : v;
+var get = (obj, key) => {
+  if (obj === UNKNOWN) return UNKNOWN;
+  if (obj === null || typeof obj !== "object") return null;
+  const hit = Object.keys(obj).find((k) => k.toLowerCase() === String(key).toLowerCase());
+  return hit === void 0 ? UNKNOWN : obj[hit];
+};
+function call(name, args) {
+  if (["always", "success"].includes(name)) return true;
+  if (["failure", "cancelled"].includes(name)) return false;
+  if (args.some((a) => a === UNKNOWN)) return UNKNOWN;
+  switch (name) {
+    case "fromjson":
+      try {
+        return JSON.parse(String(args[0]));
+      } catch {
+        return UNKNOWN;
+      }
+    case "tojson":
+      return JSON.stringify(args[0]);
+    case "contains":
+      return Array.isArray(args[0]) ? args[0].some((x) => lower(x) === lower(args[1])) : String(args[0]).toLowerCase().includes(String(args[1]).toLowerCase());
+    case "startswith":
+      return String(args[0]).toLowerCase().startsWith(String(args[1]).toLowerCase());
+    case "endswith":
+      return String(args[0]).toLowerCase().endsWith(String(args[1]).toLowerCase());
+    case "format":
+      return String(args[0]).replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n) + 1] ?? ""));
+    default:
+      return UNKNOWN;
+  }
+}
+function evaluate(node, ctx) {
+  switch (node.k) {
+    case "lit":
+      return node.v;
+    case "ctx":
+      return get(ctx, node.path[0]);
+    case "prop":
+      return get(evaluate(node.of, ctx), node.key);
+    case "index": {
+      const key = evaluate(node.key, ctx);
+      return key === UNKNOWN ? UNKNOWN : get(evaluate(node.of, ctx), key);
+    }
+    case "call":
+      return call(node.name, node.args.map((a) => evaluate(a, ctx)));
+    case "!": {
+      const v = evaluate(node.a, ctx);
+      return v === UNKNOWN ? UNKNOWN : !truthy(v);
+    }
+    case "&&": {
+      const a = evaluate(node.a, ctx);
+      if (falsy(a)) return a;
+      const b = evaluate(node.b, ctx);
+      if (a === UNKNOWN) return falsy(b) ? b : UNKNOWN;
+      return b;
+    }
+    case "||": {
+      const a = evaluate(node.a, ctx);
+      if (truthy(a)) return a;
+      const b = evaluate(node.b, ctx);
+      if (a === UNKNOWN) return UNKNOWN;
+      return b;
+    }
+    default: {
+      const a = evaluate(node.a, ctx);
+      const b = evaluate(node.b, ctx);
+      if (a === UNKNOWN || b === UNKNOWN) return UNKNOWN;
+      const x = lower(a);
+      const y = lower(b);
+      switch (node.k) {
+        case "==":
+          return x === y;
+        case "!=":
+          return x !== y;
+        case "<":
+          return x < y;
+        case "<=":
+          return x <= y;
+        case ">":
+          return x > y;
+        case ">=":
+          return x >= y;
+        default:
+          return UNKNOWN;
+      }
+    }
+  }
+}
+function valueOf(field, ctx, { isIf = false } = {}) {
+  if (field === void 0) return void 0;
+  if (Array.isArray(field)) return field.map((f) => valueOf(f, ctx));
+  if (typeof field !== "string") return field;
+  const whole = /^\s*\$\{\{([\s\S]*)\}\}\s*$/.exec(field);
+  if (whole || isIf) {
+    try {
+      return evaluate(parseExpr(whole ? whole[1] : field), ctx);
+    } catch {
+      return UNKNOWN;
+    }
+  }
+  if (field.includes("${{")) {
+    let unknown = false;
+    const out = field.replace(/\$\{\{([\s\S]*?)\}\}/g, (_, e) => {
+      let v;
+      try {
+        v = evaluate(parseExpr(e), ctx);
+      } catch {
+        v = UNKNOWN;
+      }
+      if (v === UNKNOWN) unknown = true;
+      return v === UNKNOWN ? "" : String(v ?? "");
+    });
+    return unknown ? UNKNOWN : out;
+  }
+  return field;
+}
+function forkPullRequestContext(repo = "owner/repo", event = "pull_request") {
+  const [owner, name] = String(repo).split("/");
+  const pr = {
+    head: { repo: { full_name: `contributor/${name || "repo"}`, fork: true, owner: { login: "contributor" } }, ref: "patch", sha: "0".repeat(40), label: "contributor:patch" },
+    base: { repo: { full_name: repo, fork: false, owner: { login: owner } }, ref: "main" },
+    user: { login: "contributor" },
+    number: 1,
+    draft: false,
+    author_association: "CONTRIBUTOR"
+  };
+  return {
+    github: {
+      repository: repo,
+      repository_owner: owner,
+      event_name: event,
+      actor: "contributor",
+      triggering_actor: "contributor",
+      head_ref: "patch",
+      base_ref: "main",
+      ref: "refs/pull/1/merge",
+      event: { pull_request: pr, action: "synchronize", sender: { login: "contributor" } }
+    }
+  };
+}
+
+// src/workflow.mjs
 var CATS = [
   ["overhead", /^(set up job|complete job|set up runner|complete runner)$/],
   // actions/checkout, or a step named for it; not a test suite that happens to say "checkout".
@@ -7736,31 +8034,38 @@ function workflowFacts(doc) {
     checkout
   };
 }
-function runsOnSelfHosted(runsOn) {
-  if (runsOn === void 0 || runsOn === null) return false;
-  if (Array.isArray(runsOn)) return runsOn.some((l) => /self-hosted/i.test(String(l)));
-  if (typeof runsOn === "object") return Array.isArray(runsOn.labels) ? runsOn.labels.some((l) => /self-hosted/i.test(String(l))) : /self-hosted/i.test(String(runsOn.labels || ""));
-  return /self-hosted/i.test(String(runsOn));
+function picksSelfHosted(value, raw) {
+  const mentions = /self-hosted/i.test(typeof raw === "string" ? raw : JSON.stringify(raw ?? ""));
+  if (value === UNKNOWN) return mentions ? null : false;
+  if (Array.isArray(value)) {
+    if (value.some((v) => typeof v === "string" && /self-hosted/i.test(v))) return true;
+    return value.some((v) => v === UNKNOWN) && mentions ? null : false;
+  }
+  if (value && typeof value === "object") {
+    const labels = value.labels === void 0 ? [] : [].concat(value.labels);
+    return picksSelfHosted(labels.length ? labels : UNKNOWN, raw);
+  }
+  return typeof value === "string" && /self-hosted/i.test(value);
 }
-function selfHostedLabels(runsOn) {
-  const list = Array.isArray(runsOn) ? runsOn : runsOn && typeof runsOn === "object" ? [].concat(runsOn.labels || []) : [runsOn];
-  const labels = list.map(String).filter((l) => l && !l.includes("${{"));
-  return labels.length ? labels : ["self-hosted"];
-}
-var FORK_GUARD = /head\.repo\b|head_repository|\.fork\b/;
-function forkReachableSelfHosted(doc) {
+function forkReachableSelfHosted(doc, repo = "owner/repo") {
   const triggers = triggersOf(doc);
-  const onPr = triggers.includes("pull_request");
-  const onTarget = triggers.includes("pull_request_target");
-  if (!onPr && !onTarget) return [];
+  const events = ["pull_request", "pull_request_target"].filter((e) => triggers.includes(e));
   const out = [];
   for (const [id, job] of Object.entries(doc.jobs || {})) {
-    if (!job || typeof job !== "object" || !runsOnSelfHosted(job["runs-on"])) continue;
-    const runsOnText = typeof job["runs-on"] === "string" ? job["runs-on"] : JSON.stringify(job["runs-on"]);
-    if (FORK_GUARD.test(runsOnText) || FORK_GUARD.test(String(job.if || ""))) continue;
-    const checksOutHead = stepsOfJob(job).some((st) => st && typeof st === "object" && /^actions\/checkout@/.test(String(st.uses || "")) && /pull_request\.head|head_ref|head\.sha/.test(JSON.stringify(st.with || {})));
-    if (onPr) out.push({ job: id, labels: selfHostedLabels(job["runs-on"]), event: "pull_request" });
-    else if (checksOutHead) out.push({ job: id, labels: selfHostedLabels(job["runs-on"]), event: "pull_request_target" });
+    if (!job || typeof job !== "object" || job["runs-on"] === void 0) continue;
+    for (const event of events) {
+      if (event === "pull_request_target") {
+        const checksOutHead = stepsOfJob(job).some((st) => st && typeof st === "object" && /^actions\/checkout@/.test(String(st.uses || "")) && /pull_request\.head|head_ref|head\.sha/.test(JSON.stringify(st.with || {})));
+        if (!checksOutHead) continue;
+      }
+      const ctx = forkPullRequestContext(repo, event);
+      const cond = job.if === void 0 ? true : valueOf(job.if, ctx, { isIf: true });
+      if (cond !== UNKNOWN && !cond) continue;
+      const picks = picksSelfHosted(valueOf(job["runs-on"], ctx), job["runs-on"]);
+      if (picks === false) continue;
+      out.push({ job: id, runsOn: job["runs-on"], event, certain: cond !== UNKNOWN && picks === true });
+      break;
+    }
   }
   return out;
 }
@@ -7919,8 +8224,18 @@ ${lines.join("\n")}` };
     example: "# on the existing actions/checkout step: fetch only the directories the job reads\n# (cone mode, the default: list directories; files at the root are always included)\nwith:\n  sparse-checkout: |\n    src\n    test"
   };
 }
-function forkGuardExample(labels = ["self-hosted"]) {
-  return `runs-on: \${{ github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('${JSON.stringify(labels)}') }}`;
+var FORK_TO_HOSTED = "github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest'";
+function forkGuardExample(runsOn) {
+  if (typeof runsOn === "string") {
+    const whole = /^\s*\$\{\{([\s\S]*)\}\}\s*$/.exec(runsOn);
+    if (whole) return `runs-on: \${{ ${FORK_TO_HOSTED} || (${whole[1].trim()}) }}`;
+    if (runsOn.includes("${{")) return "";
+    return `runs-on: \${{ ${FORK_TO_HOSTED} || '${runsOn.replace(/'/g, "''")}' }}`;
+  }
+  if (Array.isArray(runsOn) && runsOn.every((l) => typeof l === "string" && !l.includes("${{"))) {
+    return `runs-on: \${{ ${FORK_TO_HOSTED} || fromJSON('${JSON.stringify(runsOn).replace(/'/g, "''")}') }}`;
+  }
+  return "";
 }
 
 // src/analyse.mjs
@@ -8043,7 +8358,7 @@ function outdatedRuns(workflowRuns) {
 function longestSteps(workStepSeconds) {
   return [...workStepSeconds.entries()].map(([step, seconds]) => ({ step, median_s: median(seconds), seen: seconds.length })).sort((a, b) => b.median_s - a.median_s || (a.step < b.step ? 1 : a.step > b.step ? -1 : 0) || b.seen - a.seen).slice(0, 3).map((s) => ({ ...s, median_s: Math.round(s.median_s) }));
 }
-function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor) {
+function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor, repo = "owner/repo") {
   const doc = parseWorkflow(fileText);
   const facts = workflowFacts(doc);
   const timing = timeJobs(sampledRuns, stepCommands(doc));
@@ -8102,7 +8417,7 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     concurrency_group: concurrencyGroupOf(doc),
     events,
     installers: facts.installers,
-    fork_reachable: forkReachableSelfHosted(doc),
+    fork_reachable: forkReachableSelfHosted(doc, repo),
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3)
   };
@@ -8276,16 +8591,20 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
   }
   const reach = w.fork_reachable || [];
   if (reach.length && isPublic !== "private") {
-    const jobsText = reach.slice(0, 5).map((r) => `${r.job} (${r.labels.join(", ")}${r.event === "pull_request_target" ? ", pull_request_target with the head checked out" : ""})`).join("; ");
+    const label = (r) => typeof r.runsOn === "string" ? r.runsOn : JSON.stringify(r.runsOn);
+    const certain = reach.filter((r) => r.certain);
+    const jobsText = reach.slice(0, 5).map((r) => `${r.job} (runs-on ${label(r)}${r.event === "pull_request_target" ? ", on pull_request_target with the head checked out" : ""}${r.certain ? "" : ", depending on a value the audit cannot resolve"})`).join("; ");
+    const example = forkGuardExample(reach[0].runsOn);
+    const notPublic = isPublic === true ? "" : " (if the repository is public; its visibility could not be read)";
     add(
       0,
       "fork pull requests run on self-hosted runners",
-      `${reach.length === 1 ? "job" : "jobs"} ${jobsText} ${reach.length === 1 ? "runs" : "run"} on a self-hosted runner for pull requests with no fork guard, so a pull request from a fork runs its code on your machine${isPublic === true ? "" : " (if the repository is public; its visibility could not be read)"}`,
-      "send a fork's pull requests to a GitHub-hosted runner and keep the repository's own on its self-hosted labels; GitHub's approval of fork workflows is a second line, not the guard",
+      `evaluated for a pull request from a fork, ${reach.length === 1 ? "job" : "jobs"} ${jobsText} ${certain.length ? reach.length === 1 ? "picks" : "pick" : "can pick"} a self-hosted runner, so a fork's code ${certain.length ? "runs" : "can run"} on your machine${notPublic}`,
+      "send a fork's pull requests to a GitHub-hosted runner and keep the job's own runner selection for everything else" + (example ? "" : " (this job's selection has expressions inside a list or a runner group, so wrap it by hand rather than rewrite it)") + "; GitHub's approval of fork workflows is a second line, not the guard",
       {
-        confidence: isPublic === true ? "confirmed" : "inferred",
+        confidence: isPublic === true && certain.length ? "confirmed" : "inferred",
         tradeoff: "a fork's checks then run on a GitHub-hosted runner, slower to start or billed on a private repository, and a job that needs something only the self-hosted machine has must skip for forks",
-        example: forkGuardExample(reach[0].labels),
+        example,
         unit: "risk"
       }
     );
@@ -8411,7 +8730,7 @@ function analyse(repo, data) {
     if (!jobsPerRun.length) continue;
     const rs = data.byWf.get(wf);
     const path = String(rs[0].path || "").split("@")[0];
-    workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || "", week));
+    workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || "", week, repo));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
   const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" ? true : data.visibility ? "private" : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || /* @__PURE__ */ new Map())];

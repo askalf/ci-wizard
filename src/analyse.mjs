@@ -146,7 +146,7 @@ export function longestSteps(workStepSeconds) {
 }
 
 /** Measures one workflow from its runs, its sampled jobs and its file. */
-export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor) {
+export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor, repo = 'owner/repo') {
   const doc = parseWorkflow(fileText);
   const facts = workflowFacts(doc);
   const timing = timeJobs(sampledRuns, stepCommands(doc));
@@ -208,7 +208,7 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     concurrency_group: concurrencyGroupOf(doc),
     events,
     installers: facts.installers,
-    fork_reachable: forkReachableSelfHosted(doc),
+    fork_reachable: forkReachableSelfHosted(doc, repo),
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3),
   };
@@ -375,14 +375,18 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
   // one merged (the default policy), and the audit cannot read the repository's approval setting.
   const reach = w.fork_reachable || [];
   if (reach.length && isPublic !== 'private') {
-    const jobsText = reach.slice(0, 5).map((r) => `${r.job} (${r.labels.join(', ')}${r.event === 'pull_request_target' ? ', pull_request_target with the head checked out' : ''})`).join('; ');
+    const label = (r) => (typeof r.runsOn === 'string' ? r.runsOn : JSON.stringify(r.runsOn));
+    const certain = reach.filter((r) => r.certain);
+    const jobsText = reach.slice(0, 5).map((r) => `${r.job} (runs-on ${label(r)}${r.event === 'pull_request_target' ? ', on pull_request_target with the head checked out' : ''}${r.certain ? '' : ', depending on a value the audit cannot resolve'})`).join('; ');
+    const example = forkGuardExample(reach[0].runsOn);
+    const notPublic = isPublic === true ? '' : ' (if the repository is public; its visibility could not be read)';
     add(0, 'fork pull requests run on self-hosted runners',
-      `${reach.length === 1 ? 'job' : 'jobs'} ${jobsText} ${reach.length === 1 ? 'runs' : 'run'} on a self-hosted runner for pull requests with no fork guard, so a pull request from a fork runs its code on your machine${isPublic === true ? '' : ' (if the repository is public; its visibility could not be read)'}`,
-      "send a fork's pull requests to a GitHub-hosted runner and keep the repository's own on its self-hosted labels; GitHub's approval of fork workflows is a second line, not the guard",
+      `evaluated for a pull request from a fork, ${reach.length === 1 ? 'job' : 'jobs'} ${jobsText} ${certain.length ? (reach.length === 1 ? 'picks' : 'pick') : 'can pick'} a self-hosted runner, so a fork's code ${certain.length ? 'runs' : 'can run'} on your machine${notPublic}`,
+      "send a fork's pull requests to a GitHub-hosted runner and keep the job's own runner selection for everything else" + (example ? '' : ' (this job\'s selection has expressions inside a list or a runner group, so wrap it by hand rather than rewrite it)') + "; GitHub's approval of fork workflows is a second line, not the guard",
       {
-        confidence: isPublic === true ? 'confirmed' : 'inferred',
+        confidence: isPublic === true && certain.length ? 'confirmed' : 'inferred',
         tradeoff: "a fork's checks then run on a GitHub-hosted runner, slower to start or billed on a private repository, and a job that needs something only the self-hosted machine has must skip for forks",
-        example: forkGuardExample(reach[0].labels),
+        example,
         unit: 'risk',
       });
   }
@@ -513,7 +517,7 @@ export function analyse(repo, data) {
     if (!jobsPerRun.length) continue;
     const rs = data.byWf.get(wf);
     const path = String(rs[0].path || '').split('@')[0];
-    workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || '', week));
+    workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || '', week, repo));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
   const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === 'public' ? true : data.visibility ? 'private' : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || new Map())];

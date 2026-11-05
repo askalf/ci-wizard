@@ -11,7 +11,8 @@ import { report, savingText, summary } from '../src/report.mjs';
 import { data, find, job, runs } from './helpers.mjs';
 
 const wf = (on, runsOn, extra = '') => `on: ${on}\njobs:\n  test:\n    runs-on: ${runsOn}\n${extra}    steps:\n      - run: make test\n`;
-const reach = (text) => forkReachableSelfHosted(parseWorkflow(text)).map((r) => `${r.job}:${r.event}:${r.labels.join(',')}`);
+const reach = (text, repo = 'o/r') => forkReachableSelfHosted(parseWorkflow(text), repo).map((r) => `${r.job}:${r.event}:${r.certain ? 'certain' : 'possible'}`);
+const FORK_TO_HOSTED = "github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest'";
 
 test('runsOnSelfHosted: lists, strings, label objects and expressions', () => {
   assert.equal(runsOnSelfHosted(['self-hosted', 'linux']), true);
@@ -23,27 +24,68 @@ test('runsOnSelfHosted: lists, strings, label objects and expressions', () => {
   assert.equal(runsOnSelfHosted(undefined), false);
 });
 
-test('forkReachableSelfHosted: pull_request jobs on self-hosted with no fork guard', () => {
-  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted, app-exec]')), ['test:pull_request:self-hosted,app-exec']);
-  // A guard on github.repository is not a fork guard: a fork's pull_request runs in the base repository.
-  assert.deepEqual(reach(wf('[pull_request]', "${{ github.repository == 'o/r' && fromJSON('[\"self-hosted\",\"x\"]') || 'ubuntu-latest' }}")), ['test:pull_request:self-hosted']);
-  // Guards on the head repository, in runs-on or in the job's if, are fork guards.
-  assert.deepEqual(reach(wf('[pull_request]', "${{ github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('[\"self-hosted\",\"x\"]') }}")), []);
+test('fork exposure is evaluated: a self-hosted pull_request job with no guard is exposed', () => {
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted, app-exec]')), ['test:pull_request:certain']);
+  // A check on github.repository is no guard: a fork's pull_request runs in the base repository.
+  assert.deepEqual(reach(wf('[pull_request]', "${{ github.repository == 'o/r' && fromJSON('[\"self-hosted\",\"x\"]') || 'ubuntu-latest' }}")), ['test:pull_request:certain']);
+});
+
+test('fork exposure: guards are judged by what they do for a fork, not by what they mention', () => {
+  // The askalf form sends forks to ubuntu-latest: safe.
+  assert.deepEqual(reach(wf('[pull_request]', `\${{ ${FORK_TO_HOSTED} || fromJSON('["self-hosted","x"]') }}`)), []);
+  // dario's form, with its several conditions, is safe too.
+  const dario = "${{ (github.repository != 'o/r' || github.event.pull_request && (github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login == 'dependabot[bot]')) && 'ubuntu-latest' || fromJSON('[\"self-hosted\",\"dario-exec\"]') }}";
+  assert.deepEqual(reach(wf('[pull_request]', dario)), []);
+  // The same expression with its branches reversed sends forks to self-hosted.
+  assert.deepEqual(reach(wf('[pull_request]', `\${{ github.event.pull_request.head.repo.full_name != github.repository && fromJSON('["self-hosted","x"]') || 'ubuntu-latest' }}`)), ['test:pull_request:certain']);
+  // A job if that keeps forks out is a guard; one that runs only for forks is the opposite.
   assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', '    if: ${{ !github.event.pull_request.head.repo.fork }}\n')), []);
-  // Near misses: no pull request trigger, a hosted runner.
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', '    if: github.event.pull_request.head.repo.full_name == github.repository\n')), []);
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', '    if: ${{ github.event.pull_request.head.repo.fork }}\n')), ['test:pull_request:certain']);
+});
+
+test('fork exposure: jobs that cannot run on a pull request are not exposed', () => {
+  assert.deepEqual(reach(wf('[push, pull_request]', '[self-hosted, deploy]', "    if: github.event_name == 'push'\n")), []);
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', '    if: false\n')), []);
   assert.deepEqual(reach(wf('[push]', '[self-hosted]')), []);
   assert.deepEqual(reach(wf('[pull_request]', 'ubuntu-latest')), []);
 });
 
-test('forkReachableSelfHosted: pull_request_target only when a step checks out the pull request head', () => {
-  const target = (withHead) => `on: [pull_request_target]\njobs:\n  t:\n    runs-on: [self-hosted]\n    steps:\n      - uses: actions/checkout@v7\n${withHead ? '        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n' : ''}      - run: make\n`;
-  assert.deepEqual(reach(target(false)), []);
-  assert.deepEqual(reach(target(true)), ['t:pull_request_target:self-hosted']);
+test('fork exposure: what cannot be resolved is possible, never certain, and never dropped', () => {
+  assert.deepEqual(reach(wf('[pull_request]', "${{ vars.RUNS_ON && fromJSON(vars.RUNS_ON) || fromJSON('[\"self-hosted\",\"x\"]') }}")), ['test:pull_request:possible']);
+  assert.deepEqual(reach(wf('[pull_request]', '[self-hosted]', '    if: vars.ENABLED == \'true\'\n')), ['test:pull_request:possible']);
+  assert.deepEqual(reach(wf('[pull_request]', "[self-hosted, '${{ matrix.arch }}']")), ['test:pull_request:certain']);
+  // An expression that names no self-hosted runner at all is not suspected.
+  assert.deepEqual(reach(wf('[pull_request]', '${{ matrix.os }}')), []);
 });
 
-test('the fork guard example is valid YAML and keeps the job\'s own labels', () => {
-  const y = parse(forkGuardExample(['self-hosted', 'app-exec']));
-  assert.match(y['runs-on'], /head\.repo\.full_name != github\.repository && 'ubuntu-latest' \|\| fromJSON\('\["self-hosted","app-exec"\]'\)/);
+test('fork exposure: pull_request_target only when a step checks out the pull request head', () => {
+  const target = (withHead) => `on: [pull_request_target]\njobs:\n  t:\n    runs-on: [self-hosted]\n    steps:\n      - uses: actions/checkout@v7\n${withHead ? '        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n' : ''}      - run: make\n`;
+  assert.deepEqual(reach(target(false)), []);
+  assert.deepEqual(reach(target(true)), ['t:pull_request_target:certain']);
+});
+
+test('the fork guard example keeps the job\'s own runner selection, or is left out', () => {
+  // A static list goes through fromJSON with every label.
+  const listed = parse(forkGuardExample(['self-hosted', 'app-exec']))['runs-on'];
+  assert.equal(listed, `\${{ ${FORK_TO_HOSTED} || fromJSON('["self-hosted","app-exec"]') }}`);
+  // A whole expression is wrapped as it is, so an app-exec label inside it survives.
+  const expr = "${{ fromJSON('[\"self-hosted\",\"app-exec\"]') }}";
+  const wrapped = parse(forkGuardExample(expr))['runs-on'];
+  assert.equal(wrapped, `\${{ ${FORK_TO_HOSTED} || (fromJSON('["self-hosted","app-exec"]')) }}`);
+  // A list with a matrix label, or a runner group, cannot be carried over unchanged: no example.
+  assert.equal(forkGuardExample(['self-hosted', '${{ matrix.arch }}']), '');
+  assert.equal(forkGuardExample({ group: 'build', labels: ['self-hosted'] }), '');
+  assert.equal(forkGuardExample('self-hosted'), `runs-on: \${{ ${FORK_TO_HOSTED} || 'self-hosted' }}`);
+});
+
+test('the wrapped example evaluates to hosted for a fork and to the original selection otherwise', async () => {
+  const { valueOf, forkPullRequestContext } = await import('../src/expr.mjs');
+  const runsOn = parse(forkGuardExample("${{ fromJSON('[\"self-hosted\",\"app-exec\"]') }}"))['runs-on'];
+  assert.equal(valueOf(runsOn, forkPullRequestContext('o/r')), 'ubuntu-latest');
+  const own = forkPullRequestContext('o/r');
+  own.github.event.pull_request.head.repo.full_name = 'o/r';
+  assert.deepEqual(valueOf(runsOn, own), ['self-hosted', 'app-exec']);
 });
 
 const exposed = (visibility) => analyse('o/r', {
@@ -57,7 +99,7 @@ test('fork pull requests run on self-hosted runners: a confirmed risk on a publi
   assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
   assert.equal(f.unit, 'risk');
   assert.equal(f.confidence, 'confirmed');
-  assert.match(f.evidence, /job test \(self-hosted, app-exec\) runs on a self-hosted runner for pull requests with no fork guard/);
+  assert.match(f.evidence, /evaluated for a pull request from a fork, job test \(runs-on \["self-hosted","app-exec"\]\) picks a self-hosted runner, so a fork's code runs on your machine/);
   assert.match(f.example, /fromJSON\('\["self-hosted","app-exec"\]'\)/);
   // It outranks a finding that saves minutes.
   assert.ok(find(a, 'cache dependencies').length);
