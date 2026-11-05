@@ -80,7 +80,10 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
         throw new GitHubError('network', path, err && err.message);
       }
       const left = res.headers.get('x-ratelimit-remaining');
-      if (left !== null) remaining = Number(left);
+      // An answer with a count replaces ours; an answer without one (or with one that is not a
+      // number) was still charged, so it counts as spent, like an attempt with no answer at all.
+      if (left !== null && Number.isFinite(Number(left))) remaining = Number(left);
+      else if (remaining !== null) remaining -= 1;
       const cap = res.headers.get('x-ratelimit-limit');
       if (cap !== null && Number.isFinite(Number(cap))) limit = Number(cap);
       const reset = res.headers.get('x-ratelimit-reset');

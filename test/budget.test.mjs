@@ -152,3 +152,31 @@ test('limit-only answers: the audit runs, and the report says the reserve could 
   a.rate_limit = { limit: 1000, remaining: 900 };
   assert.match(report(a), /always leaves at least 25 for the repository's own CI/);
 });
+
+test('an answer without a remaining count counts as spent, at the reserve boundary', async () => {
+  // 26 left, then an answer (a 502 the client would retry) that carries no remaining header: it
+  // was charged, so 25 are left and the retry is not sent.
+  let sent = 0;
+  const fetchImpl = async () => {
+    sent++;
+    if (sent === 1) return new Response('{}', { status: 200, headers: { 'x-ratelimit-limit': '1000', 'x-ratelimit-remaining': '26' } });
+    return new Response('{}', { status: 502, headers: {} });
+  };
+  const c = createClient({ fetchImpl, minRemaining: 25, backoffMs: [0, 0] });
+  await c.get('a');
+  await assert.rejects(c.get('b'), RateLimitError);
+  assert.equal(sent, 2);
+  assert.equal(c.remaining, 25);
+  // A 200 without the header also counts, so the next request stops at the reserve.
+  let n = 0;
+  const ok = async () => {
+    n++;
+    return new Response('{}', { status: 200, headers: n === 1 ? { 'x-ratelimit-remaining': '26' } : {} });
+  };
+  const c2 = createClient({ fetchImpl: ok, minRemaining: 25, backoffMs: [0, 0] });
+  await c2.get('a');
+  await c2.get('b');
+  assert.equal(c2.remaining, 25);
+  await assert.rejects(c2.get('c'), RateLimitError);
+  assert.equal(n, 2);
+});

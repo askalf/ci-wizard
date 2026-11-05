@@ -7427,7 +7427,8 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
         throw new GitHubError("network", path, err && err.message);
       }
       const left = res.headers.get("x-ratelimit-remaining");
-      if (left !== null) remaining = Number(left);
+      if (left !== null && Number.isFinite(Number(left))) remaining = Number(left);
+      else if (remaining !== null) remaining -= 1;
       const cap = res.headers.get("x-ratelimit-limit");
       if (cap !== null && Number.isFinite(Number(cap))) limit = Number(cap);
       const reset = res.headers.get("x-ratelimit-reset");
