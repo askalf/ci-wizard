@@ -48,7 +48,7 @@ function routes(runList, extra = {}) {
     'repos/o/r/actions/runs?': { workflow_runs: runList },
     'repos/o/r/actions/runs/': { jobs: [job({ steps })] },
     'repos/o/r/contents/.github/workflows/ci.yml': wfFile,
-    'repos/o/r/contents/': [{ name: 'package.json' }],
+    'repos/o/r/contents': [{ name: 'package.json' }],
     ...extra,
   });
 }

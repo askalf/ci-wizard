@@ -48,7 +48,7 @@ test('collect: pages until a short page, samples the busiest workflows, reads th
     'repos/o/r/actions/runs/': { jobs: [job(), { ...job(), conclusion: 'skipped' }] },
     'repos/o/r/contents/.github/workflows/ci.yml': 'on: push\n',
     'repos/o/r/contents/.github/workflows/lint.yml': 'on: pull_request\n',
-    'repos/o/r/contents/': [{ name: 'package.json' }, { name: 'package-lock.json' }],
+    'repos/o/r/contents': [{ name: 'package.json' }, { name: 'package-lock.json' }],
   }, { calls });
   const c = createClient({ fetchImpl });
   const d = await collect(c, 'o/r', { workflows: 2, perWorkflow: 2, now: new Date(Date.parse(t(7 * 86400))) });

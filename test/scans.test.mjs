@@ -267,7 +267,7 @@ test('collect reads every workflow file for the scans, up to the cap, and says h
     'repos/o/r/actions/runs/': { jobs: [job()] },
     'repos/o/r/contents/.github/workflows/': 'on: push\njobs: {}\n',
     'repos/o/r/contents/.github/workflows': listing,
-    'repos/o/r/contents/': [],
+    'repos/o/r/contents': [],
   };
   const now = new Date(Date.parse(t(7 * 86400)));
   const d = await collect(createClient({ fetchImpl: fakeFetch(routes, { calls: asked }) }), 'o/r', { now });
@@ -285,7 +285,7 @@ test('collect counts only the files it read: a missing listed file is unread, a 
     'repos/o/r/actions/runs?': { workflow_runs: runs(3).map((r) => ({ ...r, path: '.github/workflows/ci.yml' })) },
     'repos/o/r/actions/runs/': { jobs: [job()] },
     'repos/o/r/contents/.github/workflows/ci.yml': 'on: push\njobs: {}\n',
-    'repos/o/r/contents/': [],
+    'repos/o/r/contents': [],
   };
   const now = new Date(Date.parse(t(7 * 86400)));
   // gone.yml is listed but answers 404 (deleted between the listing and the read).

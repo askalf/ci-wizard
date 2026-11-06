@@ -58,7 +58,7 @@ test('collect samples a few failed, cancelled and timed-out runs as well as succ
   const list = [...runs(6), ...runs(4, { conclusion: 'failure' }), ...runs(1, { conclusion: 'timed_out' }), ...runs(3, { conclusion: 'cancelled' })]
     .map((r) => ({ ...r, path: '.github/workflows/ci.yml' }));
   const asked = [];
-  const fetchImpl = fakeFetch({ 'repos/o/r/actions/runs?': { workflow_runs: list }, 'repos/o/r/actions/runs/': { jobs: [timed(30)] }, 'repos/o/r/contents/': [] }, { calls: asked });
+  const fetchImpl = fakeFetch({ 'repos/o/r/actions/runs?': { workflow_runs: list }, 'repos/o/r/actions/runs/': { jobs: [timed(30)] }, 'repos/o/r/contents': [] }, { calls: asked });
   const d = await collect(createClient({ fetchImpl }), 'o/r', { perWorkflow: 3, perOutcome: 2, now: new Date(Date.parse(t(7 * 86400))) });
   const outcomes = d.outcomeSamples.get('CI');
   assert.equal(d.samples.get('CI').length, 3);

@@ -170,7 +170,7 @@ test('a report saved by an older version still renders, with no undefined anywhe
 
 test('--only: the named workflows are timed (by name, ignoring case), and a name with no runs is reported', async () => {
   const list = [...runs(5, { name: 'CI', path: '.github/workflows/ci.yml' }), ...runs(9, { name: 'Lint', path: '.github/workflows/lint.yml' }), ...runs(7, { name: 'Docs', path: '.github/workflows/docs.yml' })];
-  const fetchImpl = fakeFetch({ 'repos/o/r/actions/runs?': { workflow_runs: list }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents/': [] });
+  const fetchImpl = fakeFetch({ 'repos/o/r/actions/runs?': { workflow_runs: list }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents': [] });
   const d = await collect(createClient({ fetchImpl }), 'o/r', { only: ['ci', 'Release'], now: new Date(Date.parse(t(7 * 86400))) });
   assert.deepEqual([...d.samples.keys()], ['CI']);
   assert.deepEqual(d.onlyMissing, ['Release']);
@@ -184,7 +184,7 @@ test('--only: the named workflows are timed (by name, ignoring case), and a name
 
 test('cli --only takes repeated flags and comma lists', async () => {
   const list = [...runs(5, { name: 'CI', path: '.github/workflows/ci.yml' }), ...runs(9, { name: 'Lint', path: '.github/workflows/lint.yml' }), ...runs(7, { name: 'Docs', path: '.github/workflows/docs.yml' })];
-  const fetchImpl = fakeFetch({ 'repos/o/r/actions/runs?': { workflow_runs: list }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents/': [] });
+  const fetchImpl = fakeFetch({ 'repos/o/r/actions/runs?': { workflow_runs: list }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents': [] });
   const o = { out: '', err: '' };
   const io = { stdout: { write: (s) => (o.out += s) }, stderr: { write: (s) => (o.err += s) } };
   assert.equal(await cli(['o/r', '--json', '--only', 'CI,docs', '--only', 'Lint'], { env: {}, token: 'x', ...io, fetchImpl }), 0);
@@ -222,7 +222,7 @@ test('the action passes its only input through', async () => {
   const { run: runAction } = await import('../src/action-run.mjs');
   const dir = mkdtempSync(join(tmpdir(), 'ciw-only-'));
   const list = [...runs(5, { name: 'CI', path: '.github/workflows/ci.yml' }), ...runs(9, { name: 'Lint', path: '.github/workflows/lint.yml' })];
-  const fetchImpl = fakeFetch({ 'repos/o/r/actions/runs?': { workflow_runs: list }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents/': [] });
+  const fetchImpl = fakeFetch({ 'repos/o/r/actions/runs?': { workflow_runs: list }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents': [] });
   const env = { INPUT_REPOSITORY: 'o/r', INPUT_TOKEN: 'x', INPUT_ONLY: 'CI', RUNNER_TEMP: dir };
   assert.equal(await runAction({ env, stdout: { write() {} }, fetchImpl, now: new Date(Date.parse(t(7 * 86400))) }), 0);
   const saved = JSON.parse(readFileSync(join(dir, 'ci-wizard', 'report.json'), 'utf8'));
@@ -247,6 +247,16 @@ test('groupRuns: a run named after the pull request that added its workflow stay
   ]);
   assert.deepEqual([...twins.keys()].sort(), ['Build (.github/workflows/a.yml)', 'Build (.github/workflows/b.yml)']);
   // A tie between names goes to the newest run's (the API lists newest first).
+  // A workflow with run-name names each run after its pull request: the workflows API's name wins.
+  const titled = groupRuns([
+    { ...run({ name: 'Fix the parser' }), workflow_id: 7 },
+    { ...run({ name: 'Fix the parser' }), workflow_id: 7 },
+    { ...run({ name: 'Add a scan' }), workflow_id: 7 },
+  ], new Map([[7, 'Review']]));
+  assert.deepEqual([...titled.keys()], ['Review']);
+  assert.equal(titled.get('Review').length, 3);
+  // Without the API's name, the most common run name still labels it.
+  assert.deepEqual([...groupRuns([{ ...run({ name: 'Fix the parser' }), workflow_id: 7 }, { ...run({ name: 'Fix the parser' }), workflow_id: 7 }, { ...run({ name: 'Add a scan' }), workflow_id: 7 }]).keys()], ['Fix the parser']);
   const tie = groupRuns([{ ...run({ name: 'New name' }), workflow_id: 3 }, { ...run({ name: 'Old name' }), workflow_id: 3 }]);
   assert.deepEqual([...tie.keys()], ['New name']);
 });
@@ -296,7 +306,7 @@ test('--only matches the name GitHub shows: two workflows both named Build are b
     ...runs(3, { name: 'Build' }).map((r) => ({ ...r, workflow_id: 2, path: '.github/workflows/b.yml' })),
     ...runs(5, { name: 'Lint' }).map((r) => ({ ...r, workflow_id: 3, path: '.github/workflows/lint.yml' })),
   ];
-  const fetchImpl = fakeFetch({ 'repos/o/r/actions/runs?': { workflow_runs: list }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents/': [] });
+  const fetchImpl = fakeFetch({ 'repos/o/r/actions/runs?': { workflow_runs: list }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents': [] });
   const d = await collect(createClient({ fetchImpl }), 'o/r', { only: ['build'], now: new Date(Date.parse(t(7 * 86400))) });
   assert.deepEqual([...d.samples.keys()].sort(), ['Build (.github/workflows/a.yml)', 'Build (.github/workflows/b.yml)']);
   assert.deepEqual(d.onlyMissing, []);
@@ -329,8 +339,24 @@ test('the same commit runs twice: the push trigger names the repository\'s defau
   assert.match(named(['develop', 'main'], 'develop').evidence, /also matches main/);
 });
 
+test('collect labels a workflow with its own name from the workflows API, not a run-name title', async () => {
+  const titled = runs(3).map((r, i) => ({ ...r, workflow_id: 9, name: `PR title ${i}` }));
+  const routes = {
+    'repos/o/r/actions/runs?': { workflow_runs: titled },
+    'repos/o/r/actions/runs/': { jobs: [job()] },
+    'repos/o/r/actions/workflows': { workflows: [{ id: 9, name: 'Review', path: '.github/workflows/review.yml' }] },
+    'repos/o/r/contents': [],
+  };
+  const now = new Date(Date.parse(t(7 * 86400)));
+  const d = await collect(createClient({ fetchImpl: fakeFetch(routes) }), 'o/r', { now });
+  assert.deepEqual([...d.byWf.keys()], ['Review']);
+  // An unreadable workflows answer leaves the run names to label it, and the audit goes on.
+  const broken = await collect(createClient({ fetchImpl: fakeFetch({ ...routes, 'repos/o/r/actions/workflows': { __status: 500 } }) }), 'o/r', { now });
+  assert.equal(broken.byWf.size, 1);
+});
+
 test('collect reads the default branch from the repository, and carries on without it', async () => {
-  const base = { 'repos/o/r/actions/runs?': { workflow_runs: runs(3) }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents/': [] };
+  const base = { 'repos/o/r/actions/runs?': { workflow_runs: runs(3) }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents': [] };
   const now = new Date(Date.parse(t(7 * 86400)));
   const meta = (path) => (path === 'repos/o/r' ? { default_branch: 'develop' } : undefined);
   const withMeta = await collect(createClient({ fetchImpl: fakeFetch({ ...base, 'repos/o/r': meta }) }), 'o/r', { now });
@@ -356,7 +382,7 @@ test('billed minutes on a public repository: free standard runners, so no billin
 });
 
 test('collect reads visibility, from visibility or from the private flag', async () => {
-  const base = { 'repos/o/r/actions/runs?': { workflow_runs: runs(3) }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents/': [] };
+  const base = { 'repos/o/r/actions/runs?': { workflow_runs: runs(3) }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents': [] };
   const now = new Date(Date.parse(t(7 * 86400)));
   const get = async (meta) => (await collect(createClient({ fetchImpl: fakeFetch({ ...base, 'repos/o/r': (p) => (p === 'repos/o/r' ? meta : undefined) }) }), 'o/r', { now })).visibility;
   assert.equal(await get({ visibility: 'internal', private: true }), 'internal');

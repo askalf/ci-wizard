@@ -7468,7 +7468,7 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
 
 // src/collect.mjs
 var LOCKFILES = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock", "poetry.lock", "uv.lock", "Pipfile.lock", "go.sum", "Cargo.lock", "Gemfile.lock"];
-function groupRuns(runs) {
+function groupRuns(runs, names = /* @__PURE__ */ new Map()) {
   const groups = /* @__PURE__ */ new Map();
   for (const r of runs) {
     const key = r.workflow_id != null ? `id:${r.workflow_id}` : r.path ? `path:${String(r.path).split("@")[0]}` : `name:${r.name}`;
@@ -7479,7 +7479,8 @@ function groupRuns(runs) {
     const counts = /* @__PURE__ */ new Map();
     for (const r of rs) counts.set(r.name, (counts.get(r.name) || 0) + 1);
     const best = Math.max(...counts.values());
-    const name = String(rs.find((r) => counts.get(r.name) === best).name);
+    const known = rs[0].workflow_id != null ? names.get(rs[0].workflow_id) : void 0;
+    const name = typeof known === "string" && known ? known : String(rs.find((r) => counts.get(r.name) === best).name);
     return { name, path: String(rs[0].path || "").split("@")[0], rs };
   });
   const taken = /* @__PURE__ */ new Map();
@@ -7508,7 +7509,14 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   if (!runs.length) return null;
   const oldest = Math.min(...runs.map((r) => Date.parse(r.created_at)));
   const coveredDays = truncated ? Math.max(0.25, (now.getTime() - oldest) / 864e5) : days;
-  const byWf = groupRuns(runs);
+  let workflowList = null;
+  try {
+    workflowList = await client.get(`repos/${repo}/actions/workflows?per_page=100`);
+  } catch (e) {
+    if (e instanceof RateLimitError) throw e;
+  }
+  const workflowNames = new Map((workflowList && Array.isArray(workflowList.workflows) ? workflowList.workflows : []).filter((w) => w && w.id != null && typeof w.name === "string").map((w) => [w.id, w.name]));
+  const byWf = groupRuns(runs, workflowNames);
   const wanted = only.map((n2) => String(n2).trim().toLowerCase()).filter(Boolean);
   const ranked = [...byWf.entries()].sort((a, b) => b[1].length - a[1].length);
   const namesOf = (label, rs) => /* @__PURE__ */ new Set([String(label).toLowerCase(), ...rs.map((r) => String(r.name).toLowerCase())]);
@@ -7570,7 +7578,7 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   const meta = await client.get(`repos/${repo}`);
   const defaultBranch = meta && typeof meta.default_branch === "string" ? meta.default_branch : null;
   const visibility = meta && typeof meta.visibility === "string" ? meta.visibility : meta && typeof meta.private === "boolean" ? meta.private ? "private" : "public" : null;
-  const root = await client.get(`repos/${repo}/contents/`) || [];
+  const root = await client.get(`repos/${repo}/contents`) || [];
   const names = new Set((Array.isArray(root) ? root : []).map((x) => x && x.name));
   const lockfiles = LOCKFILES.filter((f) => names.has(f)).sort();
   return { runs, byWf, samples, outcomeSamples, scanFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, only: wanted.length ? only : [], onlyMissing };

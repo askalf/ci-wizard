@@ -18,7 +18,7 @@ const now = new Date(Date.parse(t(7 * 86400)));
 test('collect: a window that holds every run is the window asked for, not oldest-run-to-now', async () => {
   // 10 runs, all in the last day of a 7-day window: they are 10 runs a week, not 70.
   const recent = Array.from({ length: 10 }, (_, i) => run({ at: 6 * 86400 + i * 600 }));
-  const client = createClient({ fetchImpl: fakeFetch({ 'repos/o/r/actions/runs?': { workflow_runs: recent }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents/': [] }) });
+  const client = createClient({ fetchImpl: fakeFetch({ 'repos/o/r/actions/runs?': { workflow_runs: recent }, 'repos/o/r/actions/runs/': { jobs: [job()] }, 'repos/o/r/contents': [] }) });
   const d = await collect(client, 'o/r', { days: 7, now });
   assert.equal(d.coveredDays, 7);
   assert.equal(d.truncated, false);
@@ -30,7 +30,7 @@ test('collect: a window cut short by the run cap covers oldest-run-to-now, and s
   const fetchImpl = fakeFetch({
     'repos/o/r/actions/runs?': (path) => ({ workflow_runs: page(Number(/[?&]page=(\d+)/.exec(path)[1]) - 1) }),
     'repos/o/r/actions/runs/': { jobs: [job()] },
-    'repos/o/r/contents/': [],
+    'repos/o/r/contents': [],
   });
   const progress = [];
   const d = await collect(createClient({ fetchImpl }), 'o/r', { days: 7, now, maxPages: 2, onProgress: (m) => progress.push(m) });
@@ -127,7 +127,7 @@ function cliIO() {
 const routes = () => fakeFetch({
   'repos/o/r/actions/runs?': { workflow_runs: runs(5) },
   'repos/o/r/actions/runs/': { jobs: [job()] },
-  'repos/o/r/contents/': [],
+  'repos/o/r/contents': [],
 });
 
 test('cli: a URL works, --save keeps the JSON beside the markdown and says how to compare', async () => {
