@@ -9935,7 +9935,10 @@ ${block(ts)}` : block(ts));
 }
 function groupedEvidence(what, members, largest) {
   if (!GROUP_LEADS[what] || members.some((m) => !m.brief)) return `${largest} (shown for the largest; the same holds in the others)`;
-  const saved = (m) => (m.unit === "job" || m.unit === "billed") && m.saving >= 1 ? `, about ${Math.round(m.saving)} ${m.unit}-min/week` : "";
+  const saved = (m) => {
+    if (m.unit !== "job" && m.unit !== "billed") return "";
+    return m.saving >= 1 ? `, about ${Math.round(m.saving)} ${m.unit}-min/week` : `, under 1 ${m.unit}-min/week`;
+  };
   const thin = (m) => m.thin === null || m.thin === void 0 ? "" : `, timed from only ${m.thin} successful run${m.thin === 1 ? "" : "s"}`;
   const shown = members.slice(0, 6).map((m) => `${m.workflow} ${m.brief}${saved(m)}${thin(m)}`);
   const more = members.length > 6 ? `; and ${members.length - 6} more` : "";

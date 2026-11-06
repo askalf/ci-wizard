@@ -229,6 +229,11 @@ test('grouping: one finding per repeated kind, workflows listed, savings summed'
   const thin = { name: 'three', path: '.github/workflows/three.yml', runs: runs(100), jobsPerRun: [[job({ selfHosted: true, tail: 7 })]] };
   const [g] = find(audit([w('one', 8), thin]), 'self-hosted wrap-up tail');
   assert.match(g.evidence, /; three 7 s, about 8 job-min\/week, timed from only 1 successful run$/);
+  // Members each under a minute a week still show their saving, when together they are reported.
+  const small = (name) => ({ name, path: `.github/workflows/${name}.yml`, runs: runs(6), jobsPerRun: Array.from({ length: 3 }, () => [job({ selfHosted: true, tail: 8 })]) });
+  const [h] = find(audit([small('a'), small('b')]), 'self-hosted wrap-up tail');
+  assert.ok(h, 'two members of 0.6 job-min/week each make a 1.2 job-min/week finding');
+  assert.equal(h.evidence, 'median time after the last step before a job reports done (GitHub-hosted is about 2 s), by workflow: a 8 s, under 1 job-min/week; b 8 s, under 1 job-min/week');
 });
 
 test('findings are ranked by estimated saving, largest first', () => {
