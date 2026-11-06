@@ -163,8 +163,14 @@ test('a job left out of the advice still claims its own runs', () => {
   const file = 'on: push\njobs:\n  generic:\n    name: Test ${{ matrix.os }}\n    runs-on: ubuntu-latest\n    steps: [{run: make}]\n  ubuntu:\n    name: Test ubuntu\n    timeout-minutes: ${{ inputs.limit }}\n    runs-on: ubuntu-latest\n    steps: [{run: make}]\n';
   const a = analyse('o/r', data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[timed(60, 'Test ubuntu')]], file }] }));
   assert.equal(find(a, 'jobs without a working timeout').length, 0);
-  // The same for a reusable-workflow call: its runs ("call / build") are its own.
+  // The same for a reusable-workflow call: its children's runs ("call / build") are its own.
   const reusable = 'on: push\njobs:\n  any:\n    name: call ${{ matrix.x }}\n    runs-on: ubuntu-latest\n    steps: [{run: make}]\n  call:\n    uses: ./.github/workflows/build.yml\n';
-  const b = analyse('o/r', data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[timed(60, 'call')]], file: reusable }] }));
-  assert.equal(find(b, 'jobs without a working timeout').length, 0);
+  for (const child of ['call / build', 'call (20) / build']) {
+    const b = analyse('o/r', data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[timed(60, child)]], file: reusable }] }));
+    assert.equal(find(b, 'jobs without a working timeout').length, 0, child);
+  }
+  // A reusable call claims its children first; an ordinary job of the same name keeps its own runs.
+  const assigned = assignJobRuns([{ name: 'call ${{ matrix.x }}', reusable: false }, { name: 'call', reusable: true }], ['call / build', 'call x']);
+  assert.deepEqual(assigned.get('call'), ['call / build']);
+  assert.deepEqual(assigned.get('call ${{ matrix.x }}'), ['call x']);
 });

@@ -372,7 +372,7 @@ export function allJobTimeouts(doc) {
     if (!job || typeof job !== 'object') continue;
     const raw = job['timeout-minutes'];
     const name = typeof job.name === 'string' ? job.name : id;
-    if (job.uses !== undefined) out.push({ id, name, minutes: null, isDefault: false, judged: false });
+    if (job.uses !== undefined) out.push({ id, name, minutes: null, isDefault: false, judged: false, reusable: true });
     else if (raw === undefined || raw === null) out.push({ id, name, minutes: DEFAULT_JOB_TIMEOUT, isDefault: true, judged: true });
     else if (typeof raw === 'number' && Number.isFinite(raw)) out.push({ id, name, minutes: raw, isDefault: false, judged: true });
     else if (typeof raw === 'string' && /^\s*\d+(\.\d+)?\s*$/.test(raw)) out.push({ id, name, minutes: Number(raw), isDefault: false, judged: true });
@@ -388,9 +388,18 @@ export function allJobTimeouts(doc) {
  * text, every literal part kept in place; GitHub adds no matrix suffix to such a name. A name with
  * no literal text matches nothing.
  */
-export function jobNamePattern(fileJobName) {
+export function jobNamePattern(fileJobName, { reusable = false } = {}) {
   const base = String(fileJobName);
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // A reusable-workflow call runs no job of its own: its runs are the called workflow's jobs, named
+  // "<call> / <job>" (a matrix leg "<call> (a) / <job>"). It claims those before any ordinary job,
+  // so its children's runs are never credited to a job that only shares its name.
+  if (reusable) {
+    const literals = base.split(/\$\{\{[\s\S]*?\}\}/);
+    if (!literals.join('').trim()) return { rx: /(?!)/, specificity: 0 };
+    const head = base.includes('${{') ? literals.map(esc).join('[\\s\\S]*') : `${esc(base)}( \\(.*\\))?`;
+    return { rx: new RegExp(`^${head} / [\\s\\S]+$`), specificity: Infinity };
+  }
   if (base.includes('${{')) {
     const literals = base.split(/\$\{\{[\s\S]*?\}\}/);
     // A name that is all expression has no text to recognise its runs by: it matches nothing.
@@ -413,8 +422,9 @@ export function jobRunsOf(fileJobName, apiNames) {
  * @returns {Map<string, string[]>} file job name -> its API job names
  */
 export function assignJobRuns(fileJobNames, apiNames) {
-  const patterns = fileJobNames.map((name) => ({ name, ...jobNamePattern(name) }));
-  const out = new Map(fileJobNames.map((n) => [n, []]));
+  // Each entry is a name, or { name, reusable } for a reusable-workflow call.
+  const patterns = fileJobNames.map((j) => (typeof j === 'string' ? { name: j, ...jobNamePattern(j) } : { name: j.name, ...jobNamePattern(j.name, { reusable: j.reusable }) }));
+  const out = new Map(patterns.map((p) => [p.name, []]));
   for (const api of apiNames) {
     const hits = patterns.filter((p) => p.rx.test(api)).sort((a, b) => b.specificity - a.specificity);
     if (!hits.length || (hits[1] && hits[1].specificity === hits[0].specificity)) continue;
