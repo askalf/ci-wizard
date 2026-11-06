@@ -209,3 +209,5 @@ export async function main(argv = process.argv.slice(2), { env = process.env, st
   if (values.save) stderr.write(`ci-wizard: saved ${values.save}; after a change has run a while, save another report and run \`ci-wizard compare ${values.save} <after>.json\`\n`);
   return 0;
 }
+
+export { proxyPlan, rerunWithEnvProxy } from './proxy.mjs';

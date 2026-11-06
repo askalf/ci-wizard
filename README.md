@@ -137,6 +137,10 @@ runs in the window, or an API error, 2 usage, 3 stopped near the rate limit.
   959 of 1000 left this hour"); without them it leaves the line out. An audit that finds no runs
   writes no report.
 - `compare` reads two saved reports and needs no token.
+- Behind a proxy (`HTTPS_PROXY`, as on many self-hosted runners), the CLI and the action run
+  themselves again with `NODE_USE_ENV_PROXY=1`, the switch that makes Node's fetch use the proxy.
+  Node 22.21 and later have it; on an older Node they say the proxy is ignored, and the calls go
+  direct.
 
 ### Rate limits: a GitHub App token for a larger budget
 

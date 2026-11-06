@@ -9528,5 +9528,36 @@ No workflow runs in the last ${days} days, so there is nothing to measure yet.
   return 0;
 }
 
+// src/proxy.mjs
+import { spawnSync } from "node:child_process";
+function supportsEnvProxy(version = process.versions.node) {
+  const [major, minor] = String(version).split(".").map(Number);
+  return major >= 24 || major === 22 && minor >= 21 || major === 23;
+}
+function proxyPlan(env = process.env, version = process.versions.node) {
+  const proxy = env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy;
+  if (!proxy || env.NODE_USE_ENV_PROXY === "1") return { action: "none" };
+  if (supportsEnvProxy(version)) return { action: "rerun" };
+  return {
+    action: "unsupported",
+    message: `a proxy is set (HTTPS_PROXY), but the fetch in Node ${version} ignores it, so calls to the GitHub API go direct; Node 22.21 or later uses it`
+  };
+}
+function rerunWithEnvProxy({ env = process.env, argv = process.argv, execArgv = process.execArgv, execPath = process.execPath } = {}) {
+  const child = spawnSync(execPath, ["--disable-warning=ExperimentalWarning", "--disable-warning=UNDICI-EHPA", ...execArgv, ...argv.slice(1)], {
+    stdio: "inherit",
+    env: { ...env, NODE_USE_ENV_PROXY: "1" }
+  });
+  if (child.error) throw child.error;
+  return child.status ?? 1;
+}
+
 // src/action.mjs
-process.exitCode = await run();
+var plan = proxyPlan(process.env);
+if (plan.action === "rerun") {
+  process.exitCode = rerunWithEnvProxy();
+} else {
+  if (plan.action === "unsupported") process.stdout.write(`::warning::ci-wizard: ${plan.message}
+`);
+  process.exitCode = await run();
+}
