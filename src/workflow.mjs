@@ -334,7 +334,7 @@ const WRAPPERS = new Map([
   ['npx', ['-p', '--package']],
   ['pnpx', []],
   ['bunx', ['-p', '--package']],
-  ['uvx', ['-p', '--from', '--with', '--python', '--index', '--index-url']],
+  ['uvx', ['-p', '--python', '--from', '--with', '--with-editable', '--with-requirements', '-c', '--constraints', '--index', '--default-index', '--index-url', '--extra-index-url', '-f', '--find-links', '--directory', '--project', '--config-file', '--cache-dir']],
 ].map(([name, valued]) => [name, new Set(valued)]));
 const OPENERS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', '{']);
 

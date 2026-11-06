@@ -413,11 +413,14 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   - a SARIF upload (`github/codeql-action/upload-sarif`), unless its job runs Scorecard or a
     workflow linter (zizmor, actionlint, poutine; by action, by its image as the job's container
     or a `docker://` step, or by a command that runs one, directly or as what `go run`,
-    `pipx run` or `docker run` runs: the program, package or image past the runner's options, a
-    container's `--entrypoint`, or else a command right after the image (with `--entrypoint`
-    given, or an option there, the words after the image are the entrypoint's arguments); an option value such as `--name actionlint` is not, and `go install`
+    `pipx run` or `docker run` runs: the program, package or image past the runner's global and
+    run options; for a container, its `--entrypoint` when given (which replaces the image's own,
+    the words after the image being its arguments), or else the image and a command right after
+    it (an option there belongs to the image's entrypoint); an option value such as `--name actionlint` is not, and `go install`
     or `docker pull` alone runs nothing), whose results are about settings
-    or workflows, not the code. On a private
+    or workflows, not the code. Each job is judged
+    on its own: a linter's SARIF handed to another job as an artifact and uploaded there counts
+    as code scanning. On a private
   repository the evidence notes that code scanning needs GitHub Advanced Security.
 - **Confidence** inferred: default setup that has not run in the window, or another scanner, is not
   seen. A risk.

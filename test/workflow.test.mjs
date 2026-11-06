@@ -104,6 +104,7 @@ test('shell commands: split outside quotes, without comments or here-document bo
   assert.deepEqual(programWords(['nice', '-n', '10', 'time', '-o', 't.txt', 'bearer', 'scan', '.']), ['bearer', 'scan', '.']);
   assert.deepEqual(programWords(['npx', '--package', 'snyk', '--', 'snyk', 'code', 'test']), ['snyk', 'code', 'test']);
   assert.deepEqual(programWords(['uvx', '--from', 'semgrep==1.90', 'semgrep', 'ci']), ['semgrep', 'ci']);
+  assert.deepEqual(programWords(['uvx', '--constraints', 'req.txt', 'zizmor', '.']), ['zizmor', '.']);
   // An option outside a wrapper is the command's own.
   assert.deepEqual(programWords(['grep', '-u', 'semgrep', 'ci']), ['grep', '-u', 'semgrep', 'ci']);
   assert.deepEqual(programWords(['A=1']), []);

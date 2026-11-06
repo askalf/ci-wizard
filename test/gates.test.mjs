@@ -333,6 +333,13 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   // A linter's name as an option value, or as the scanner's own argument, is not a linter run.
   assert.ok(counts(job('      - run: docker run --name actionlint aquasec/trivy fs --format sarif . > t.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(counts(job('      - run: docker run -e TOOL=zizmor -v "$PWD:/src" aquasec/trivy fs --skip-dirs actionlint --format sarif /src > t.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  // An --entrypoint replaces the image's own: echo runs on the actionlint image, not actionlint.
+  assert.ok(counts(job('      - run: docker run --entrypoint echo rhysd/actionlint:latest hello\n      - run: trivy fs --format sarif -o t.sarif .\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  // Global options before the subcommand, with their values.
+  assert.ok(!counts(job('      - run: go -C tools run github.com/rhysd/actionlint/cmd/actionlint@latest -format sarif > a.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(!counts(job('      - run: docker --context ci run rhysd/actionlint:latest -format sarif > a.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  // A linter run through uvx with a constraints file, as Home Assistant runs zizmor.
+  assert.ok(!counts(job('      - run: |\n          uvx --constraints requirements.txt zizmor \\\n            --format=sarif . > zizmor.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   // With --entrypoint given, the words after the image are its arguments: echo runs, not actionlint.
   assert.ok(counts(job('      - run: docker run --entrypoint echo node:22 actionlint\n      - run: trivy fs --format sarif -o t.sarif .\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   // Words after the image that start with an option are the image's entrypoint's arguments.

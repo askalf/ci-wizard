@@ -8465,7 +8465,7 @@ var WRAPPERS = new Map([
   ["npx", ["-p", "--package"]],
   ["pnpx", []],
   ["bunx", ["-p", "--package"]],
-  ["uvx", ["-p", "--from", "--with", "--python", "--index", "--index-url"]]
+  ["uvx", ["-p", "--python", "--from", "--with", "--with-editable", "--with-requirements", "-c", "--constraints", "--index", "--default-index", "--index-url", "--extra-index-url", "-f", "--find-links", "--directory", "--project", "--config-file", "--cache-dir"]]
 ].map(([name, valued]) => [name, new Set(valued)]));
 var OPENERS = /* @__PURE__ */ new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{"]);
 function programWords(words) {
@@ -9040,10 +9040,10 @@ var SCAN_COMMAND = /^(semgrep (ci|scan)|snyk code test|codeql database (create|a
 var NOT_CODE_TOOLS = /* @__PURE__ */ new Set(["scorecard", "scorecard-action", "zizmor", "actionlint", "poutine"]);
 var CONTAINER_VALUED = ["-e", "--env", "--env-file", "-v", "--volume", "--mount", "-w", "--workdir", "--name", "-u", "--user", "-p", "--publish", "--network", "--net", "--entrypoint", "-l", "--label", "--platform", "--pull", "-h", "--hostname", "--add-host", "--device", "--cap-add", "--cap-drop", "--security-opt", "--tmpfs", "--ulimit", "--restart", "--log-driver", "--log-opt", "--gpus", "--ipc", "--pid", "--runtime", "--shm-size", "--stop-signal", "--cpus", "-m", "--memory", "--group-add", "--cidfile", "--dns", "--expose", "--link", "--userns", "--uts", "--volumes-from"];
 var RUNNERS = /* @__PURE__ */ new Map([
-  ["go", { valued: /* @__PURE__ */ new Set(["-C", "-o", "-p", "-tags", "-ldflags", "-gcflags", "-asmflags", "-mod", "-modfile", "-overlay", "-pkgdir", "-toolexec", "-exec"]), container: false }],
-  ["pipx", { valued: /* @__PURE__ */ new Set(["--spec", "--python", "--index-url", "--pip-args"]), container: false }],
-  ["docker", { valued: new Set(CONTAINER_VALUED), container: true }],
-  ["podman", { valued: new Set(CONTAINER_VALUED), container: true }]
+  ["go", { global: /* @__PURE__ */ new Set(["-C"]), valued: /* @__PURE__ */ new Set(["-C", "-o", "-p", "-tags", "-ldflags", "-gcflags", "-asmflags", "-mod", "-modfile", "-overlay", "-pkgdir", "-toolexec", "-exec"]), container: false }],
+  ["pipx", { global: /* @__PURE__ */ new Set(), valued: /* @__PURE__ */ new Set(["--spec", "--python", "--index-url", "--pip-args"]), container: false }],
+  ["docker", { global: /* @__PURE__ */ new Set(["-c", "--context", "-H", "--host", "--config", "-l", "--log-level", "--tlscacert", "--tlscert", "--tlskey"]), valued: new Set(CONTAINER_VALUED), container: true }],
+  ["podman", { global: /* @__PURE__ */ new Set(["-c", "--connection", "--url", "--identity", "--root", "--runroot", "--log-level", "--storage-driver", "--cgroup-manager"]), valued: new Set(CONTAINER_VALUED), container: true }]
 ]);
 function operandAt(args, from, valued) {
   for (let i = from; i < args.length; i++) {
@@ -9057,7 +9057,7 @@ function operandAt(args, from, valued) {
 function runTargets(program, args) {
   const runner = RUNNERS.get(program);
   if (!runner) return [];
-  let at = operandAt(args, 0, /* @__PURE__ */ new Set());
+  let at = operandAt(args, 0, runner.global);
   if (runner.container && args[at] === "container") at = operandAt(args, at + 1, /* @__PURE__ */ new Set());
   if (at === -1 || args[at] !== "run") return [];
   const target = operandAt(args, at + 1, runner.valued);
@@ -9068,9 +9068,10 @@ function runTargets(program, args) {
     if (args[i] === "--entrypoint") entrypoint.push(args[i + 1]);
     else if (args[i].startsWith("--entrypoint=")) entrypoint.push(args[i].slice("--entrypoint=".length));
   }
+  const replaced = entrypoint.filter((e) => e);
+  if (replaced.length) return replaced;
   const next = args[target + 1];
-  const command = !entrypoint.length && next !== void 0 && !next.startsWith("-") ? [next] : [];
-  return [args[target], ...entrypoint, ...command];
+  return [args[target], ...next !== void 0 && !next.startsWith("-") ? [next] : []];
 }
 var GATE_LIKE = /\b(test|tests|lint|build|check|checks|verify|analy[sz]e|codeql|typecheck|types|dist|unit|e2e|ci|fuzz|fuzzing)\b/i;
 var list2 = (xs, n = 6) => `${xs.slice(0, n).join(", ")}${xs.length > n ? ` and ${xs.length - n} more` : ""}`;

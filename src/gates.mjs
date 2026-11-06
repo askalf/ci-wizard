@@ -37,11 +37,13 @@ const NOT_CODE_TOOLS = new Set(['scorecard', 'scorecard-action', 'zizmor', 'acti
 // container, the image, its --entrypoint and a command given right after the image say what runs.
 // go install, docker pull and the like run nothing.
 const CONTAINER_VALUED = ['-e', '--env', '--env-file', '-v', '--volume', '--mount', '-w', '--workdir', '--name', '-u', '--user', '-p', '--publish', '--network', '--net', '--entrypoint', '-l', '--label', '--platform', '--pull', '-h', '--hostname', '--add-host', '--device', '--cap-add', '--cap-drop', '--security-opt', '--tmpfs', '--ulimit', '--restart', '--log-driver', '--log-opt', '--gpus', '--ipc', '--pid', '--runtime', '--shm-size', '--stop-signal', '--cpus', '-m', '--memory', '--group-add', '--cidfile', '--dns', '--expose', '--link', '--userns', '--uts', '--volumes-from'];
+// Each runner's global options that take a value, which come before the subcommand
+// (go -C dir run, docker --context ci run), apart from the run subcommand's own.
 const RUNNERS = new Map([
-  ['go', { valued: new Set(['-C', '-o', '-p', '-tags', '-ldflags', '-gcflags', '-asmflags', '-mod', '-modfile', '-overlay', '-pkgdir', '-toolexec', '-exec']), container: false }],
-  ['pipx', { valued: new Set(['--spec', '--python', '--index-url', '--pip-args']), container: false }],
-  ['docker', { valued: new Set(CONTAINER_VALUED), container: true }],
-  ['podman', { valued: new Set(CONTAINER_VALUED), container: true }],
+  ['go', { global: new Set(['-C']), valued: new Set(['-C', '-o', '-p', '-tags', '-ldflags', '-gcflags', '-asmflags', '-mod', '-modfile', '-overlay', '-pkgdir', '-toolexec', '-exec']), container: false }],
+  ['pipx', { global: new Set(), valued: new Set(['--spec', '--python', '--index-url', '--pip-args']), container: false }],
+  ['docker', { global: new Set(['-c', '--context', '-H', '--host', '--config', '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey']), valued: new Set(CONTAINER_VALUED), container: true }],
+  ['podman', { global: new Set(['-c', '--connection', '--url', '--identity', '--root', '--runroot', '--log-level', '--storage-driver', '--cgroup-manager']), valued: new Set(CONTAINER_VALUED), container: true }],
 ]);
 
 /** The index of the first operand in args from `from`, past options and their values; -1 if none. */
@@ -59,25 +61,26 @@ function operandAt(args, from, valued) {
 function runTargets(program, args) {
   const runner = RUNNERS.get(program);
   if (!runner) return [];
-  // The subcommand: the first word that is not an option (docker container run: the second).
-  let at = operandAt(args, 0, new Set());
+  // The subcommand: the first operand past the global options (docker container run: the second).
+  let at = operandAt(args, 0, runner.global);
   if (runner.container && args[at] === 'container') at = operandAt(args, at + 1, new Set());
   if (at === -1 || args[at] !== 'run') return [];
   const target = operandAt(args, at + 1, runner.valued);
   if (target === -1) return [];
   if (!runner.container) return [args[target]];
-  // A container runs its entrypoint (--entrypoint when given) with the words after the image. With
-  // --entrypoint given, they are all its arguments. Otherwise the word right after the image is a
-  // command only when it is not an option: an option there, and everything after it, is the
-  // image's entrypoint's.
+  // A container runs its entrypoint with the words after the image. An --entrypoint given replaces
+  // the image's own, so it alone is what runs, and the words after the image are its arguments.
+  // Otherwise the image runs, with the word right after it as its command when that is not an
+  // option (an option there, and everything after it, is the image's entrypoint's).
   const entrypoint = [];
   for (let i = at + 1; i < target; i++) {
     if (args[i] === '--entrypoint') entrypoint.push(args[i + 1]);
     else if (args[i].startsWith('--entrypoint=')) entrypoint.push(args[i].slice('--entrypoint='.length));
   }
+  const replaced = entrypoint.filter((e) => e);
+  if (replaced.length) return replaced;
   const next = args[target + 1];
-  const command = !entrypoint.length && next !== undefined && !next.startsWith('-') ? [next] : [];
-  return [args[target], ...entrypoint, ...command];
+  return [args[target], ...(next !== undefined && !next.startsWith('-') ? [next] : [])];
 }
 
 // Checks that test, build or analyse the change: the ones a merge should wait for. Matched on the
