@@ -127,6 +127,12 @@ export function envNameFor(field) {
   return last.replace(/[^A-Za-z0-9]+/g, '_').toUpperCase();
 }
 
+/** Whether a # at offset i begins a shell comment: it has to start a word. */
+const commentAt = (script, i) => script[i] === '#' && (i === 0 || /[\s;&|()]/.test(script[i - 1]));
+
+/** The offset just past a shell comment starting at i (its newline stays, as it ends the command). */
+const commentEnd = (script, i) => { const nl = script.indexOf('\n', i); return nl < 0 ? script.length : nl; };
+
 /**
  * The quote context at each expression of a shell script (posix or pwsh). Other
  * expressions are skipped as opaque text (they are what gets replaced). Returns a function from an
@@ -160,7 +166,14 @@ function quoteContexts(script, lang, spans) {
         i += 1;
         continue;
       }
-      // At the top level or inside $( ): a fresh quoting context.
+      // At the top level or inside $( ): a fresh quoting context. A comment's quotes are not quotes;
+      // an expression in it is still expanded by GitHub, and its replacement there is inert text.
+      if (commentAt(script, i)) {
+        const stop = commentEnd(script, i);
+        for (const sp of spans) if (sp.start > i && sp.start < stop) states.set(sp.start, 'none');
+        i = Math.max(stop, ...spans.filter((sp) => sp.start > i && sp.start < stop).map((sp) => sp.end));
+        continue;
+      }
       if (c === "'") stack.push('single');
       else if (c === '"') stack.push('double');
       else if (two === '$(') { stack.push('subst'); i += 2; continue; }
@@ -176,8 +189,14 @@ function quoteContexts(script, lang, spans) {
         continue;
       }
       if (c === '`') { i += 2; continue; }
-      if (two === '@"' || two === "@'" || two === '$(') return null; // here-strings, subexpressions
+      if (two === '@"' || two === "@'" || two === '$(' || two === '<#') return null; // here-strings, subexpressions, block comments
       if (t === 'double') { if (c === '"') stack.pop(); i += 1; continue; }
+      if (commentAt(script, i)) {
+        const stop = commentEnd(script, i);
+        for (const sp of spans) if (sp.start > i && sp.start < stop) states.set(sp.start, 'none');
+        i = Math.max(stop, ...spans.filter((sp) => sp.start > i && sp.start < stop).map((sp) => sp.end));
+        continue;
+      }
       if (c === "'") stack.push('single');
       else if (c === '"') stack.push('double');
       i += 1;
@@ -244,6 +263,13 @@ function commandAt(script, offset, lang) {
     }
     if (c === (lang === 'pwsh' ? '`' : '\\')) { i += 1; continue; }
     if (quote === '"') { if (c === '"') quote = null; else if (c === '$' && script[i + 1] === '(') { depth += 1; i += 1; } continue; }
+    if (depth === 0 && commentAt(script, i)) {
+      // A comment's quotes are not quotes; it ends at the newline, which ends the command.
+      let stop = commentEnd(script, i);
+      for (const [a, b] of spans) if (a > i && a < stop) stop = Math.max(stop, b);
+      i = stop - 1;
+      continue;
+    }
     if (c === "'" || c === '"') quote = c;
     else if (c === '$' && script[i + 1] === '(') { depth += 1; i += 1; }
     else if (c === ')' && depth > 0) depth -= 1;
@@ -257,9 +283,12 @@ function commandAt(script, offset, lang) {
 
 /** Whether an expression at `offset` is handed to a second parser (see NESTED). */
 export function nestedInterpreter(script, offset, lang) {
-  // A continuation joins two lines into one command (bash \<newline> -c): read it as the space it is.
+  // A continuation joins two lines into one command. The shell removes a backslash-newline pair
+  // outright, so it can split a word (bash -\<newline>c is bash -c) and is removed here too, leaving
+  // any whitespace around it; PowerShell's backtick-newline reads as whitespace.
   const text = lang === 'js' ? script
-    : commandAt(script, offset, lang).replace(lang === 'pwsh' ? /`\r?\n/g : /\\\r?\n/g, ' ');
+    : lang === 'pwsh' ? commandAt(script, offset, lang).replace(/`\r?\n/g, ' ')
+      : commandAt(script, offset, lang).replace(/\\\r?\n/g, '');
   return (NESTED[lang] || []).some((re) => re.test(text));
 }
 
@@ -292,10 +321,19 @@ function rewriteJs(script, hits, nameOf, spans) {
     if (hitAt.has(i)) { out += ref(i); i = endAt.get(i); continue; }
     if (endAt.has(i)) { out += script.slice(i, endAt.get(i)); i = endAt.get(i); continue; }
     if (two === '//' || two === '/*') {
+      // GitHub expands an expression before JavaScript sees the comment, so a body with a newline
+      // (or */) would end the comment and run as code: the expression is replaced here too, with
+      // the inert name of the variable.
       const close = two === '//' ? script.indexOf('\n', i) : script.indexOf('*/', i + 2);
       const stop = close < 0 ? script.length : two === '//' ? close : close + 2;
-      out += script.slice(i, stop);
-      i = stop;
+      let j = i;
+      while (j < stop) {
+        if (hitAt.has(j)) { out += ref(j); j = endAt.get(j); continue; }
+        if (endAt.has(j)) { out += script.slice(j, endAt.get(j)); j = endAt.get(j); continue; }
+        out += script[j];
+        j += 1;
+      }
+      i = Math.max(stop, j);
       continue;
     }
     if (c === "'" || c === '"') {

@@ -3998,7 +3998,7 @@ var require_resolve_block_map = __commonJS({
       if (ctx.atRoot)
         ctx.atRoot = false;
       let offset = bm.offset;
-      let commentEnd = null;
+      let commentEnd2 = null;
       for (const collItem of bm.items) {
         const { start, key, sep, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
@@ -4018,7 +4018,7 @@ var require_resolve_block_map = __commonJS({
               onError(offset, "BAD_INDENT", startColMsg);
           }
           if (!keyProps.anchor && !keyProps.tag && !sep) {
-            commentEnd = keyProps.end;
+            commentEnd2 = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
                 map.comment += "\n" + keyProps.comment;
@@ -4080,9 +4080,9 @@ var require_resolve_block_map = __commonJS({
           map.items.push(pair);
         }
       }
-      if (commentEnd && commentEnd < offset)
-        onError(commentEnd, "IMPOSSIBLE", "Map comment with trailing content");
-      map.range = [bm.offset, offset, commentEnd ?? offset];
+      if (commentEnd2 && commentEnd2 < offset)
+        onError(commentEnd2, "IMPOSSIBLE", "Map comment with trailing content");
+      map.range = [bm.offset, offset, commentEnd2 ?? offset];
       return map;
     }
     exports.resolveBlockMap = resolveBlockMap;
@@ -4104,7 +4104,7 @@ var require_resolve_block_seq = __commonJS({
       if (ctx.atKey)
         ctx.atKey = false;
       let offset = bs.offset;
-      let commentEnd = null;
+      let commentEnd2 = null;
       for (const { start, value } of bs.items) {
         const props = resolveProps.resolveProps(start, {
           indicator: "seq-item-ind",
@@ -4121,7 +4121,7 @@ var require_resolve_block_seq = __commonJS({
             else
               onError(offset, "MISSING_CHAR", "Sequence item without - indicator");
           } else {
-            commentEnd = props.end;
+            commentEnd2 = props.end;
             if (props.comment)
               seq.comment = props.comment;
             continue;
@@ -4133,7 +4133,7 @@ var require_resolve_block_seq = __commonJS({
         offset = node.range[2];
         seq.items.push(node);
       }
-      seq.range = [bs.offset, offset, commentEnd ?? offset];
+      seq.range = [bs.offset, offset, commentEnd2 ?? offset];
       return seq;
     }
     exports.resolveBlockSeq = resolveBlockSeq;
@@ -8387,6 +8387,11 @@ function envNameFor(field) {
   const last = parts.slice(-2).join("_").replace(/^pull_request_/, "PR_").replace(/^github_/, "");
   return last.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase();
 }
+var commentAt = (script, i) => script[i] === "#" && (i === 0 || /[\s;&|()]/.test(script[i - 1]));
+var commentEnd = (script, i) => {
+  const nl = script.indexOf("\n", i);
+  return nl < 0 ? script.length : nl;
+};
 function quoteContexts(script, lang, spans) {
   const at = new Map(spans.map((sp) => [sp.start, sp]));
   const states = /* @__PURE__ */ new Map();
@@ -8424,6 +8429,12 @@ function quoteContexts(script, lang, spans) {
         i += 1;
         continue;
       }
+      if (commentAt(script, i)) {
+        const stop = commentEnd(script, i);
+        for (const sp2 of spans) if (sp2.start > i && sp2.start < stop) states.set(sp2.start, "none");
+        i = Math.max(stop, ...spans.filter((sp2) => sp2.start > i && sp2.start < stop).map((sp2) => sp2.end));
+        continue;
+      }
       if (c === "'") stack.push("single");
       else if (c === '"') stack.push("double");
       else if (two === "$(") {
@@ -8451,10 +8462,16 @@ function quoteContexts(script, lang, spans) {
         i += 2;
         continue;
       }
-      if (two === '@"' || two === "@'" || two === "$(") return null;
+      if (two === '@"' || two === "@'" || two === "$(" || two === "<#") return null;
       if (t === "double") {
         if (c === '"') stack.pop();
         i += 1;
+        continue;
+      }
+      if (commentAt(script, i)) {
+        const stop = commentEnd(script, i);
+        for (const sp2 of spans) if (sp2.start > i && sp2.start < stop) states.set(sp2.start, "none");
+        i = Math.max(stop, ...spans.filter((sp2) => sp2.start > i && sp2.start < stop).map((sp2) => sp2.end));
         continue;
       }
       if (c === "'") stack.push("single");
@@ -8525,6 +8542,12 @@ function commandAt(script, offset, lang) {
       }
       continue;
     }
+    if (depth === 0 && commentAt(script, i)) {
+      let stop = commentEnd(script, i);
+      for (const [a, b] of spans) if (a > i && a < stop) stop = Math.max(stop, b);
+      i = stop - 1;
+      continue;
+    }
     if (c === "'" || c === '"') quote = c;
     else if (c === "$" && script[i + 1] === "(") {
       depth += 1;
@@ -8538,7 +8561,7 @@ function commandAt(script, offset, lang) {
   return quote || depth ? script : script.slice(start);
 }
 function nestedInterpreter(script, offset, lang) {
-  const text = lang === "js" ? script : commandAt(script, offset, lang).replace(lang === "pwsh" ? /`\r?\n/g : /\\\r?\n/g, " ");
+  const text = lang === "js" ? script : lang === "pwsh" ? commandAt(script, offset, lang).replace(/`\r?\n/g, " ") : commandAt(script, offset, lang).replace(/\\\r?\n/g, "");
   return (NESTED[lang] || []).some((re) => re.test(text));
 }
 function reference(lang, ctx, name) {
@@ -8567,8 +8590,22 @@ function rewriteJs(script, hits, nameOf, spans) {
     if (two === "//" || two === "/*") {
       const close = two === "//" ? script.indexOf("\n", i) : script.indexOf("*/", i + 2);
       const stop = close < 0 ? script.length : two === "//" ? close : close + 2;
-      out += script.slice(i, stop);
-      i = stop;
+      let j = i;
+      while (j < stop) {
+        if (hitAt.has(j)) {
+          out += ref(j);
+          j = endAt.get(j);
+          continue;
+        }
+        if (endAt.has(j)) {
+          out += script.slice(j, endAt.get(j));
+          j = endAt.get(j);
+          continue;
+        }
+        out += script[j];
+        j += 1;
+      }
+      i = Math.max(stop, j);
       continue;
     }
     if (c === "'" || c === '"') {

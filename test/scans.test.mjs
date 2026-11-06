@@ -195,6 +195,10 @@ test('the injection example is the step itself, command and settings kept, read 
   assert.equal(js("core.info('${{ github.event.issue.title }}'.trim())"), 'core.info(process.env.ISSUE_TITLE.trim())');
   assert.equal(js('const s = "cost: ${x} `q` ${{ github.head_ref }}"'), 'const s = `cost: \\${x} \\`q\\` ${process.env.HEAD_REF}`');
   assert.equal(js('const ok = "a\\"b ${{ github.head_ref }}"'), 'const ok = `a\\"b ${process.env.HEAD_REF}`');
+  // In a comment the expression is still expanded before JavaScript runs, so it is replaced there too.
+  assert.equal(js('// ${{ github.event.issue.body }}\ncore.info("x")'), '// process.env.ISSUE_BODY\ncore.info("x")');
+  assert.equal(js('/* ${{ github.event.issue.body }} */ core.info("x")'), '/* process.env.ISSUE_BODY */ core.info("x")');
+  assert.doesNotMatch(js('// see ${{ github.event.issue.body }}\n/* and ${{ github.event.comment.body }} */'), /\$\{\{/);
   // Where the template could read differently, no example.
   const none = (script) => injectionExample(`      - uses: actions/github-script@${SHA}\n        with:\n          script: ${JSON.stringify(script)}\n`);
   assert.equal(none('core.info("${{ github.sha }}: ${{ github.event.issue.title }}")'), ''); // a trusted expression in the same string
@@ -218,6 +222,19 @@ test('the injection example is left out where the rewrite cannot be certain', ()
   // A backslash continuation between the shell and its -c is the same command.
   assert.equal(injectionExample('      - run: |\n          bash \\\n            -c "echo ${{ github.event.issue.title }}"\n'), '');
   assert.equal(injectionExample('      - run: |\n          docker run img sh \\\n            -c "echo ${{ github.head_ref }}"\n'), '');
+  // The shell removes a backslash-newline outright, so it can split an option or a command name.
+  assert.equal(injectionExample('      - run: |\n          bash -\\\n          c "echo ${{ github.event.issue.title }}"\n'), '');
+  assert.equal(injectionExample('      - run: |\n          ba\\\n          sh -c "echo ${{ github.event.issue.title }}"\n'), '');
+  assert.equal(injectionExample('      - run: |\n          ev\\\n          al "echo ${{ github.head_ref }}"\n'), '');
+  // A quote in a shell comment is not a quote: the next line's expression is unquoted.
+  assert.equal(parse(injectionExample("      - run: |\n          # don't\n          echo ${{ github.head_ref }}\n"))[0].run, "# don't\necho \"$HEAD_REF\"\n");
+  assert.equal(parse(injectionExample("      - run: |\n          # don't\n          Write-Host ${{ github.head_ref }}\n", 'windows-latest'))[0].run, "# don't\nWrite-Host ${env:HEAD_REF}\n");
+  // An expression in a comment is replaced there too: GitHub expands it before the shell reads it.
+  assert.doesNotMatch(parse(injectionExample('      - run: |\n          # was ${{ github.head_ref }}\n          make\n'))[0].run, /\$\{\{/);
+  // A # inside a word is not a comment, and a bash -c after one still counts.
+  assert.equal(injectionExample('      - run: echo a#b; bash -c "echo ${{ github.head_ref }}"\n'), '');
+  // A continuation between plain arguments still allows the rewrite, and keeps the continuation.
+  assert.equal(parse(injectionExample('      - run: |\n          echo \\\n            ${{ github.head_ref }}\n'))[0].run, 'echo \\\n  "$HEAD_REF"\n');
   assert.equal(injectionExample('      - run: |\n          Invoke-Expression `\n            "echo ${{ github.head_ref }}"\n', 'windows-latest'), '');
   // A quoted command string across lines is one command: bash -c on the first, the expression on the next.
   assert.equal(injectionExample('      - run: |\n          bash -c "echo\n          ${{ github.event.issue.title }}"\n'), '');
