@@ -64,8 +64,9 @@ const STYLE = `
   --paper: #f4f6f5; --sheet: #ffffff; --ink: #15201c; --muted: #5a6762; --rule: #d6ddd9;
   --signal: #0f6e5c; --signal-soft: #e1f1ec;
   --good: #1f7a4d; --good-soft: #e3f2ea; --warn: #9a6a00; --warn-soft: #fbf1d9; --info: #2c5a8a; --info-soft: #e5eef8;
-  --display: "IBM Plex Sans Condensed", "Arial Narrow", Arial, sans-serif;
-  --body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  /* System fonts only: the page loads nothing from anywhere, so opening a report contacts no one. */
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
   color-scheme: light;
 }
@@ -150,9 +151,6 @@ export function html(audits, { title = 'CI Wizard Audit' } = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>${STYLE}</style>
 </head>
 <body>

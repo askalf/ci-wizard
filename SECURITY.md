@@ -2,7 +2,10 @@
 
 ci-wizard reads a repository's GitHub Actions history and workflow files with a token it is
 given. It never writes to the repository, and the token never leaves the process except as the
-`Authorization` header of read requests to the GitHub API.
+`Authorization` header of read requests to the GitHub API: api.github.com, or on GitHub
+Enterprise Server and GHE.com the https API that `GITHUB_API_URL` names. Text from the audited
+repository (workflow, job and step names, file names, expressions) is rendered as text in every
+report, never as markup or terminal control codes; each request has a deadline and a size cap.
 
 ## Reporting a vulnerability
 

@@ -213,7 +213,7 @@ export function report(a, { maxFindings = 8 } = {}) {
       ? `${sc.read} workflow file${sc.read === 1 ? '' : 's'} (the sampled ones; the workflow directory could not be listed, so the total is unknown)`
       : sc.read === sc.of ? `all ${sc.of} workflow files` : `${sc.read} of the ${sc.of} workflow files`;
     const missed = sc.unreadable && sc.unreadable.length ? `; ${sc.unreadable.length} could not be read (${sc.unreadable.slice(0, 3).map(md).join(', ')}${sc.unreadable.length > 3 ? ' and more' : ''})` : '';
-    L.push(`- Security scans (actions pinned to a commit, untrusted input in scripts, the job token) read ${coverage}${missed}, not only the sampled workflows'.`);
+    L.push(`- Security scans (actions pinned to a commit, untrusted input in scripts, the job token) read ${coverage}${missed}, not only the sampled workflows'. They do not check pull_request_target or workflow_run jobs that run a fork's code or artifacts, composite actions under .github/actions, or reusable workflows in other repositories: no finding there is not a clean bill.`);
   }
   L.push("- Cache, checkout and concurrency facts are read from the parsed workflow file (actions/cache, a setup action's cache input, the checkout step's inputs, concurrency and cancel-in-progress), so a commented-out line never counts.");
   L.push('- Estimated savings: dependency cache 60% of install time when no cache runs, 30% when one runs but installs still dominate; checkout and toolchain 50%; duplicates, outdated runs and reruns their full job time; self-hosted tail the excess over 2 s; fixed-cost findings half of the fixed share; short hosted jobs half of the billed minutes above the job-minutes. See docs/rules.md in the ci-wizard repository.');

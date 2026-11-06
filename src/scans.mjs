@@ -29,10 +29,10 @@ const UNTRUSTED = new RegExp([
   String.raw`github\.event\.(issue|pull_request|discussion)\.(title|body)`,
   String.raw`github\.event\.(comment|review|review_comment)\.body`,
   String.raw`github\.event\.pages(\.\*|\[[^\]]*\])\.page_name`,
-  String.raw`github\.event\.commits(\.\*|\[[^\]]*\])\.(message|author\.(email|name))`,
-  String.raw`github\.event\.head_commit\.(message|author\.(email|name))`,
-  String.raw`github\.event\.pull_request\.head\.(ref|label|repo\.default_branch)`,
-  String.raw`github\.event\.workflow_run\.(head_branch|head_commit\.(message|author\.(email|name)))`,
+  String.raw`github\.event\.commits(\.\*|\[[^\]]*\])\.(message|(author|committer)\.(email|name))`,
+  String.raw`github\.event\.head_commit\.(message|(author|committer)\.(email|name))`,
+  String.raw`github\.event\.pull_request\.head\.(ref|label|repo\.(default_branch|description))`,
+  String.raw`github\.event\.workflow_run\.(head_branch|display_title|head_repository\.description|head_commit\.(message|(author|committer)\.(email|name))|pull_requests(\.\*|\[[^\]]*\])\.head\.ref)`,
   String.raw`github\.head_ref`,
 ].map((p) => `(?:${p})`).join('|'), 'i');
 
@@ -46,10 +46,15 @@ const UNTRUSTED_PATHS = [
   'github.event.comment.body', 'github.event.review.body', 'github.event.review_comment.body',
   'github.event.pages.#.page_name',
   'github.event.commits.#.message', 'github.event.commits.#.author.email', 'github.event.commits.#.author.name',
+  'github.event.commits.#.committer.email', 'github.event.commits.#.committer.name',
   'github.event.head_commit.message', 'github.event.head_commit.author.email', 'github.event.head_commit.author.name',
+  'github.event.head_commit.committer.email', 'github.event.head_commit.committer.name',
   'github.event.pull_request.head.ref', 'github.event.pull_request.head.label', 'github.event.pull_request.head.repo.default_branch',
-  'github.event.workflow_run.head_branch', 'github.event.workflow_run.head_commit.message',
+  'github.event.pull_request.head.repo.description',
+  'github.event.workflow_run.head_branch', 'github.event.workflow_run.display_title', 'github.event.workflow_run.head_commit.message',
   'github.event.workflow_run.head_commit.author.email', 'github.event.workflow_run.head_commit.author.name',
+  'github.event.workflow_run.head_commit.committer.email', 'github.event.workflow_run.head_commit.committer.name',
+  'github.event.workflow_run.head_repository.description', 'github.event.workflow_run.pull_requests.#.head.ref',
   'github.head_ref',
 ].map((p) => p.split('.'));
 
@@ -110,14 +115,21 @@ const PASSES_TEXT = new Set(['format', 'join', 'tojson', 'fromjson']);
  * comparison, a negation, a boolean function, a literal, or a field that only picks a branch
  * yields no attacker text.
  */
-function flowingFields(node) {
+function flowingFields(node, env = new Set()) {
+  const flow = (n) => flowingFields(n, env);
   switch (node.k) {
     case 'ctx': case 'prop': case 'index': {
       const spelled = pathOf(node);
       // A property of a computed value (fromJSON(toJSON(github.event)).issue.title) may be the text
       // the value holds: it carries whatever its base carries.
-      if (spelled === null) return node.k === 'ctx' ? [] : flowingFields(node.of);
+      if (spelled === null) return node.k === 'ctx' ? [] : flow(node.of);
       const path = spelled.toLowerCase();
+      // A variable set from untrusted text (env: TITLE: ${{ github.event.issue.title }}) carries it:
+      // safe as an environment variable, not when pasted back in as ${{ env.TITLE }}.
+      if (path === 'env' || path.startsWith('env.') || path.startsWith('env[')) {
+        const name = path.slice(4).replace(/^\[|\]$/g, '').split(/[.[]/)[0];
+        return (!name || name === '*' || name === '?') ? (env.size ? [path] : []) : env.has(name) ? [path] : [];
+      }
       // A key the scan cannot resolve could name any property: where the object before it can hold
       // untrusted text (github.event.issue[inputs.field]), the expression counts.
       if (path.includes('[?]')) {
@@ -130,9 +142,9 @@ function flowingFields(node) {
     // a || b gives a when a is truthy, else b: either can be the result. a && b gives a only when a
     // is falsy, and the only falsy text is the empty string, so only b's text can reach the result:
     // in `title && 'yes' || 'no'` the title picks a branch and the result is always a literal.
-    case '||': return [...flowingFields(node.a), ...flowingFields(node.b)];
-    case '&&': return flowingFields(node.b);
-    case 'call': return PASSES_TEXT.has(node.name) ? node.args.flatMap(flowingFields) : [];
+    case '||': return [...flow(node.a), ...flow(node.b)];
+    case '&&': return flow(node.b);
+    case 'call': return PASSES_TEXT.has(node.name) ? node.args.flatMap(flow) : [];
     default: return [];
   }
 }
@@ -140,15 +152,16 @@ function flowingFields(node) {
 
 /**
  * The untrusted expressions in a script: each `${{ }}` whose value carries text an outside
- * contributor wrote. An expression that does not parse is judged by what it mentions, so an
- * unreadable one is never passed as safe.
+ * contributor wrote, directly or through an env variable set from it (`taintedEnv`, lower-case
+ * names). An expression that does not parse is judged by what it mentions, so an unreadable one is
+ * never passed as safe.
  */
-export function untrustedExpressions(script) {
+export function untrustedExpressions(script, { taintedEnv = new Set() } = {}) {
   const out = [];
   for (const m of expressionSpans(script)) {
     let fields;
     try {
-      fields = flowingFields(parseExpr(m.body));
+      fields = flowingFields(parseExpr(m.body), taintedEnv);
     } catch {
       const hit = UNTRUSTED.exec(m.body);
       fields = hit ? [hit[0].toLowerCase()] : [];
@@ -211,6 +224,22 @@ function patternExample(x) {
   return head + read;
 }
 
+/**
+ * The env variables (lower-case names) that hold untrusted text after this scope: the outer
+ * scope's, less any this scope sets again from trusted text, plus any it sets from untrusted text
+ * (directly, or from an outer tainted variable).
+ */
+function envTaint(env, outer) {
+  const out = new Set(outer);
+  if (!env || typeof env !== 'object' || Array.isArray(env)) return out;
+  for (const [name, value] of Object.entries(env)) {
+    const key = String(name).toLowerCase();
+    if (typeof value === 'string' && untrustedExpressions(value, { taintedEnv: outer }).length) out.add(key);
+    else out.delete(key);
+  }
+  return out;
+}
+
 function jobsOf(doc) {
   return Object.entries(doc.jobs || {}).filter(([, j]) => j && typeof j === 'object');
 }
@@ -225,6 +254,7 @@ function stepsOf(job) {
  */
 export function scanWorkflow(text) {
   const doc = parseWorkflow(text);
+  const workflowEnv = envTaint(doc.env, new Set());
   const unpinned = [];
   const injections = [];
   for (const [id, job] of jobsOf(doc)) {
@@ -247,8 +277,9 @@ export function scanWorkflow(text) {
       if (githubScript && st.with && typeof st.with === 'object') {
         scripts.push({ script: st.with.script, lang: 'js' });
       }
+      const taintedEnv = envTaint(st.env, envTaint(job.env, workflowEnv));
       for (const sc of scripts) {
-        for (const hit of untrustedExpressions(sc.script)) injections.push({ job: id, step, lang: sc.lang, ...hit });
+        for (const hit of untrustedExpressions(sc.script, { taintedEnv })) injections.push({ job: id, step, lang: sc.lang, ...hit });
       }
     });
   }

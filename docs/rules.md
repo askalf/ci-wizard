@@ -293,8 +293,11 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 
 - **Fires when** a `run:` script, or actions/github-script's `script` input, interpolates a field an
   outside contributor writes, per GitHub's security-hardening guide: an issue, pull request or
-  discussion title or body; a comment or review body; a commit message or author; a head branch name
-  or label (`github.head_ref`, `pull_request.head.ref`); a page name. The expression has to carry
+  discussion title or body; a comment or review body; a commit message, author or committer; a head
+  branch name or label (`github.head_ref`, `pull_request.head.ref`, a `workflow_run`'s head branch
+  and its pull requests' head refs); a `workflow_run`'s display title; a head repository's
+  description; a page name. Also an env variable set from one of those (`env: TITLE: ${{ … }}`) and
+  pasted back in as `${{ env.TITLE }}`, from the workflow, job or step env. The expression has to carry
   the text into the script: the field itself, an object that holds it (`toJSON(github.event)`, `toJSON(github.event.commits[0])`), or
   `format`, `join`, `||` and the right side of `&&` passing it on. A boolean result (`contains(...)`,
   a comparison, a negation), a field that only picks a branch (`title && 'yes' || 'no'`) and a field

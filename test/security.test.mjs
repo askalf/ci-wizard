@@ -141,3 +141,45 @@ test('an answer too large, or one that never finishes, is an error, not a hang',
   assert.ok(Date.now() - t0 < 2000);
   clearTimeout(keepAlive);
 });
+
+import { scanWorkflow, untrustedExpressions } from '../src/scans.mjs';
+
+test('the injection scan reads the fields the review found missing', () => {
+  const hits = (s) => untrustedExpressions(s).map((x) => x.field);
+  for (const f of [
+    'github.event.workflow_run.display_title',
+    'github.event.head_commit.committer.name',
+    'github.event.commits[0].committer.email',
+    'github.event.pull_request.head.repo.description',
+    'github.event.workflow_run.head_repository.description',
+    'github.event.workflow_run.pull_requests[0].head.ref',
+  ]) assert.equal(hits(`echo "\${{ ${f} }}"`).length, 1, f);
+  assert.deepEqual(hits('echo ${{ github.event.workflow_run.id }} ${{ github.event.head_commit.committer.date }}'), []);
+});
+
+test('untrusted text that reaches a script through env is found; a variable read as "$VAR" is not', () => {
+  const wf = (steps, top = '', job = '') => `on: [pull_request]\npermissions: {}\n${top}jobs:\n  b:\n    runs-on: ubuntu-latest\n${job}    steps:\n${steps}`;
+  // Set in env, pasted back with ${{ env.X }}: the same injection.
+  const step = scanWorkflow(wf('      - env:\n          TITLE: ${{ github.event.issue.title }}\n        run: echo "${{ env.TITLE }}"\n'));
+  assert.deepEqual(step.injections.map((x) => x.field), ['env.title']);
+  // From the workflow or the job env, and through a chain of variables.
+  assert.equal(scanWorkflow(wf('      - run: echo ${{ env.T }}\n', 'env:\n  T: ${{ github.head_ref }}\n')).injections.length, 1);
+  assert.equal(scanWorkflow(wf('      - env:\n          B: ${{ env.A }}\n        run: echo ${{ env.B }}\n', '', '    env:\n      A: ${{ github.event.comment.body }}\n')).injections.length, 1);
+  // Read as a shell variable: the fix itself, not a finding.
+  assert.equal(scanWorkflow(wf('      - env:\n          TITLE: ${{ github.event.issue.title }}\n        run: echo "$TITLE"\n')).injections.length, 0);
+  // Set again from trusted text in a nearer scope: no longer untrusted there.
+  assert.equal(scanWorkflow(wf('      - env:\n          T: fixed\n        run: echo ${{ env.T }}\n', 'env:\n  T: ${{ github.head_ref }}\n')).injections.length, 0);
+});
+
+test('the report says what the scans do not check', () => {
+  const a = analyse('o/r', data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[job()]] }] }));
+  a.scanned = { read: 1, of: 1, unreadable: [] };
+  assert.match(report(a), /They do not check pull_request_target or workflow_run jobs that run a fork's code or artifacts, composite actions/);
+});
+
+import { html } from '../src/html.mjs';
+
+test('the HTML report loads nothing from anywhere', () => {
+  const page = html([analyse('o/r', data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[job()]] }] }))]);
+  assert.doesNotMatch(page, /<link[^>]+href=|<script[^>]+src=|https?:\/\/fonts\.|@import|url\(\s*['"]?https?:/i);
+});

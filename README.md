@@ -72,7 +72,9 @@ npx github:askalf/ci-wizard#v0.1.2 --version
 ```
 
 The token comes from `GITHUB_TOKEN` or `GH_TOKEN`, or from `gh auth token` when the GitHub CLI is
-signed in. The repository is `owner/repo`, a GitHub URL or an SSH remote; left out, it is the
+signed in. The GitHub CLI's token usually has write access to all your repositories; ci-wizard only
+sends it as GET requests to the GitHub API, but a fine-grained token with just **actions: read** and
+**contents: read** on the repository is the least you can grant. The repository is `owner/repo`, a GitHub URL or an SSH remote; left out, it is the
 origin of the git checkout you run in. Options: `--days`, `--workflows`, `--per-workflow`,
 `--only <name>` (time only the workflows named, by the name GitHub shows, so two workflows that
 share a name are both selected; repeat it or separate names with commas), `--json`, `--save <file>` (the JSON report beside the markdown, as a baseline
