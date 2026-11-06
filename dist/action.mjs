@@ -9081,14 +9081,27 @@ function runTargets(program, args) {
   let at = operandAt(args, 0, runner.global);
   if (runner.container && args[at] === "container") at = operandAt(args, at + 1, /* @__PURE__ */ new Set());
   if (at === -1 || args[at] !== "run") return [];
-  const target = operandAt(args, at + 1, runner.valued);
-  if (target === -1) return [];
-  if (!runner.container) return [args[target]];
-  let entrypoint = null;
-  for (let i = at + 1; i < target; i++) {
-    if (args[i] === "--entrypoint") entrypoint = args[i + 1] ?? "";
-    else if (args[i].startsWith("--entrypoint=")) entrypoint = args[i].slice("--entrypoint=".length);
+  if (!runner.container) {
+    const target2 = operandAt(args, at + 1, runner.valued);
+    return target2 === -1 ? [] : [args[target2]];
   }
+  let entrypoint = null;
+  let target = -1;
+  for (let i = at + 1; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--") {
+      if (i + 1 < args.length) target = i + 1;
+      break;
+    }
+    if (!a.startsWith("-") || a === "-") {
+      target = i;
+      break;
+    }
+    if (a === "--entrypoint") entrypoint = args[i + 1] ?? "";
+    else if (a.startsWith("--entrypoint=")) entrypoint = a.slice("--entrypoint=".length);
+    if (runner.valued.has(a)) i += 1;
+  }
+  if (target === -1) return [];
   const next = args[target + 1];
   if (entrypoint === "") return next === void 0 ? [] : [next];
   if (entrypoint !== null) return [entrypoint];

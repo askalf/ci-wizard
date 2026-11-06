@@ -65,20 +65,35 @@ function runTargets(program, args) {
   let at = operandAt(args, 0, runner.global);
   if (runner.container && args[at] === 'container') at = operandAt(args, at + 1, new Set());
   if (at === -1 || args[at] !== 'run') return [];
-  const target = operandAt(args, at + 1, runner.valued);
-  if (target === -1) return [];
-  if (!runner.container) return [args[target]];
+  if (!runner.container) {
+    const target = operandAt(args, at + 1, runner.valued);
+    return target === -1 ? [] : [args[target]];
+  }
   // A container runs its entrypoint with the words after the image. An --entrypoint given replaces
   // the image's own, so it alone is what runs, and the words after the image are its arguments.
   // Otherwise the image runs, with the word right after it as its command when that is not an
   // option (an option there, and everything after it, is the image's entrypoint's).
   // The last --entrypoint given wins; null when none is. An empty one ('') clears the image's
   // entrypoint, so the first word after the image is the program that runs.
+  // Read in the same pass that skips each option's value, so a value (--label --entrypoint=echo)
+  // is never read as an option.
   let entrypoint = null;
-  for (let i = at + 1; i < target; i++) {
-    if (args[i] === '--entrypoint') entrypoint = args[i + 1] ?? '';
-    else if (args[i].startsWith('--entrypoint=')) entrypoint = args[i].slice('--entrypoint='.length);
+  let target = -1;
+  for (let i = at + 1; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--') {
+      if (i + 1 < args.length) target = i + 1;
+      break;
+    }
+    if (!a.startsWith('-') || a === '-') {
+      target = i;
+      break;
+    }
+    if (a === '--entrypoint') entrypoint = args[i + 1] ?? '';
+    else if (a.startsWith('--entrypoint=')) entrypoint = a.slice('--entrypoint='.length);
+    if (runner.valued.has(a)) i += 1; // the option's value is the next word; --name=x carries its own
   }
+  if (target === -1) return [];
   const next = args[target + 1];
   if (entrypoint === '') return next === undefined ? [] : [next];
   if (entrypoint !== null) return [entrypoint];
