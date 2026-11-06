@@ -8461,39 +8461,7 @@ function quoteContexts(script, lang, spans) {
       i += 1;
       continue;
     }
-    if (t === "single" || t === "double") {
-      if (c === "\\") {
-        i += 2;
-        continue;
-      }
-      if (c === (t === "single" ? "'" : '"')) stack.pop();
-      i += 1;
-      continue;
-    }
-    if (t === "template") {
-      if (c === "\\") {
-        i += 2;
-        continue;
-      }
-      if (two === "${") return null;
-      if (c === "`") stack.pop();
-      i += 1;
-      continue;
-    }
-    if (two === "//") {
-      const nl = script.indexOf("\n", i);
-      i = nl < 0 ? script.length : nl;
-      continue;
-    }
-    if (two === "/*") {
-      const e = script.indexOf("*/", i + 2);
-      i = e < 0 ? script.length : e + 2;
-      continue;
-    }
-    if (c === "'") stack.push("single");
-    else if (c === '"') stack.push("double");
-    else if (c === "`") stack.push("template");
-    i += 1;
+    return null;
   }
   return (offset) => states.has(offset) ? states.get(offset) : null;
 }
@@ -8569,12 +8537,113 @@ function commandAt(script, offset, lang) {
   return quote || depth ? script : script.slice(start);
 }
 function nestedInterpreter(script, offset, lang) {
-  const text = lang === "js" ? script : commandAt(script, offset, lang);
+  const text = lang === "js" ? script : commandAt(script, offset, lang).replace(lang === "pwsh" ? /`\r?\n/g : /\\\r?\n/g, " ");
   return (NESTED[lang] || []).some((re) => re.test(text));
 }
 function reference(lang, ctx, name) {
-  const table = lang === "posix" ? { none: `"$${name}"`, subst: `"$${name}"`, double: `\${${name}}`, single: `'"$${name}"'` } : lang === "pwsh" ? { none: `\${env:${name}}`, double: `\${env:${name}}` } : { none: `process.env.${name}`, template: `\${process.env.${name}}`, single: `' + process.env.${name} + '`, double: `" + process.env.${name} + "` };
+  const table = lang === "posix" ? { none: `"$${name}"`, subst: `"$${name}"`, double: `\${${name}}`, single: `'"$${name}"'` } : { none: `\${env:${name}}`, double: `\${env:${name}}` };
   return table[ctx] ?? null;
+}
+function rewriteJs(script, hits, nameOf, spans) {
+  const hitAt = new Map(hits.map((h) => [h.index, h]));
+  const endAt = new Map(spans.map((sp) => [sp.start, sp.end]));
+  const ref = (i2) => `process.env.${nameOf.get(hitAt.get(i2).expression)}`;
+  let out = "";
+  let i = 0;
+  while (i < script.length) {
+    const c = script[i];
+    const two = script.slice(i, i + 2);
+    if (hitAt.has(i)) {
+      out += ref(i);
+      i = endAt.get(i);
+      continue;
+    }
+    if (endAt.has(i)) {
+      out += script.slice(i, endAt.get(i));
+      i = endAt.get(i);
+      continue;
+    }
+    if (two === "//" || two === "/*") {
+      const close = two === "//" ? script.indexOf("\n", i) : script.indexOf("*/", i + 2);
+      const stop = close < 0 ? script.length : two === "//" ? close : close + 2;
+      out += script.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      let j = i + 1;
+      let body = "";
+      let untrusted = 0;
+      let trusted = false;
+      while (j < script.length && script[j] !== c) {
+        if (hitAt.has(j)) {
+          body += `\${${ref(j)}}`;
+          untrusted += 1;
+          j = endAt.get(j);
+          continue;
+        }
+        if (endAt.has(j)) {
+          trusted = true;
+          body += script.slice(j, endAt.get(j));
+          j = endAt.get(j);
+          continue;
+        }
+        const ch = script[j];
+        if (ch === "\n") return null;
+        if (ch === "\\") {
+          if (/[1-7]/.test(script[j + 1] || "")) return null;
+          body += script.slice(j, j + 2);
+          j += 2;
+          continue;
+        }
+        body += ch === "`" ? "\\`" : ch === "$" && script[j + 1] === "{" ? "\\$" : ch;
+        j += 1;
+      }
+      if (j >= script.length) return null;
+      if (!untrusted) {
+        out += script.slice(i, j + 1);
+        i = j + 1;
+        continue;
+      }
+      if (trusted) return null;
+      if (/[{,]\s*$/.test(out) && /^\s*:/.test(script.slice(j + 1))) return null;
+      const only = untrusted === 1 && /^\$\{process\.env\.\w+\}$/.test(body);
+      out += only ? body.slice(2, -1) : `\`${body}\``;
+      i = j + 1;
+      continue;
+    }
+    if (c === "`") {
+      let j = i + 1;
+      let body = "`";
+      while (j < script.length && script[j] !== "`") {
+        if (hitAt.has(j)) {
+          body += `\${${ref(j)}}`;
+          j = endAt.get(j);
+          continue;
+        }
+        if (endAt.has(j)) {
+          body += script.slice(j, endAt.get(j));
+          j = endAt.get(j);
+          continue;
+        }
+        if (script[j] === "\\") {
+          body += script.slice(j, j + 2);
+          j += 2;
+          continue;
+        }
+        if (script[j] === "$" && script[j + 1] === "{") return null;
+        body += script[j];
+        j += 1;
+      }
+      if (j >= script.length) return null;
+      out += `${body}\``;
+      i = j + 1;
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
 }
 function rewriteStep(step, { lang, script, field }) {
   if (!lang || typeof script !== "string") return "";
@@ -8582,8 +8651,6 @@ function rewriteStep(step, { lang, script, field }) {
   const hits = untrustedExpressions(script);
   if (!hits.length) return "";
   if (hits.some((h) => nestedInterpreter(script, h.index, lang))) return "";
-  const ctxAt = quoteContexts(script, lang, all);
-  if (!ctxAt) return "";
   const env = { ...step.env && typeof step.env === "object" ? step.env : {} };
   const nameOf = /* @__PURE__ */ new Map();
   for (const h of hits) {
@@ -8594,14 +8661,21 @@ function rewriteStep(step, { lang, script, field }) {
     env[name] = h.expression;
     nameOf.set(h.expression, name);
   }
-  let out = script;
-  for (const h of [...hits].sort((a, b) => b.index - a.index)) {
-    const ref = reference(lang, ctxAt(h.index), nameOf.get(h.expression));
-    if (ref === null) return "";
-    out = out.slice(0, h.index) + ref + out.slice(h.index + h.expression.length);
+  let out;
+  if (lang === "js") {
+    out = rewriteJs(script, hits, nameOf, all);
+    if (out === null) return "";
+  } else {
+    const ctxAt = quoteContexts(script, lang, all);
+    if (!ctxAt) return "";
+    out = script;
+    for (const h of [...hits].sort((a, b) => b.index - a.index)) {
+      const ref = reference(lang, ctxAt(h.index), nameOf.get(h.expression));
+      if (ref === null) return "";
+      out = out.slice(0, h.index) + ref + out.slice(h.index + h.expression.length);
+    }
+    if (lang === "posix") out = out.replace(/''("\$\w+")''/g, "$1");
   }
-  if (lang === "js") out = out.replace(/(["'])\1 \+ (process\.env\.\w+) \+ \1\1/g, "$2");
-  if (lang === "posix") out = out.replace(/''("\$\w+")''/g, "$1");
   const rewritten = {};
   let placed = false;
   for (const [k, v] of Object.entries(step)) {

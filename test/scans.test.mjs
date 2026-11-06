@@ -188,6 +188,19 @@ test('the injection example is the step itself, command and settings kept, read 
   assert.equal(gs.env.COMMENT_BODY, '${{ github.event.comment.body }}');
   assert.equal(gs.with.script, 'const body = process.env.COMMENT_BODY;\ncore.info(`title: ${process.env.ISSUE_TITLE}`);\n');
 
+  // A string with text around the expression becomes one template literal, so a method call on it
+  // still applies to the whole string; a string that was only the expression becomes the variable.
+  const js = (script) => parse(injectionExample(`      - uses: actions/github-script@${SHA}\n        with:\n          script: ${JSON.stringify(script)}\n`))[0].with.script;
+  assert.equal(js('core.info("Title: ${{ github.event.issue.title }}".toUpperCase())'), 'core.info(`Title: ${process.env.ISSUE_TITLE}`.toUpperCase())');
+  assert.equal(js("core.info('${{ github.event.issue.title }}'.trim())"), 'core.info(process.env.ISSUE_TITLE.trim())');
+  assert.equal(js('const s = "cost: ${x} `q` ${{ github.head_ref }}"'), 'const s = `cost: \\${x} \\`q\\` ${process.env.HEAD_REF}`');
+  assert.equal(js('const ok = "a\\"b ${{ github.head_ref }}"'), 'const ok = `a\\"b ${process.env.HEAD_REF}`');
+  // Where the template could read differently, no example.
+  const none = (script) => injectionExample(`      - uses: actions/github-script@${SHA}\n        with:\n          script: ${JSON.stringify(script)}\n`);
+  assert.equal(none('core.info("${{ github.sha }}: ${{ github.event.issue.title }}")'), ''); // a trusted expression in the same string
+  assert.equal(none('const o = { "k ${{ github.head_ref }}": 1 }'), ''); // an object key
+  assert.equal(none('core.info(`${a ? "x" : "y"} ${{ github.head_ref }}`)'), ''); // a nested template
+
   // PowerShell on Windows, by the runner or by the shell.
   assert.equal(parse(injectionExample('      - run: Write-Host "${{ github.head_ref }}"\n', 'windows-latest'))[0].run, 'Write-Host "${env:HEAD_REF}"');
   assert.equal(parse(injectionExample('      - shell: pwsh\n        run: Write-Host ${{ github.head_ref }}\n'))[0].run, 'Write-Host ${env:HEAD_REF}');
@@ -202,6 +215,10 @@ test('the injection example is left out where the rewrite cannot be certain', ()
   assert.equal(injectionExample('      - run: ssh host "deploy ${{ github.head_ref }}"\n'), '');
   assert.equal(injectionExample("      - run: jq '.x == \"${{ github.head_ref }}\"' f.json\n"), '');
   assert.equal(injectionExample('      - run: |\n          docker run img \\\n            sh -c "echo ${{ github.head_ref }}"\n'), '');
+  // A backslash continuation between the shell and its -c is the same command.
+  assert.equal(injectionExample('      - run: |\n          bash \\\n            -c "echo ${{ github.event.issue.title }}"\n'), '');
+  assert.equal(injectionExample('      - run: |\n          docker run img sh \\\n            -c "echo ${{ github.head_ref }}"\n'), '');
+  assert.equal(injectionExample('      - run: |\n          Invoke-Expression `\n            "echo ${{ github.head_ref }}"\n', 'windows-latest'), '');
   // A quoted command string across lines is one command: bash -c on the first, the expression on the next.
   assert.equal(injectionExample('      - run: |\n          bash -c "echo\n          ${{ github.event.issue.title }}"\n'), '');
   assert.equal(injectionExample("      - run: |\n          sh -c '\n            echo ${{ github.head_ref }}\n          '\n"), '');

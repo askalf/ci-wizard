@@ -305,11 +305,12 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **Fix** an environment variable for the value, quoted in the script. The example is the step
   itself, its command and settings unchanged, with each expression moved to `env:` and read the way
   the step's language reads it: `"$VAR"` (or `${VAR}` inside double quotes) for bash and sh,
-  `${env:VAR}` for PowerShell, `process.env.VAR` for github-script. Where the rewrite cannot be
+  `${env:VAR}` for PowerShell, `process.env.VAR` for github-script (a string with text around the
+  expression becomes one template literal, so a method called on it still applies to all of it). Where the rewrite cannot be
   certain (a cmd or python shell, a heredoc, a runner OS from a matrix) there is no example rather
   than one that changes the step. Nor is there one where the expression goes to a second parser
   (`bash -c`, `eval`, `ssh`, `awk`, `sed`, `jq`, `python -c`, a github-script `exec`), anywhere in
-  the same command, a quoted string across lines included: the outer
+  the same command, a quoted string across lines and a backslash continuation included: the outer
   shell would expand the variable into the inner program's text, so the fix says the value must
   reach that program as data as well. *Trade-off:* none to speak of: the step reads the same value, and
   only the shell no longer runs it.
