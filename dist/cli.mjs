@@ -8218,12 +8218,12 @@ function jobNamePattern(fileJobName, { reusable = false } = {}) {
   return { rx: new RegExp(`^${esc2(base)}( \\(.*\\))?$`), specificity: base.length + 1 };
 }
 function assignJobRuns(fileJobNames, apiNames) {
-  const patterns = fileJobNames.map((j) => typeof j === "string" ? { name: j, ...jobNamePattern(j) } : { name: j.name, ...jobNamePattern(j.name, { reusable: j.reusable }) });
-  const out = new Map(patterns.map((p) => [p.name, []]));
+  const patterns = fileJobNames.map((j) => typeof j === "string" ? { key: j, ...jobNamePattern(j) } : { key: j.id ?? j.name, ...jobNamePattern(j.name, { reusable: j.reusable }) });
+  const out = new Map(patterns.map((p) => [p.key, []]));
   for (const api of apiNames) {
     const hits = patterns.filter((p) => p.rx.test(api)).sort((a, b) => b.specificity - a.specificity);
     if (!hits.length || hits[1] && hits[1].specificity === hits[0].specificity) continue;
-    out.get(hits[0].name).push(api);
+    out.get(hits[0].key).push(api);
   }
   return out;
 }
@@ -8795,10 +8795,10 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
   }
   const durations = w.job_durations || {};
   const timeouts = w.job_timeouts || [];
-  const assigned = assignJobRuns(timeouts.map((t) => ({ name: t.name, reusable: Boolean(t.reusable) })), Object.keys(durations));
+  const assigned = assignJobRuns(timeouts.map((t) => ({ id: t.id, name: t.name, reusable: Boolean(t.reusable) })), Object.keys(durations));
   const loose = [];
   for (const t of timeouts.filter((x) => x.judged !== false)) {
-    const runs = assigned.get(t.name) || [];
+    const runs = assigned.get(t.id) || [];
     if (!runs.length) continue;
     const maxS = Math.max(...runs.map((n) => durations[n].max_s));
     const sampled = sum(runs.map((n) => durations[n].runs));

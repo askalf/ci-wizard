@@ -170,7 +170,20 @@ test('a job left out of the advice still claims its own runs', () => {
     assert.equal(find(b, 'jobs without a working timeout').length, 0, child);
   }
   // A reusable call claims its children first; an ordinary job of the same name keeps its own runs.
-  const assigned = assignJobRuns([{ name: 'call ${{ matrix.x }}', reusable: false }, { name: 'call', reusable: true }], ['call / build', 'call x']);
+  const assigned = assignJobRuns([{ id: 'any', name: 'call ${{ matrix.x }}', reusable: false }, { id: 'call', name: 'call', reusable: true }], ['call / build', 'call x']);
   assert.deepEqual(assigned.get('call'), ['call / build']);
-  assert.deepEqual(assigned.get('call ${{ matrix.x }}'), ['call x']);
+  assert.deepEqual(assigned.get('any'), ['call x']);
+});
+
+test('two jobs sharing a display name never share runs: assignments are keyed by job id', () => {
+  // An ordinary job and a reusable call both named "call"; only the call's child ran.
+  const file = 'on: push\njobs:\n  plain:\n    name: call\n    runs-on: ubuntu-latest\n    steps: [{run: make}]\n  reuse:\n    name: call\n    uses: ./.github/workflows/build.yml\n';
+  const a = analyse('o/r', data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[timed(60, 'call / build')]], file }] }));
+  assert.equal(find(a, 'jobs without a working timeout').length, 0);
+  const assigned = assignJobRuns([{ id: 'plain', name: 'call' }, { id: 'reuse', name: 'call', reusable: true }], ['call / build', 'call']);
+  assert.deepEqual(assigned.get('reuse'), ['call / build']);
+  assert.deepEqual(assigned.get('plain'), ['call']);
+  // Two ordinary jobs with one name tie on every run, so neither is judged.
+  const twins = assignJobRuns([{ id: 'a', name: 'test' }, { id: 'b', name: 'test' }], ['test']);
+  assert.deepEqual([twins.get('a'), twins.get('b')], [[], []]);
 });

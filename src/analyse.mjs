@@ -425,10 +425,10 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
   // Every file job takes part in matching, so a job left out of the advice (an expression timeout,
   // a reusable-workflow call) keeps its own runs; only the judged ones are then advised.
   const timeouts = w.job_timeouts || [];
-  const assigned = assignJobRuns(timeouts.map((t) => ({ name: t.name, reusable: Boolean(t.reusable) })), Object.keys(durations));
+  const assigned = assignJobRuns(timeouts.map((t) => ({ id: t.id, name: t.name, reusable: Boolean(t.reusable) })), Object.keys(durations));
   const loose = [];
   for (const t of timeouts.filter((x) => x.judged !== false)) {
-    const runs = assigned.get(t.name) || [];
+    const runs = assigned.get(t.id) || [];
     if (!runs.length) continue;
     const maxS = Math.max(...runs.map((n) => durations[n].max_s));
     const sampled = sum(runs.map((n) => durations[n].runs));

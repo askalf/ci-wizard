@@ -419,16 +419,19 @@ export function jobRunsOf(fileJobName, apiNames) {
  * Each API job name assigned to at most one file job: the most specific pattern that matches it. A
  * name two jobs match equally well is ambiguous and goes to neither, so no job is judged on
  * another's runs.
- * @returns {Map<string, string[]>} file job name -> its API job names
+ * @returns {Map<string, string[]>} file job id (or name) -> its API job names
  */
 export function assignJobRuns(fileJobNames, apiNames) {
-  // Each entry is a name, or { name, reusable } for a reusable-workflow call.
-  const patterns = fileJobNames.map((j) => (typeof j === 'string' ? { name: j, ...jobNamePattern(j) } : { name: j.name, ...jobNamePattern(j.name, { reusable: j.reusable }) }));
-  const out = new Map(patterns.map((p) => [p.name, []]));
+  // Each entry is a name, or { id, name, reusable }. Results are keyed by the job id when there is
+  // one (else the name), since two jobs can share a display name and must not share runs.
+  const patterns = fileJobNames.map((j) => (typeof j === 'string'
+    ? { key: j, ...jobNamePattern(j) }
+    : { key: j.id ?? j.name, ...jobNamePattern(j.name, { reusable: j.reusable }) }));
+  const out = new Map(patterns.map((p) => [p.key, []]));
   for (const api of apiNames) {
     const hits = patterns.filter((p) => p.rx.test(api)).sort((a, b) => b.specificity - a.specificity);
     if (!hits.length || (hits[1] && hits[1].specificity === hits[0].specificity)) continue;
-    out.get(hits[0].name).push(api);
+    out.get(hits[0].key).push(api);
   }
   return out;
 }
