@@ -1,36 +1,26 @@
 # ci-wizard
 
-Where your GitHub Actions time goes, and what to fix first. ci-wizard reads a repository's
-workflow runs, jobs and workflow files from the GitHub API, times every sampled step, finds the
-patterns that cost the most (installs with no cache, the same commit run twice, outdated runs
-nobody cancels, a workflow that fires far more often than code changes), and checks the
-workflow file for the cause before it says so. Every finding carries its evidence, a confidence
-and an estimated weekly saving, and every fix is written as an option with its trade-off. It is
-read-only: nothing is written to the repository.
+**Where your GitHub Actions time goes, and what to fix first.**
 
-```sh
-npx github:askalf/ci-wizard#v0.1.2 owner/repo
-```
+[![CI](https://github.com/askalf/ci-wizard/actions/workflows/ci.yml/badge.svg)](https://github.com/askalf/ci-wizard/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/askalf/ci-wizard/badge)](https://scorecard.dev/viewer/?uri=github.com/askalf/ci-wizard)
+[![npm](https://img.shields.io/npm/v/ci-wizard)](https://www.npmjs.com/package/ci-wizard)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-```text
-# CI audit: askalf/dario   (500 runs over 0.71 days, 8 workflows sampled, 54 API calls)
-1. many small scheduled jobs (measured): 5 periodic workflows each run a job of under
-   30 s, and each pays its own setup, checkout and wrap-up. about 109 job-min/week (estimate)
-2. self-hosted wrap-up tail in 7 workflows (measured): median 4 s after the last step
-   before the job reports done (GitHub-hosted is about 2 s). about 104 job-min/week (estimate)
-3. runs far more often than code changes in Fleet status (measured): 1746 runs a week,
-   79% of its job time fixed cost. about 104 job-min/week (estimate)
-| Workflow      | Runs/week | Job-min/week | Developer wait p50 / p90 | Biggest shares          |
-| Fleet status  | 1746      | 262          | 21 s / 43 s              | tail 42%, overhead 21%  |
-```
+ci-wizard reads a repository's workflow runs, jobs and workflow files from the GitHub API, times
+every sampled step, and finds the patterns that cost the most: installs with no cache, the same
+commit run twice, outdated runs nobody cancels, a workflow that fires far more often than code
+changes. It checks the workflow file for the cause before it says so. It also scans every workflow
+file for the security mistakes a supply-chain review starts with.
 
-That is an abridged run on [askalf/dario](https://github.com/askalf/dario), one of ours, on
-2026-11-03 at 12:35 UTC, from `ci-wizard askalf/dario --json` (v0.1.1, run from a checkout as
-`node bin/ci-wizard.mjs askalf/dario --json`). The full result is
-[docs/samples/askalf-dario.json](docs/samples/askalf-dario.json); `ci-wizard` renders it as the
-markdown report shown in the job summary. A run takes a few seconds on a small repository (4 s
-and 12 API calls on this one) and about half a minute on a busy one (26 s and 54 calls for
-dario's 500 runs).
+Every finding carries its evidence, how sure it is, and an estimated weekly saving. Every fix is an
+option with its trade-off, and comes with YAML written for that workflow's own steps.
+
+- **Read-only.** It sends only GET requests to the GitHub API and never writes to the repository.
+- **No dependencies at run time.** One bundled file. Releases are built in CI with an attested
+  provenance.
+- **Measured, not guessed.** Each number says how it was measured, and the `compare` command shows
+  whether a fix worked.
 
 ## Quick start
 
@@ -41,121 +31,215 @@ name: CI audit
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 6 * * 1'
+    - cron: '17 6 * * 1'
 permissions:
   actions: read
   contents: read
 jobs:
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: askalf/ci-wizard@v0.1.2
+      - uses: askalf/ci-wizard@<full commit SHA of v0.2.0> # v0.2.0
 ```
 
-Pin it to the release commit's full SHA in your workflows. The report lands in the job summary
-and in `$RUNNER_TEMP/ci-wizard/report.md` (with `report.json` beside it). Inputs: `repository`
-(default: the one the workflow runs in), `token` (default: the job's token), `days` (7),
-`workflows` (8), `per-workflow` (5), `only` (workflow names, comma-separated, to time those
-instead of the busiest). Outputs: `report-path`, `findings`. The audit never fails
-the job for what it finds; it fails only when it cannot read the repository.
+Pin the action to a release commit's full SHA, not to a tag: ci-wizard's own scan flags a tag pin,
+because a tag can be moved to other code. This prints the SHA of a release:
+
+```sh
+gh api repos/askalf/ci-wizard/commits/v0.2.0 --jq .sha
+```
+
+Dependabot or Renovate then propose new pins as releases come.
+
+The report lands in the job summary, and in `$RUNNER_TEMP/ci-wizard/report.md` with `report.json`
+beside it. An audit never fails the job for what it finds. It fails only when it cannot read the
+repository.
+
+| Input | Default | |
+| --- | --- | --- |
+| `repository` | the one the workflow runs in | `owner/name` |
+| `token` | the job's token | needs `actions: read` and `contents: read` |
+| `days` | `7` | days of runs to read (up to 500 runs) |
+| `workflows` | `8` | busiest workflows to time job by job |
+| `per-workflow` | `5` | newest successful runs of each to time |
+| `only` | | workflow names, comma-separated, to time those instead |
+
+Outputs: `report-path`, `findings`.
 
 ### From the command line
 
 ```sh
-npx github:askalf/ci-wizard#v0.1.2 owner/repo
-npx github:askalf/ci-wizard#v0.1.2 https://github.com/owner/repo --save before.json
-npx github:askalf/ci-wizard#v0.1.2 owner/repo --days 14 --json > before.json
-npx github:askalf/ci-wizard#v0.1.2 owner/repo --html audit.html
-npx github:askalf/ci-wizard#v0.1.2 owner/repo --only CI --save before.json
-npx github:askalf/ci-wizard#v0.1.2 compare before.json after.json
-npx github:askalf/ci-wizard#v0.1.2 --version
+npx ci-wizard@0.2.0 owner/repo
+npx ci-wizard@0.2.0 owner/repo --save before.json      # keep a baseline
+npx ci-wizard@0.2.0 owner/repo --html audit.html       # a self-contained page
+npx ci-wizard@0.2.0 owner/repo --only CI --json        # one workflow, as JSON
+npx ci-wizard@0.2.0 compare before.json after.json     # did the fix work?
 ```
 
-The token comes from `GITHUB_TOKEN` or `GH_TOKEN`, or from `gh auth token` when the GitHub CLI is
-signed in. The GitHub CLI's token usually has write access to all your repositories; ci-wizard only
-sends it as GET requests to the GitHub API, but a fine-grained token with just **actions: read** and
-**contents: read** on the repository is the least you can grant. The repository is `owner/repo`, a GitHub URL or an SSH remote; left out, it is the
-origin of the git checkout you run in. Options: `--days`, `--workflows`, `--per-workflow`,
-`--only <name>` (time only the workflows named, by the name GitHub shows, so two workflows that
-share a name are both selected; repeat it or separate names with commas), `--json`, `--save <file>` (the JSON report beside the markdown, as a baseline
-for `compare`), `--html <file>`, `--version`. `ci-wizard --help` lists them all. Exit codes: 0 report written, 1 the repository was not found or not readable, no
-runs in the window, or an API error, 2 usage, 3 stopped near the rate limit.
+You can name the repository as `owner/repo`, a GitHub URL or an SSH remote. Leave it out and the
+CLI uses the origin of the checkout you run it in.
+
+The token comes from `GITHUB_TOKEN` or `GH_TOKEN`, otherwise from `gh auth token`. The GitHub
+CLI's token usually has write access to all your repositories. ci-wizard sends it only as GET
+requests to the API, but a fine-grained token with just **actions: read** and **contents: read**
+is the least you can grant.
+
+`ci-wizard --help` lists every option. Exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | report written |
+| 1 | repository not found or not readable, no runs in the window, or an API error |
+| 2 | usage error |
+| 3 | stopped near the rate limit |
+
+## What a report looks like
+
+An excerpt of a real run on [askalf/ci](https://github.com/askalf/ci), one of ours, on 2026-11-06
+(500 runs over 3.75 days, 70 API calls, 9 seconds):
+
+```text
+# CI audit: askalf/ci
+
+Start with: self-hosted wrap-up tail in 4 workflows: about 24 job-min/week (estimate).
+
+The sampled workflows use about 721 job-minutes a week (698 minutes on GitHub-hosted runners
+as GitHub rounds them, free on a public repository's standard runners).
+
+1. self-hosted wrap-up tail (measured): median 5 s after the last step before the job
+   reports done (GitHub-hosted is about 2 s)
+   Fix: fewer steps per job, and a runner close to GitHub's service region.
+   Trade-off: merging steps merges their logs.
+3. jobs without a working timeout (measured): job analyze (timeout-minutes 20; longest of
+   10 sampled runs 82 s): a hung run holds its runner for up to 20 minutes
+       jobs:
+         analyze:
+           timeout-minutes: 10   # 3x its longest sampled run
+
+| Workflow        | Runs/week | Job-min/week | Developer wait p50 / p90 | Biggest shares                 |
+| CodeQL          | 112       | 235          | 78 s / 92 s              | work 89%, tail 5%, checkout 3% |
+| Redline pin bump| 202       | 125          | -                        | work 50%, tail 13%, overhead 11% |
+```
+
+The full result is [docs/samples/askalf-ci.json](docs/samples/askalf-ci.json). The action renders it
+as the markdown report in the job summary, and `--html` renders it as a page.
+
+## What it finds
+
+**Security and stability risks come first.** They are ranked before any saving:
+
+| Finding | What it means |
+| --- | --- |
+| actions not pinned to a commit | a `uses:` on a tag or branch, which its owner (or anyone who takes over the repository) can move to other code |
+| untrusted input in a script | a pull request title, branch name, comment or commit message pasted into a `run:` or github-script, directly or through `env:` |
+| job token wider than the job | `permissions: write-all`, or no permissions block, so the job gets the repository's default token |
+| fork pull requests run on self-hosted runners | a fork's code can reach your runner |
+| self-hosted runners reused across jobs | a persistent runner lets a job see what the one before left |
+| jobs without a working timeout | a hung job holds its runner (and bills) for up to 6 hours |
+
+**Then the savings.** Each is measured and confirmed against the workflow file:
+
+| Finding | |
+| --- | --- |
+| cache dependencies, dependency installs dominate | installs that run uncached, or dominate the job |
+| slow checkout, toolchain setup | full history, LFS, submodules, a setup that could be cached |
+| the same commit runs twice, outdated runs keep going | push and pull request both firing; no cancel-in-progress |
+| runs far more often than code changes, many small scheduled jobs | fixed cost paid on every run |
+| short hosted jobs bill a whole minute, many short jobs, matrix size | GitHub rounds each hosted job up to a minute |
+| self-hosted wrap-up tail, queue wait, reruns | time after the last step, waiting for a runner, flaky reruns |
+
+[docs/rules.md](docs/rules.md) gives each rule's threshold, its confidence, how its saving is
+estimated, and the near misses it leaves alone.
+
+## Security model
+
+People run this on their own repositories, so it is designed to be safe to point at one, including
+one that has a hostile contributor.
+
+- **What it reads.** Through the API only, these endpoints:
+  - `GET /repos/{repo}/actions/runs` (up to 500 runs), `/actions/runs/{id}/jobs` and
+    `/actions/workflows`;
+  - `/contents/.github/workflows`, the workflow files (up to 30), and the root listing (to see
+    which lockfile is committed);
+  - `/repos/{repo}` (default branch and visibility).
+
+  Nothing is cloned, and nothing from the repository is run.
+- **What it sends, and where.** The token goes only as the `Authorization` header of those GET
+  requests. They go to `api.github.com`, or to the https API that `GITHUB_API_URL` names, as on
+  GitHub Enterprise Server. The token is not logged, and it is not written to a report or an output.
+- **What it writes.** The CLI prints the report (or `--json`) to stdout, and writes only the files
+  you name with `--save` or `--html`. The action writes only under `$RUNNER_TEMP/ci-wizard` and to
+  the job summary.
+- **Hostile input.** Workflow, job and step names, file names and expressions are written by
+  whoever can push or open a pull request, and they are treated that way:
+  - every report renders them as text: no markup, link, image, mention or terminal control code;
+  - parsing takes linear time, so a crafted file can't stall the audit;
+  - each request has a 30-second deadline and a 20 MB cap.
+
+  [SECURITY.md](SECURITY.md) lists what is in scope, and how to report a vulnerability privately.
+- **What you can verify.**
+  - Releases are built, tested and packed in GitHub Actions. The tarball carries a Sigstore
+    attestation (`gh attestation verify <tarball> --owner askalf`), and the npm package has npm
+    provenance.
+  - `dist/` is rebuilt in CI and must match `src/` byte for byte.
+  - Every action this repository uses is pinned to a commit.
 
 ## Reading the report
 
-- **Risks come first.** Security scans of every workflow file lead the report: actions pinned to a
-  tag instead of a commit, untrusted event text (a pull request title, a branch name) pasted into a
-  script, and a job token wider than the job. For self-hosted runners, two more findings are about
-  security and stability, not minutes: a fork's pull request that can run on a self-hosted runner,
-  and runners that take more than one job (persistent, so jobs can see what the one before left).
-  They measure the method [askalf/pitlane](https://github.com/askalf/pitlane) documents.
+- **Start with** names the one finding to fix first. The paragraph under it says what all the
+  findings add up to, against the job-minutes (and billed minutes) the sampled workflows use.
+- **What to fix first.** Each finding gives:
+  - where it is and what it saves (job-minutes, billed minutes, or developer wait);
+  - how sure it is: *confirmed* by the workflow file, *measured*, or *cause inferred*;
+  - the evidence, the fix and the fix's trade-off;
+  - the YAML for the fix, where the fix changes the workflow file.
+- **Where the time goes.** Per workflow:
+  - runs a week, job-minutes, and billed minutes (GitHub rounds each hosted job up to a minute);
+  - developer wait (only for workflows somebody waits on), and queue wait;
+  - the biggest shares of job time.
 
-- **Start with** names the one finding to fix first, and the paragraph under it says what all the
-  findings add up to against the job-minutes (and billed minutes) the sampled workflows use.
-- **What to fix first**: each finding says where it is, what it saves (job-minutes, billed
-  minutes, or developer wait), how sure it is (*confirmed* by the workflow file, *measured*, or
-  *cause inferred*), why (the evidence), the fix, the fix's trade-off, and, where the fix is a
-  change to the workflow file, the YAML for it, written for the package manager and steps that
-  workflow already has.
-- **Where the time goes**: per workflow, runs a week, job-minutes, billed minutes (GitHub rounds
-  each hosted job up to a whole minute, so a run of short jobs bills far more than it runs),
-  developer wait (only for workflows somebody waits on), queue wait, and the biggest shares of job
-  time. The legend under the table explains each share; † marks a workflow timed from fewer than
-  3 runs, ‡ one nobody waits on.
-- **Next step: prove the fix**: save this report, make one change, measure again, and `compare`.
+  † marks a workflow timed from fewer than 3 runs; ‡ marks one nobody waits on.
+- **How it was measured.** The API budget the audit drew on, and how each figure is computed. It
+  also says what the security scans don't check, so an empty section isn't over-read.
 
 ## The method
 
-1. **Measure.** Each sampled job's steps, timed from the Actions API: queue wait, run time, and
+1. **Measure.** Each sampled job's steps are timed from the Actions API: queue wait, run time, and
    the time before the first step and after the last.
-2. **Diagnose.** Time split into runner overhead, checkout, toolchain, dependencies, cache,
-   artifacts, docker and work, by the command each step runs (read from the workflow file), not
-   only by its name.
-3. **Confirm.** The workflow file is parsed for the cause: triggers and push branch patterns,
-   caches (including a setup action's cache input), concurrency and cancel-in-progress, how
-   dependencies install, whether a lockfile is committed. A commented-out step or a feature
-   switched off with `false` never counts.
-4. **Prove.** Save the report with `--save before.json` (or `--json`) before the change. After the change has run for a
-   while, measure again and run `ci-wizard compare before.json after.json`: per workflow, the
-   runs a week, job-minutes, developer wait, queue wait and wrap-up tail before and after, with
-   the change, and the findings that disappeared or appeared.
+2. **Diagnose.** Time is split into runner overhead, checkout, toolchain, dependencies, cache,
+   artifacts, docker and work. Each step is classified by the command it runs, read from the
+   workflow file, not only by its name.
+3. **Confirm.** The workflow file is parsed for the cause:
+   - triggers and push branch patterns;
+   - caches, including a setup action's cache input;
+   - concurrency and cancel-in-progress;
+   - how dependencies install, and whether a lockfile is committed.
 
-## What it reads and what it needs
+   A commented-out step, or a feature switched off with `false`, never counts.
+4. **Prove.** Save the report before the change (`--save before.json`). Let the change run for a
+   while, measure again, and run `ci-wizard compare before.json after.json`. For each workflow it
+   shows what moved, and which findings disappeared or appeared.
 
-- Up to 500 workflow runs from the window, the jobs and steps of the newest successful runs of
-  the busiest workflows, those workflows' files, the repository's root listing (to see which
-  lockfile it commits), its default branch (for advice that names it), and every workflow file
-  (up to 30) for the security scans. About 50 API calls for the defaults on a busy repository, and up to 6 more per sampled workflow
-  that also fails, is cancelled or times out.
-- A token with **actions: read** and **contents: read**. The job's own `GITHUB_TOKEN` is enough
-  for the repository a workflow runs in; a fine-grained token with those two permissions works
-  from the command line. A repository the token cannot see reads as not found.
-- While GitHub reports the remaining count (api.github.com does), the client sends no request once
-  the token has 25 calls or fewer left, retries included, so an audit leaves at least 25 for the
-  repository's own CI, and it says how many were left. Without a remaining count the reserve
-  cannot be enforced, and the report says so.
-  When GitHub's answers carry the rate-limit
-  headers, as api.github.com's do, the report states the budget the audit drew on ("41 API calls,
-  959 of 1000 left this hour"); without them it leaves the line out. An audit that finds no runs
-  writes no report.
-- `compare` reads two saved reports and needs no token.
-- Behind a proxy (`HTTPS_PROXY`, as on many self-hosted runners), the CLI and the action run
-  themselves again with `NODE_USE_ENV_PROXY=1`, the switch that makes Node's fetch use the proxy.
-  Node 22.21 and later have it; on an older Node they say the proxy is ignored, and the calls go
-  direct.
+## Requirements and limits
 
-### Rate limits: a GitHub App token for a larger budget
+- **Token.** It needs **actions: read** and **contents: read**. A workflow's own `GITHUB_TOKEN`
+  is enough for the repository it runs in. A repository the token cannot see reads as not found.
+- **Cost.** About 50 to 70 API calls for a busy repository, made up to six at a time. That is
+  about 10 seconds for 500 runs.
+- **Rate limit.** Once the token has 25 calls or fewer left, it sends no more requests, counting
+  the ones in flight. That always leaves at least 25 for the repository's own CI, and the report
+  says how many were left.
+- **Behind a proxy** (`HTTPS_PROXY`, as on many self-hosted runners), the CLI and the action use
+  it on Node 22.21 and later. On an older Node they warn that the proxy is ignored.
+- **Node.** The CLI needs Node 20 or later. The action runs on the runner's Node 24.
 
-A workflow's own `GITHUB_TOKEN` has 1,000 requests an hour per repository, shared with every other
-step that calls the API. A person's token has 5,000, shared with everything that person runs. A
-GitHub App's installation token has its own budget of 5,000 or more, and one App installed on
-several repositories can audit all of them. An audit of a busy repository takes about 50 calls,
-so the job token is enough for one audit a day; an App is worth it for frequent audits, several
-repositories, or a repository whose CI already spends its job token.
+### A GitHub App token for a larger budget
 
-Create a private GitHub App with **Actions: read** and **Contents: read**, install it on the
-repositories to audit, keep its client ID as a repository variable and its private key as a
-secret, and mint a token in the job:
+A workflow's `GITHUB_TOKEN` has 1,000 requests an hour, shared with every other step that calls the
+API. A GitHub App's installation token has its own 5,000 or more, and one App can audit many
+repositories. Create a private App with **Actions: read** and **Contents: read**, install it, keep
+its client ID as a variable and its key as a secret, and mint a token in the job:
 
 ```yaml
     steps:
@@ -167,40 +251,33 @@ secret, and mint a token in the job:
           owner: ${{ github.repository_owner }}
           permission-actions: read
           permission-contents: read
-      - uses: askalf/ci-wizard@v0.1.2
+      - uses: askalf/ci-wizard@<full commit SHA of v0.2.0> # v0.2.0
         with:
           token: ${{ steps.app.outputs.token }}
 ```
 
-The token lasts an hour and is revoked when the job ends. From the command line, any token with
-the same two permissions works through `GITHUB_TOKEN` or `GH_TOKEN`.
+The token lasts an hour and is revoked when the job ends.
 
 ## Limitations
 
-- **Sampled.** The window is up to 500 runs, and job-level timing comes from a few recent
-  successful runs of each busy workflow, with up to two failed, cancelled and timed-out runs each
-  for their cost. A busy repository's 500 runs may cover less than a day;
-  weekly figures scale the window to 7 days, so a short window is noisier, and the report says
-  when the cap cut the window short. A workflow timed from fewer than 3 runs is marked †.
-- **Estimates.** Savings come from simple formulas over measured time (see
-  [docs/rules.md](docs/rules.md)), not from running the fix. `compare` on a run after the change
-  is what proves one.
-- **GitHub-hosted and self-hosted differ.** The wrap-up tail and queue-wait rules mean different
-  things on each, and only hosted jobs have billed minutes, so a workflow on self-hosted runners
-  shows 0 there. Self-hosted runners far from GitHub's service region pay more per uploaded log.
-- **Billed minutes are minutes, not money.** They round each hosted job up as GitHub does, but
-  larger runners, Windows and macOS cost more per minute than standard Linux, a plan's included
-  minutes are not subtracted, and a public repository's standard runners are free (the report
-  says so, and the short-hosted-jobs rule does not fire there).
-- **Fork exposure reads the sampled workflows.** Only the files of the workflows the audit samples
-  are checked for self-hosted jobs a fork can reach; a quiet workflow outside them is not. Runner
-  reuse is judged from the sampled jobs.
-- **Names and files.** A step is classified by its command when the workflow file gives one, by
-  its name otherwise; reusable workflows and composite actions are read only as far as their
-  calling step.
-- **Options, not orders.** A fix can disagree with a repository's own history: dario keeps
-  cancel-in-progress off for its status job on purpose, because cancelled queued runs piled up
-  there before.
+- **Sampled.** The window is up to 500 runs. Job-level timing comes from a few recent successful
+  runs of each busy workflow, plus up to two failed, cancelled and timed-out runs each, for their
+  cost.
+  - Weekly figures scale the window to 7 days. A busy repository's 500 runs can cover less than a
+    day, so its figures are noisier, and the report says when the cap cut the window short.
+- **Estimates.** Savings come from simple formulas over measured time ([docs/rules.md](docs/rules.md)),
+  not from running the fix. Only `compare`, run after the change, proves one.
+- **Billed minutes are minutes, not money.** They round each hosted job up as GitHub does. But
+  larger runners, Windows and macOS cost more per minute, and a plan's included minutes are not
+  subtracted. A public repository's standard runners are free, and the report says so.
+- **The scans are a first pass, not an audit.** They don't check:
+  - `pull_request_target` or `workflow_run` jobs that run a fork's code or artifacts;
+  - composite actions under `.github/actions`;
+  - reusable workflows in other repositories.
+
+  Fork exposure and runner reuse are judged from the sampled workflows.
+- **Options, not orders.** A fix can disagree with a repository's own history. For example, a
+  status job may keep cancel-in-progress off on purpose.
 
 ## Development
 
@@ -210,7 +287,7 @@ npm test          # node:test, no network
 npm run build     # bundles src/ into dist/ (committed; the action runs from it)
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Security reports: [SECURITY.md](SECURITY.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Security reports go through [SECURITY.md](SECURITY.md).
 
 ## License
 
