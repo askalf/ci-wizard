@@ -190,6 +190,110 @@ function majorOf(uses) {
   return m ? Number(m[1]) : null;
 }
 
+/**
+ * The simple commands of a shell script, each as its words with the quotes taken off. Commands are
+ * split at newlines, `;`, `&`, `|` and parentheses outside quotes; comments and here-document
+ * bodies are dropped. A quoted word stays one word, so the text passed to a command (an echo's
+ * message, a heredoc's lines) is never read as a command of its own. Expansions are left as
+ * written, and a command inside a quoted string (`bash -c "..."`) is not looked into.
+ */
+export function shellCommands(script) {
+  const s = String(script || '');
+  const commands = [];
+  const heredocs = [];
+  let words = [];
+  let word = '';
+  let inWord = false;
+  const endWord = () => {
+    if (inWord) words.push(word);
+    word = '';
+    inWord = false;
+  };
+  const endCommand = () => {
+    endWord();
+    if (words.length) commands.push(words);
+    words = [];
+  };
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '\\') {
+      // A backslash before a newline continues the line; before anything else it quotes it.
+      if (s[i + 1] !== '\n' && i + 1 < s.length) {
+        word += s[i + 1];
+        inWord = true;
+      }
+      i += 1;
+    } else if (c === "'") {
+      const end = s.indexOf("'", i + 1);
+      const stop = end === -1 ? s.length : end;
+      word += s.slice(i + 1, stop);
+      inWord = true;
+      i = stop;
+    } else if (c === '"') {
+      let j = i + 1;
+      while (j < s.length && s[j] !== '"') j += s[j] === '\\' ? 2 : 1;
+      word += s.slice(i + 1, Math.min(j, s.length));
+      inWord = true;
+      i = j;
+    } else if (c === '#' && !inWord) {
+      const nl = s.indexOf('\n', i);
+      i = (nl === -1 ? s.length : nl) - 1;
+    } else if (c === '<' && s.startsWith('<<', i) && s[i + 2] !== '<') {
+      // A here-document: its body, from the next line to the delimiter, is input, not commands.
+      const m = /^<<-?[ \t]*(['"]?)([A-Za-z0-9_]+)\1/.exec(s.slice(i, i + 80));
+      if (m) {
+        endWord();
+        heredocs.push(m[2]);
+        i += m[0].length - 1;
+      } else {
+        word += c;
+        inWord = true;
+      }
+    } else if (c === '\n') {
+      endCommand();
+      let j = i + 1;
+      while (heredocs.length) {
+        const delim = heredocs.shift();
+        while (j < s.length) {
+          const nl = s.indexOf('\n', j);
+          const end = nl === -1 ? s.length : nl;
+          const line = s.slice(j, end);
+          j = end + 1;
+          if (line.replace(/^\t+/, '').trimEnd() === delim) break;
+        }
+      }
+      i = Math.min(j, s.length) - 1;
+    } else if (c === ' ' || c === '\t' || c === '\r') {
+      endWord();
+    } else if (';&|()'.includes(c)) {
+      endCommand();
+    } else {
+      word += c;
+      inWord = true;
+    }
+  }
+  endCommand();
+  return commands;
+}
+
+// Words that run the command after them: an assignment (FOO=1), a wrapper, or a wrapper's option.
+const WRAPPERS = new Set(['sudo', 'env', 'time', 'exec', 'command', 'nice', 'npx', 'pnpx', 'bunx', 'uvx']);
+
+/** A command's words from the program it runs, past assignments and wrappers, with the program's directory dropped. */
+export function programWords(words) {
+  let k = 0;
+  let wrapped = false;
+  while (k < words.length) {
+    const w = words[k];
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || WRAPPERS.has(w)) wrapped = wrapped || WRAPPERS.has(w);
+    else if (!(wrapped && w.startsWith('-'))) break;
+    k += 1;
+  }
+  const rest = words.slice(k);
+  if (rest.length) rest[0] = rest[0].split('/').pop();
+  return rest;
+}
+
 /** The package managers a workflow installs with, from its run lines and setup actions, in a fixed order. */
 export function installersOf(runs, steps = []) {
   const uses = steps.map((st) => String(st.uses || '')).join('\n');

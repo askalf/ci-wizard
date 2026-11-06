@@ -2,7 +2,7 @@
 // whether pull requests are checked at all, and the two workflows a supply-chain review expects
 // (code scanning, dependency updates). Every finding comes from what the API showed; whatever it
 // could not read (a ruleset, a listing) yields no finding rather than a guess.
-import { parseWorkflow, triggersOf } from './workflow.mjs';
+import { parseWorkflow, programWords, shellCommands, triggersOf } from './workflow.mjs';
 
 // GitHub Actions' app id. Only a required check bound to it is known to come from a workflow job,
 // which the runs show. One bound to another app (a coverage service, a review bot), or bound to no
@@ -22,6 +22,15 @@ const CODE_SCANNERS = /^(github\/codeql-action\/(init|analyze)|returntocorp\/sem
 // image is not a scan.
 const SCANNER_IMAGES = new Set(['semgrep', 'snyk', 'sonar-scanner-cli', 'bearer']);
 const imageName = (image) => String(image || '').trim().toLowerCase().replace(/^docker:\/\//, '').split('/').pop().split(/[:@]/)[0];
+
+// A scanner run as a command, matched on the command's own words (see shellCommands): text that
+// only mentions one, in a quoted message, a comment or a here-document, is not a run.
+const SCAN_COMMAND = /^(semgrep (ci|scan)|snyk code test|codeql database (create|analyze)|bearer scan)( |$)/;
+
+// Tools whose SARIF is about the repository's settings or its workflows, and the programs that run
+// another program by its path, package or image (go run, pipx run, a container).
+const NOT_CODE_TOOLS = new Set(['scorecard', 'zizmor', 'actionlint', 'poutine']);
+const RUNNERS = new Set(['go', 'docker', 'podman', 'pipx']);
 
 // Checks that test, build or analyse the change: the ones a merge should wait for. Matched on the
 // check's name, so the finding says "inferred" and lists the rest apart.
@@ -48,14 +57,17 @@ function fileFacts(scanFiles) {
       const runs = steps.map((st) => String(st.run || ''));
       // The job's container, and any step that runs an image (uses: docker://...).
       const images = [job.container && typeof job.container === 'object' ? job.container.image : job.container, ...uses.filter((u) => u.startsWith('docker://'))];
-      // A job that runs Scorecard or a workflow linter (by action or by command) uploads results
-      // about settings or workflows, not about the code.
+      const commands = runs.flatMap((r) => shellCommands(r)).map(programWords).filter((c) => c.length);
+      // A job that runs Scorecard or a workflow linter (by action, or by a command that runs one,
+      // directly or through go run or a container) uploads results about settings or workflows,
+      // not about the code.
       const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u))
-        || runs.some((r) => /\b(scorecard|zizmor|actionlint|poutine)\b/i.test(r));
+        || commands.some(([program, ...args]) => NOT_CODE_TOOLS.has(program.toLowerCase())
+          || (RUNNERS.has(program) && args.some((a) => NOT_CODE_TOOLS.has(imageName(a)))));
       if (uses.some((u) => CODE_SCANNERS.test(u))
         || (!notCode && uses.some((u) => u.startsWith('github/codeql-action/upload-sarif@')))
         || images.some((i) => SCANNER_IMAGES.has(imageName(i)))
-        || runs.some((r) => /(^|[\s;&|(])(semgrep (ci|scan)|snyk code test|codeql database (create|analyze)|bearer scan)\b/.test(r))) codeql = true;
+        || commands.some((c) => SCAN_COMMAND.test(c.join(' ')))) codeql = true;
     }
   }
   return { onPr, codeql };

@@ -268,6 +268,11 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   assert.ok(counts(job('      - uses: snyk/actions/node@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(counts(job('      - uses: SonarSource/sonarqube-scan-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(counts(job('      - run: semgrep ci --sarif > out.sarif\n')));
+  // After an assignment, a wrapper, a path or another command on the line, it is still a run.
+  assert.ok(counts(job('      - run: SEMGREP_APP_TOKEN=x semgrep ci\n')));
+  assert.ok(counts(job('      - run: cd app && npx -y snyk code test\n')));
+  assert.ok(counts(job('      - run: ./bin/bearer scan .\n')));
+  assert.ok(counts(job('      - run: |\n          codeql database create db \\\n            --language=javascript\n')));
   assert.ok(counts(job('      - run: semgrep ci\n', '    container:\n      image: semgrep/semgrep\n')));
   // Bearer by its container (the image alone, and with its scan command), by command, and by action.
   assert.ok(counts(job('      - run: bearer scan . --format sarif --output b.sarif\n', '    container:\n      image: bearer/bearer:latest\n')));
@@ -283,6 +288,11 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   assert.ok(!counts(job('      - uses: ossf/scorecard-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(!counts(job('      - uses: zizmorcore/zizmor-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(!counts(job('      - run: echo "we should add semgrep someday"\n')));
+  // A scanner's command is a run only where a command starts: not in an echoed message, a comment
+  // or a here-document's lines.
+  assert.ok(!counts(job('      - run: echo "run semgrep ci later"\n')));
+  assert.ok(!counts(job("      - run: printf '%s\\n' 'bearer scan' # snyk code test\n")));
+  assert.ok(!counts(job('      - run: |\n          cat > NOTES <<EOF\n          semgrep ci\n          EOF\n          make\n')));
   // SonarSource's quality gate only waits for an earlier scan's result; a SonarQube server image
   // is not a scan; an image whose name only contains a scanner's is another image.
   assert.ok(!counts(job('      - uses: SonarSource/sonarqube-quality-gate-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
@@ -290,6 +300,10 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   assert.ok(!counts(job('      - run: make\n', '    container:\n      image: example/bearer-token-tools:1\n')));
   // A workflow linter run by command, whose SARIF is about the workflows.
   assert.ok(!counts(job('      - run: actionlint -format "{{json .}}" > a.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(!counts(job('      - run: go run github.com/rhysd/actionlint/cmd/actionlint@latest -format "{{json .}}" > a.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(!counts(job('      - run: uvx zizmor --format sarif . > z.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  // A linter only mentioned does not make a code scanner's upload about workflows.
+  assert.ok(counts(job('      - run: echo "actionlint runs elsewhere"; trivy fs --format sarif -o t.sarif .\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
 });
 
 test('a workflow file is parsed once in an audit: the scans and the gate checks share the document', async () => {

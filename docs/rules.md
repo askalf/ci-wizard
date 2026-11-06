@@ -403,11 +403,14 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   - Semgrep, Snyk, SonarSource's scan actions or Bearer, by their action, their container
     image (`semgrep/semgrep`, `snyk/snyk`, `sonarsource/sonar-scanner-cli`, `bearer/bearer`, as
     the job's container or a `docker://` step), or a `semgrep ci`/`semgrep scan`,
-    `snyk code test`, `bearer scan` or `codeql database` command. SonarSource's quality-gate
-    action only waits for a scan's result and does not count;
+    `snyk code test`, `bearer scan` or `codeql database` command. A command counts where a shell
+    command starts (after an assignment, `sudo`, `npx` and the like), not in text it passes on:
+    an echoed message, a comment or a here-document. SonarSource's quality-gate action only waits
+    for a scan's result and does not count;
   - a SARIF upload (`github/codeql-action/upload-sarif`), unless its job runs Scorecard or a
-    workflow linter (zizmor, actionlint, poutine), whose results are about settings or
-    workflows, not the code. On a private
+    workflow linter (zizmor, actionlint, poutine; by action, or by a command that runs one,
+    directly or through `go run`, `pipx run` or a container), whose results are about settings
+    or workflows, not the code. On a private
   repository the evidence notes that code scanning needs GitHub Advanced Security.
 - **Confidence** inferred: default setup that has not run in the window, or another scanner, is not
   seen. A risk.

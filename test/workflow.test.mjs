@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { allSteps, category, categoryOf, concurrencyGroupOf, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, withParseCache, workflowFacts } from '../src/workflow.mjs';
+import { allSteps, category, categoryOf, concurrencyGroupOf, parseWorkflow, programWords, pushBranchesOf, shellCommands, stepCommands, triggersOf, withParseCache, workflowFacts } from '../src/workflow.mjs';
 
 const WF = `name: CI
 on:
@@ -86,4 +86,15 @@ test('an audit parses each distinct file once, however many, and keeps nothing a
     assert.equal(withParseCache(() => parseWorkflow(texts[0])), first[0], 'a nested audit shares the cache');
   });
   assert.notEqual(parseWorkflow(texts[0]), parseWorkflow(texts[0]), 'outside an audit nothing is kept');
+});
+
+test('shell commands: split outside quotes, without comments or here-document bodies', () => {
+  assert.deepEqual(shellCommands('echo "a; b" && make test | tee log # make deploy\nnpm ci'), [['echo', 'a; b'], ['make', 'test'], ['tee', 'log'], ['npm', 'ci']]);
+  assert.deepEqual(shellCommands("cat <<-'EOF' > f\n\tsemgrep ci\n\tEOF\nmake"), [['cat', '>', 'f'], ['make']]);
+  assert.deepEqual(shellCommands('codeql database create \\\n  db'), [['codeql', 'database', 'create', 'db']]);
+  assert.deepEqual(shellCommands('x=$(semgrep scan)'), [['x=$'], ['semgrep', 'scan']]);
+  assert.deepEqual(shellCommands('echo "unterminated'), [['echo', 'unterminated']]);
+  assert.deepEqual(programWords(['FOO=1', 'sudo', '-E', '/usr/bin/semgrep', 'ci']), ['semgrep', 'ci']);
+  assert.deepEqual(programWords(['make', '-j4']), ['make', '-j4']);
+  assert.deepEqual(programWords(['A=1']), []);
 });

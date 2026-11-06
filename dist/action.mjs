@@ -8357,6 +8357,96 @@ function majorOf(uses) {
   const m = /@v(\d+)/.exec(uses);
   return m ? Number(m[1]) : null;
 }
+function shellCommands(script) {
+  const s = String(script || "");
+  const commands = [];
+  const heredocs = [];
+  let words = [];
+  let word = "";
+  let inWord = false;
+  const endWord = () => {
+    if (inWord) words.push(word);
+    word = "";
+    inWord = false;
+  };
+  const endCommand = () => {
+    endWord();
+    if (words.length) commands.push(words);
+    words = [];
+  };
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "\\") {
+      if (s[i + 1] !== "\n" && i + 1 < s.length) {
+        word += s[i + 1];
+        inWord = true;
+      }
+      i += 1;
+    } else if (c === "'") {
+      const end = s.indexOf("'", i + 1);
+      const stop = end === -1 ? s.length : end;
+      word += s.slice(i + 1, stop);
+      inWord = true;
+      i = stop;
+    } else if (c === '"') {
+      let j = i + 1;
+      while (j < s.length && s[j] !== '"') j += s[j] === "\\" ? 2 : 1;
+      word += s.slice(i + 1, Math.min(j, s.length));
+      inWord = true;
+      i = j;
+    } else if (c === "#" && !inWord) {
+      const nl = s.indexOf("\n", i);
+      i = (nl === -1 ? s.length : nl) - 1;
+    } else if (c === "<" && s.startsWith("<<", i) && s[i + 2] !== "<") {
+      const m = /^<<-?[ \t]*(['"]?)([A-Za-z0-9_]+)\1/.exec(s.slice(i, i + 80));
+      if (m) {
+        endWord();
+        heredocs.push(m[2]);
+        i += m[0].length - 1;
+      } else {
+        word += c;
+        inWord = true;
+      }
+    } else if (c === "\n") {
+      endCommand();
+      let j = i + 1;
+      while (heredocs.length) {
+        const delim = heredocs.shift();
+        while (j < s.length) {
+          const nl = s.indexOf("\n", j);
+          const end = nl === -1 ? s.length : nl;
+          const line = s.slice(j, end);
+          j = end + 1;
+          if (line.replace(/^\t+/, "").trimEnd() === delim) break;
+        }
+      }
+      i = Math.min(j, s.length) - 1;
+    } else if (c === " " || c === "	" || c === "\r") {
+      endWord();
+    } else if (";&|()".includes(c)) {
+      endCommand();
+    } else {
+      word += c;
+      inWord = true;
+    }
+  }
+  endCommand();
+  return commands;
+}
+var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "env", "time", "exec", "command", "nice", "npx", "pnpx", "bunx", "uvx"]);
+function programWords(words) {
+  let k = 0;
+  let wrapped = false;
+  while (k < words.length) {
+    const w = words[k];
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || WRAPPERS.has(w)) wrapped = wrapped || WRAPPERS.has(w);
+    else if (!(wrapped && w.startsWith("-"))) break;
+    k += 1;
+  }
+  const rest = words.slice(k);
+  if (rest.length) rest[0] = rest[0].split("/").pop();
+  return rest;
+}
 function installersOf(runs, steps = []) {
   const uses = steps.map((st) => String(st.uses || "")).join("\n");
   const found = [];
@@ -8900,6 +8990,9 @@ var PR_TRIGGERS = /* @__PURE__ */ new Set(["pull_request", "pull_request_target"
 var CODE_SCANNERS = /^(github\/codeql-action\/(init|analyze)|returntocorp\/semgrep-action|semgrep\/semgrep-action|snyk\/actions\/|sonarsource\/(sonarcloud-github-action|sonarqube-scan-action|sonarcloud-github-c-cpp|sonarqube-github-c-cpp)|bearer\/bearer-action)/i;
 var SCANNER_IMAGES = /* @__PURE__ */ new Set(["semgrep", "snyk", "sonar-scanner-cli", "bearer"]);
 var imageName = (image) => String(image || "").trim().toLowerCase().replace(/^docker:\/\//, "").split("/").pop().split(/[:@]/)[0];
+var SCAN_COMMAND = /^(semgrep (ci|scan)|snyk code test|codeql database (create|analyze)|bearer scan)( |$)/;
+var NOT_CODE_TOOLS = /* @__PURE__ */ new Set(["scorecard", "zizmor", "actionlint", "poutine"]);
+var RUNNERS = /* @__PURE__ */ new Set(["go", "docker", "podman", "pipx"]);
 var GATE_LIKE = /\b(test|tests|lint|build|check|checks|verify|analy[sz]e|codeql|typecheck|types|dist|unit|e2e|ci|fuzz|fuzzing)\b/i;
 var list2 = (xs, n = 6) => `${xs.slice(0, n).join(", ")}${xs.length > n ? ` and ${xs.length - n} more` : ""}`;
 function fileFacts(scanFiles) {
@@ -8915,8 +9008,9 @@ function fileFacts(scanFiles) {
       const uses = steps.map((st) => String(st.uses || "").trim().toLowerCase());
       const runs = steps.map((st) => String(st.run || ""));
       const images = [job.container && typeof job.container === "object" ? job.container.image : job.container, ...uses.filter((u) => u.startsWith("docker://"))];
-      const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u)) || runs.some((r) => /\b(scorecard|zizmor|actionlint|poutine)\b/i.test(r));
-      if (uses.some((u) => CODE_SCANNERS.test(u)) || !notCode && uses.some((u) => u.startsWith("github/codeql-action/upload-sarif@")) || images.some((i) => SCANNER_IMAGES.has(imageName(i))) || runs.some((r) => /(^|[\s;&|(])(semgrep (ci|scan)|snyk code test|codeql database (create|analyze)|bearer scan)\b/.test(r))) codeql = true;
+      const commands = runs.flatMap((r) => shellCommands(r)).map(programWords).filter((c) => c.length);
+      const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u)) || commands.some(([program, ...args]) => NOT_CODE_TOOLS.has(program.toLowerCase()) || RUNNERS.has(program) && args.some((a) => NOT_CODE_TOOLS.has(imageName(a))));
+      if (uses.some((u) => CODE_SCANNERS.test(u)) || !notCode && uses.some((u) => u.startsWith("github/codeql-action/upload-sarif@")) || images.some((i) => SCANNER_IMAGES.has(imageName(i))) || commands.some((c) => SCAN_COMMAND.test(c.join(" ")))) codeql = true;
     }
   }
   return { onPr, codeql };
