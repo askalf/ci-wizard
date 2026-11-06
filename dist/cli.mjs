@@ -8302,8 +8302,8 @@ var UNTRUSTED = new RegExp([
   String.raw`github\.event\.pull_request\.head\.(ref|label|repo\.default_branch)`,
   String.raw`github\.event\.workflow_run\.(head_branch|head_commit\.(message|author\.(email|name)))`,
   String.raw`github\.head_ref`
-].map((p) => `(?:${p})`).join("|"));
-var UNTRUSTED_FULL = new RegExp(`^(?:${UNTRUSTED.source})$`);
+].map((p) => `(?:${p})`).join("|"), "i");
+var UNTRUSTED_FULL = new RegExp(`^(?:${UNTRUSTED.source})$`, "i");
 var CONTAINERS = /* @__PURE__ */ new Set([
   "github",
   "github.event",
@@ -8342,16 +8342,21 @@ function flowingFields(node) {
     case "ctx":
     case "prop":
     case "index": {
-      const path = pathOf(node);
-      if (path === null) return [];
+      const spelled = pathOf(node);
+      if (spelled === null) return [];
+      const path = spelled.toLowerCase();
       const norm = path.replace(/\[[^\]]*\]/g, ".*").replace(/\.\*\.\*/g, ".*");
       if (UNTRUSTED_FULL.test(path) || UNTRUSTED_FULL.test(norm)) return [path];
-      if (CONTAINERS.has(path.toLowerCase())) return [path];
+      if (CONTAINERS.has(path)) return [path];
       return [];
     }
+    // a || b gives a when a is truthy, else b: either can be the result. a && b gives a only when a
+    // is falsy, and the only falsy text is the empty string, so only b's text can reach the result:
+    // in `title && 'yes' || 'no'` the title picks a branch and the result is always a literal.
     case "||":
-    case "&&":
       return [...flowingFields(node.a), ...flowingFields(node.b)];
+    case "&&":
+      return flowingFields(node.b);
     case "call":
       return PASSES_TEXT.has(node.name) ? node.args.flatMap(flowingFields) : [];
     default:
@@ -8366,7 +8371,7 @@ function untrustedExpressions(script) {
       fields = flowingFields(parseExpr(m[1]));
     } catch {
       const hit = UNTRUSTED.exec(m[1]);
-      fields = hit ? [hit[0]] : [];
+      fields = hit ? [hit[0].toLowerCase()] : [];
     }
     if (fields.length) out.push({ expression: m[0], field: fields[0], fields, index: m.index });
   }
@@ -8501,6 +8506,29 @@ function shellLang(shell, runsOn) {
   if (labels.some((l) => /^(ubuntu|macos|linux)/.test(l))) return "posix";
   return null;
 }
+var NESTED = {
+  posix: [
+    /\b(ba|z|da|k|fi|c|tc)?sh\s+(-[A-Za-z]+\s+)*-[A-Za-z]*c\b/,
+    /(^|[\s;&|(`])(eval|source|exec|ssh|su|xargs|awk|gawk|mawk|nawk|sed|jq|yq|envsubst|osascript)\b/,
+    /(^|[\s;&|(`])\.\s/,
+    /\b(python[0-9.]*|node|nodejs|deno|bun|perl|ruby|php|pwsh|powershell|Rscript|lua)\b[^\n]*\s-(c|e|E|r|Command|eval|exec)\b/,
+    /\bfind\b[^\n]*\s-exec(dir)?\b/,
+    /\bgit\b[^\n]*\s-c\s/
+  ],
+  pwsh: [/\b(Invoke-Expression|iex|Invoke-Command|Start-Process|cmd(\.exe)?|bash|sh|wsl|pwsh|powershell|python[0-9.]*|node)\b/i, /\s-(Command|c|e|EncodedCommand)\b/i],
+  js: [/\b(eval|Function|exec|execSync|execFile|execFileSync|spawn|spawnSync|execa|execaCommand|runInNewContext|runInThisContext)\s*\(/, /\$`/, /child_process/]
+};
+function commandLine(script, offset) {
+  let start = script.lastIndexOf("\n", offset - 1) + 1;
+  while (start > 1 && script[start - 2] === "\\") start = script.lastIndexOf("\n", start - 2) + 1;
+  let end = script.indexOf("\n", offset);
+  while (end > 0 && script[end - 1] === "\\") end = script.indexOf("\n", end + 1);
+  return script.slice(start, end < 0 ? script.length : end);
+}
+function nestedInterpreter(script, offset, lang) {
+  const text = lang === "js" ? script : commandLine(script, offset);
+  return (NESTED[lang] || []).some((re) => re.test(text));
+}
 function reference(lang, ctx, name) {
   const table = lang === "posix" ? { none: `"$${name}"`, subst: `"$${name}"`, double: `\${${name}}`, single: `'"$${name}"'` } : lang === "pwsh" ? { none: `\${env:${name}}`, double: `\${env:${name}}` } : { none: `process.env.${name}`, template: `\${process.env.${name}}`, single: `' + process.env.${name} + '`, double: `" + process.env.${name} + "` };
   return table[ctx] ?? null;
@@ -8510,6 +8538,7 @@ function rewriteStep(step, { lang, script, field }) {
   const all = [...script.matchAll(/\$\{\{[\s\S]*?\}\}/g)].map((m) => ({ start: m.index, end: m.index + m[0].length }));
   const hits = untrustedExpressions(script);
   if (!hits.length) return "";
+  if (hits.some((h) => nestedInterpreter(script, h.index, lang))) return "";
   const ctxAt = quoteContexts(script, lang, all);
   if (!ctxAt) return "";
   const env = { ...step.env && typeof step.env === "object" ? step.env : {} };
@@ -8578,7 +8607,7 @@ function scanWorkflow(text) {
         const hits = untrustedExpressions(sc.script);
         if (!hits.length) continue;
         const example = rewriteStep(st, sc);
-        for (const hit of hits) injections.push({ job: id, step, ...hit, example });
+        for (const hit of hits) injections.push({ job: id, step, ...hit, example, nested: Boolean(sc.lang && typeof sc.script === "string" && nestedInterpreter(sc.script, hit.index, sc.lang)) });
       }
     });
   }
@@ -8619,7 +8648,7 @@ function scanFindings(files) {
       what: "untrusted input in a script",
       workflow: where([...new Set(injections.map((x) => x.path))]),
       evidence: `${list(injections.map((x) => `${x.path} job ${x.job}, ${x.step}: ${x.expression}`), 4)}; the expression is pasted into the script before it runs, so a title, branch name or comment written as shell code runs as shell code`,
-      fix: "pass the value through an environment variable and quote it in the script, so it is read as data and never parsed as code",
+      fix: "pass the value through an environment variable and quote it in the script, so it is read as data and never parsed as code" + (injections.some((x) => x.nested) ? `. ${injections.filter((x) => x.nested).length === injections.length ? "Here the" : "Where the"} script hands the value to a second parser (bash -c, eval, ssh, awk, sed, jq, a github-script exec), the variable must reach that parser as data too: let the inner program read it from the environment itself (bash -c 'echo "$TITLE"', in single quotes) or pass it as a separate argument (jq --arg), never expand it into the command or program text` : ""),
       tradeoff: "none to speak of: the step reads the same value, and only the shell no longer executes it",
       // The first step that can be rewritten with certainty, as it stands with only its expressions
       // moved to env; none when no step can (a cmd or python shell, a heredoc, a matrix OS).

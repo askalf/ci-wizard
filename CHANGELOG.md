@@ -10,9 +10,11 @@ Security scans of every workflow file (up to 30, not only the sampled workflows'
 - **untrusted input in a script**: a `run:` script or github-script `script` that interpolates a
   title, body, comment, commit message or author, or a head branch name, per GitHub's hardening
   guide. The expression is parsed, so only one whose value carries that text counts: a
-  `contains(...)` test, a comparison or a quoted field name does not. The example is the step
+  `contains(...)` test, a comparison, a field that only picks a branch (`title && 'yes' || 'no'`) or a
+  quoted field name does not, and property names match in any case. The example is the step
   itself with each expression moved to `env:`, read as the step's shell (or github-script) reads it,
-  and is left out where that rewrite cannot be certain.
+  and is left out where that rewrite cannot be certain, including a value handed to a second parser
+  (`bash -c`, `eval`, `ssh`, `jq`), where the fix says the inner program must read it as data too.
 - **job token wider than the job**: `permissions: write-all` (confirmed), or no permissions block,
   leaving the repository's default token (inferred), including a reusable-workflow call that hands
   the caller's token on. The fix is a read-only default, widened per job.

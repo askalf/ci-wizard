@@ -296,8 +296,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   discussion title or body; a comment or review body; a commit message or author; a head branch name
   or label (`github.head_ref`, `pull_request.head.ref`); a page name. The expression has to carry
   the text into the script: the field itself, an object that holds it (`toJSON(github.event)`), or
-  `format`, `join`, `||` and `&&` passing it on. A boolean result (`contains(...)`, a comparison, a
-  negation) and a field name inside a quoted literal are not text from outside. An expression in
+  `format`, `join`, `||` and the right side of `&&` passing it on. A boolean result (`contains(...)`,
+  a comparison, a negation), a field that only picks a branch (`title && 'yes' || 'no'`) and a field
+  name inside a quoted literal are not text from outside. Property names match in any case, as
+  GitHub reads them (`github.event.issue.TITLE` is the title). An expression in
   `env:` or an `if:` is not a script, and passing the value through `env:` is the fix.
 - **Confidence** confirmed. A risk, ranked first. The evidence names the file, job and step.
 - **Fix** an environment variable for the value, quoted in the script. The example is the step
@@ -305,7 +307,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   the step's language reads it: `"$VAR"` (or `${VAR}` inside double quotes) for bash and sh,
   `${env:VAR}` for PowerShell, `process.env.VAR` for github-script. Where the rewrite cannot be
   certain (a cmd or python shell, a heredoc, a runner OS from a matrix) there is no example rather
-  than one that changes the step. *Trade-off:* none to speak of: the step reads the same value, and
+  than one that changes the step. Nor is there one where the expression goes to a second parser
+  (`bash -c`, `eval`, `ssh`, `awk`, `sed`, `jq`, `python -c`, a github-script `exec`): the outer
+  shell would expand the variable into the inner program's text, so the fix says the value must
+  reach that program as data as well. *Trade-off:* none to speak of: the step reads the same value, and
   only the shell no longer runs it.
 
 ## job token wider than the job

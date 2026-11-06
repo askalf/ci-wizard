@@ -51,6 +51,18 @@ test('untrustedExpressions: only an expression whose value carries the text; a b
   assert.deepEqual(hits('echo ${{ toJSON(github.event) }}'), ['github.event']);
   assert.deepEqual(hits("echo ${{ github.event['pull_request']['title'] }}"), ['github.event.pull_request.title']);
   assert.deepEqual(hits('echo ${{ github.event.pull_request.head.label }}'), ['github.event.pull_request.head.label']);
+  // && and ||: a field that only picks a branch is not the result; one a branch returns is.
+  assert.deepEqual(hits("echo ${{ github.event.issue.title && 'yes' || 'no' }}"), []);
+  assert.deepEqual(hits("echo ${{ github.event.issue.title && 'yes' }}"), []);
+  assert.deepEqual(hits("echo ${{ github.event_name == 'issues' && github.event.issue.title || 'none' }}"), ['github.event.issue.title']);
+  assert.deepEqual(untrustedExpressions("echo ${{ github.event.issue.title || github.event.issue.body }}")[0].fields, ['github.event.issue.title', 'github.event.issue.body']);
+  // Property names are case-insensitive: the same title, however it is spelled.
+  assert.deepEqual(hits('echo "${{ github.event.issue.TITLE }}"'), ['github.event.issue.title']);
+  assert.deepEqual(hits('echo "${{ GitHub.Event.Pull_Request.Head.Ref }}"'), ['github.event.pull_request.head.ref']);
+  assert.deepEqual(hits("echo ${{ github.event['Issue']['Body'] }}"), ['github.event.issue.body']);
+  assert.deepEqual(hits('echo ${{ toJSON(GITHUB.EVENT) }}'), ['github.event']);
+  // An expression that does not parse falls back to the name, also in any case.
+  assert.deepEqual(hits('echo ${{ github.event.issue.TITLE ) }}'), ['github.event.issue.title']);
 });
 
 test('envNameFor: a short, shell-safe name for the field', () => {
@@ -176,6 +188,23 @@ test('the injection example is the step itself, command and settings kept, read 
 });
 
 test('the injection example is left out where the rewrite cannot be certain', () => {
+  // A second parser: the outer shell would expand the variable into the inner program's text.
+  assert.equal(injectionExample('      - run: bash -c "echo ${{ github.event.issue.title }}"\n'), '');
+  assert.equal(injectionExample("      - run: sh -ec 'echo ${{ github.event.issue.title }}'\n"), '');
+  assert.equal(injectionExample('      - run: eval "echo ${{ github.head_ref }}"\n'), '');
+  assert.equal(injectionExample('      - run: ssh host "deploy ${{ github.head_ref }}"\n'), '');
+  assert.equal(injectionExample("      - run: jq '.x == \"${{ github.head_ref }}\"' f.json\n"), '');
+  assert.equal(injectionExample('      - run: |\n          docker run img \\\n            sh -c "echo ${{ github.head_ref }}"\n'), '');
+  assert.equal(injectionExample('      - run: python -c "print(\'${{ github.head_ref }}\')"\n'), '');
+  assert.equal(injectionExample('      - run: Invoke-Expression "echo ${{ github.head_ref }}"\n', 'windows-latest'), '');
+  assert.equal(injectionExample(`      - uses: actions/github-script@${SHA}\n        with:\n          script: await exec.exec(\`git tag \${{ github.head_ref }}\`)\n`), '');
+  // A second parser elsewhere in the script, on another line, does not block this line's rewrite.
+  assert.equal(parse(injectionExample('      - run: |\n          bash -c "make all"\n          echo ${{ github.head_ref }}\n'))[0].run, 'bash -c "make all"\necho "$HEAD_REF"\n');
+  // The finding still fires and its fix says what the nested case needs.
+  const nested = scanFindings(new Map([['.github/workflows/ci.yml', 'on: [pull_request]\npermissions: {}\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: bash -c "echo ${{ github.event.issue.title }}"\n']]));
+  const f = nested.find((x) => x.what === 'untrusted input in a script');
+  assert.equal(f.example, '');
+  assert.match(f.fix, /Here the script hands the value to a second parser.*bash -c 'echo "\$TITLE"'.*jq --arg/);
   assert.equal(injectionExample('      - run: echo ${{ github.head_ref }}\n', '${{ matrix.os }}'), ''); // bash or pwsh?
   assert.equal(injectionExample('      - shell: cmd\n        run: echo ${{ github.head_ref }}\n', 'windows-latest'), '');
   assert.equal(injectionExample('      - shell: python\n        run: print("${{ github.head_ref }}")\n'), '');
