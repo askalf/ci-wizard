@@ -9427,8 +9427,10 @@ function analyse(repo, data) {
 var CONF = { confirmed: "confirmed by the workflow file", inferred: "cause inferred", measured: "measured" };
 var CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 var plain = (s) => String(s).replace(/\r\n?/g, "\n").replace(CONTROL, "");
-function md(s) {
-  const text = String(s ?? "").replace(/\r?\n|\r/g, " ").replace(CONTROL, "").replace(/`{2,}/g, "`");
+function md(s, { table = false } = {}) {
+  const flat = String(s ?? "").replace(/\r?\n|\r/g, " ").replace(CONTROL, "");
+  if (table) return flat.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\|/g, "\\|").replace(/\[/g, "\\[").replace(/\]/g, "\\]").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const text = flat.replace(/`{2,}/g, "`");
   const parts = text.split("`");
   const unpaired = parts.length % 2 === 0;
   return parts.map((part, i) => {
@@ -9437,7 +9439,7 @@ function md(s) {
     return i === 0 ? out : `${unpaired && i === parts.length - 1 ? "\\`" : "`"}${out}`;
   }).join("");
 }
-var cell = (s) => md(s).replace(/\|/g, "\\|");
+var cell = (s) => md(s, { table: true });
 function fence(body, lang = "yaml") {
   const text = plain(body);
   const longest = Math.max(0, ...(text.match(/`+/g) || []).map((r) => r.length));

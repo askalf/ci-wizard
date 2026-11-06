@@ -61,8 +61,10 @@ test('md: repository text displays as text, never as markup', () => {
   assert.equal(md('``x`` y'), '`x` y');
   // Terminal escapes are removed.
   assert.equal(md('ok\x1b]8;;https://evil\x07click\x1b]8;;\x07\x1b[8mhidden'), 'ok\\]8;;https://evilclick\\]8;;\\[8mhidden'); // no ESC or BEL left; brackets escaped
-  // A table cell cannot add a column.
+  // A table cell cannot add a column, from a code span or after a backslash either.
   assert.equal(cell('a|b'), 'a\\|b');
+  assert.equal(cell('`x\\|y`'), '\\`x\\\\\\|y\\`');
+  assert.equal(cell('a\\|b'), 'a\\\\\\|b');
 });
 
 test('fence: an example cannot close its own fence', () => {
@@ -103,9 +105,9 @@ test('the token goes to the API the runner names, and only over https', () => {
 
 test('the action audits through GITHUB_API_URL on GitHub Enterprise Server', async () => {
   const hosts = new Set();
-  const fetchImpl = async (url, init) => {
+  const fetchImpl = async (url) => {
     hosts.add(new URL(url).host);
-    return fakeFetch({ 'api/v3/repos/o/r/actions/runs?': { workflow_runs: [] } })(url.replace('https://ghes.example.com/', 'https://api.github.com/'), init);
+    return fakeFetch({ 'api/v3/repos/o/r/actions/runs?': { workflow_runs: [] } })(url.replace('https://ghes.example.com/', 'https://api.github.com/'));
   };
   const dir = mkdtempSync(join(tmpdir(), 'ciw-'));
   const out = [];

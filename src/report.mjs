@@ -22,8 +22,12 @@ export const plain = (s) => String(s).replace(/\r\n?/g, '\n').replace(CONTROL, '
  * markdown displays literally; backtick runs are cut to one, and an unpaired backtick is escaped,
  * so no span is left open to swallow what follows.
  */
-export function md(s) {
-  const text = String(s ?? '').replace(/\r?\n|\r/g, ' ').replace(CONTROL, '').replace(/`{2,}/g, '`');
+export function md(s, { table = false } = {}) {
+  const flat = String(s ?? '').replace(/\r?\n|\r/g, ' ').replace(CONTROL, '');
+  // A table cell keeps no code span: every backtick and pipe is escaped along with the rest, in
+  // one pass after the backslash, so nothing in the cell can end it or add a column.
+  if (table) return flat.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\|/g, '\\|').replace(/\[/g, '\\[').replace(/\]/g, '\\]').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const text = flat.replace(/`{2,}/g, '`');
   const parts = text.split('`');
   // An even number of parts means an odd number of backticks: the last one pairs with nothing.
   const unpaired = parts.length % 2 === 0;
@@ -35,8 +39,8 @@ export function md(s) {
   }).join('');
 }
 
-/** A table cell: inline markdown, with its pipes escaped so it cannot add a column. */
-export const cell = (s) => md(s).replace(/\|/g, '\\|');
+/** A table cell: text that displays as written and cannot add a column (see md). */
+export const cell = (s) => md(s, { table: true });
 
 /** A fenced block for an example: its fence is longer than any backtick run inside it, so the example cannot close it. */
 export function fence(body, lang = 'yaml') {
