@@ -66,7 +66,14 @@ test('untrustedExpressions: only an expression whose value carries the text; a b
   assert.deepEqual(hits("echo ${{ join(github.event.*.title, '') }}"), ['github.event.*.title']);
   assert.deepEqual(hits('echo ${{ toJSON(github.event.*) }}'), ['github.event.*']);
   assert.deepEqual(hits('echo ${{ github.*.issue.body }}'), ['github.*.issue.body']);
+  // A filter of an object's own values holds its text fields too.
+  assert.deepEqual(hits('echo ${{ toJSON(github.event.issue.*) }}'), ['github.event.issue.*']);
+  assert.deepEqual(hits("echo ${{ join(github.event.head_commit.author.*, ' ') }}"), ['github.event.head_commit.author.*']);
+  assert.deepEqual(hits("echo ${{ join(github.event.commits.*.author.*, ' ') }}"), ['github.event.commits.*.author.*']);
+  assert.deepEqual(hits("echo ${{ join(github.*.*.title, '') }}"), ['github.*.*.title']);
   assert.deepEqual(hits("echo ${{ join(github.event.*.number, ',') }} ${{ join(github.event.*.id, ',') }}"), []);
+  assert.deepEqual(hits('echo ${{ toJSON(github.event.issue.user.*) }} ${{ toJSON(github.event.repository.*) }}'), []);
+  assert.deepEqual(hits('echo ${{ github.event.issue.title.foo }}'), []); // a property of a string is null
   // }} inside a quoted string does not end the expression, as GitHub reads it.
   assert.deepEqual(hits("echo \"${{ format('}}{0}', github.event.issue.title) }}\""), ['github.event.issue.title']);
   assert.deepEqual(hits("echo ${{ format('it''s }}{0}', github.event.issue.body) }}"), ['github.event.issue.body']);

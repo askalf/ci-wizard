@@ -8327,54 +8327,35 @@ var UNTRUSTED = new RegExp([
   String.raw`github\.event\.workflow_run\.(head_branch|head_commit\.(message|author\.(email|name)))`,
   String.raw`github\.head_ref`
 ].map((p) => `(?:${p})`).join("|"), "i");
-var UNTRUSTED_FULL = new RegExp(`^(?:${UNTRUSTED.source})$`, "i");
-var CONTAINERS = /* @__PURE__ */ new Set([
-  "github",
-  "github.event",
-  "github.event.issue",
-  "github.event.pull_request",
-  "github.event.pull_request.head",
-  "github.event.pull_request.head.repo",
-  "github.event.discussion",
-  "github.event.comment",
-  "github.event.review",
-  "github.event.review_comment",
-  "github.event.pages",
-  "github.event.commits",
-  "github.event.head_commit",
-  "github.event.head_commit.author",
-  "github.event.workflow_run",
-  "github.event.workflow_run.head_commit",
-  "github.event.workflow_run.head_commit.author",
-  // An element of a collection (commits[0], commits.*, pages[0]) holds its message, author or page
-  // name just as the collection does.
-  "github.event.commits.*",
-  "github.event.commits.*.author",
-  "github.event.pages.*"
-]);
-var untrustedPath = (p) => UNTRUSTED_FULL.test(p) || CONTAINERS.has(p);
-var SEGMENTS = [
-  "event",
-  "issue",
-  "pull_request",
-  "discussion",
-  "comment",
-  "review",
-  "review_comment",
-  "pages",
-  "commits",
-  "head_commit",
-  "workflow_run",
-  "head",
-  "repo",
-  "author"
-];
-function filterCandidates(path) {
-  const parts = path.split(".");
-  const stars = parts.map((p, i) => p === "*" ? i : -1).filter((i) => i >= 0).slice(0, 3);
-  let out = [parts];
-  for (const i of stars) out = out.flatMap((ps) => ["*", ...SEGMENTS].map((name) => ps.map((p, j) => j === i ? name : p)));
-  return out.map((ps) => ps.join("."));
+var UNTRUSTED_PATHS = [
+  "github.event.issue.title",
+  "github.event.issue.body",
+  "github.event.pull_request.title",
+  "github.event.pull_request.body",
+  "github.event.discussion.title",
+  "github.event.discussion.body",
+  "github.event.comment.body",
+  "github.event.review.body",
+  "github.event.review_comment.body",
+  "github.event.pages.#.page_name",
+  "github.event.commits.#.message",
+  "github.event.commits.#.author.email",
+  "github.event.commits.#.author.name",
+  "github.event.head_commit.message",
+  "github.event.head_commit.author.email",
+  "github.event.head_commit.author.name",
+  "github.event.pull_request.head.ref",
+  "github.event.pull_request.head.label",
+  "github.event.pull_request.head.repo.default_branch",
+  "github.event.workflow_run.head_branch",
+  "github.event.workflow_run.head_commit.message",
+  "github.event.workflow_run.head_commit.author.email",
+  "github.event.workflow_run.head_commit.author.name",
+  "github.head_ref"
+].map((p) => p.split("."));
+function untrustedPath(path) {
+  const segs = path.split(".");
+  return UNTRUSTED_PATHS.some((u) => segs.length <= u.length && segs.every((seg, i) => seg === "*" || seg === u[i]));
 }
 function pathOf(node) {
   if (node.k === "ctx") return node.path[0];
@@ -8413,12 +8394,10 @@ function flowingFields(node) {
       const path = spelled.toLowerCase();
       if (path.includes("[?]")) {
         const before = path.slice(0, path.indexOf("[?]"));
-        const beforeNorm = before.replace(/\[[^\]]*\]/g, ".*");
-        const holds = [before, beforeNorm, ...filterCandidates(beforeNorm)].some((b) => CONTAINERS.has(b) || [...CONTAINERS].some((c) => c.startsWith(`${b}.`)));
-        return holds ? [before] : [];
+        return untrustedPath(before.replace(/\[[^\]]*\]/g, ".*")) ? [before] : [];
       }
-      const norm = path.replace(/\[[^\]]*\]/g, ".*").replace(/\.\*\.\*/g, ".*");
-      return [norm, ...filterCandidates(norm)].some(untrustedPath) ? [path] : [];
+      const norm = path.replace(/\[[^\]]*\]/g, ".*");
+      return untrustedPath(norm) ? [path] : [];
     }
     // a || b gives a when a is truthy, else b: either can be the result. a && b gives a only when a
     // is falsy, and the only falsy text is the empty string, so only b's text can reach the result:

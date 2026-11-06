@@ -36,41 +36,34 @@ const UNTRUSTED = new RegExp([
   String.raw`github\.head_ref`,
 ].map((p) => `(?:${p})`).join('|'), 'i');
 
-// Context property names are case-insensitive in expressions (github.event.issue.TITLE is the
-// title), so paths are matched in lower case.
-const UNTRUSTED_FULL = new RegExp(`^(?:${UNTRUSTED.source})$`, 'i');
-
-// Objects that hold an untrusted field: toJSON(github.event) or ${{ github.event.pull_request }}
-// carries the title and body into the script as surely as the field itself.
-const CONTAINERS = new Set([
-  'github', 'github.event', 'github.event.issue', 'github.event.pull_request', 'github.event.pull_request.head',
-  'github.event.pull_request.head.repo', 'github.event.discussion', 'github.event.comment', 'github.event.review',
-  'github.event.review_comment', 'github.event.pages', 'github.event.commits', 'github.event.head_commit',
-  'github.event.head_commit.author', 'github.event.workflow_run', 'github.event.workflow_run.head_commit',
-  'github.event.workflow_run.head_commit.author',
-  // An element of a collection (commits[0], commits.*, pages[0]) holds its message, author or page
-  // name just as the collection does.
-  'github.event.commits.*', 'github.event.commits.*.author', 'github.event.pages.*',
-]);
-
-const untrustedPath = (p) => UNTRUSTED_FULL.test(p) || CONTAINERS.has(p);
-
-// The names the untrusted paths are built from: an object filter (github.event.*.title) selects
-// whichever of them the event has, so each * is tried as each name.
-const SEGMENTS = ['event', 'issue', 'pull_request', 'discussion', 'comment', 'review', 'review_comment', 'pages',
-  'commits', 'head_commit', 'workflow_run', 'head', 'repo', 'author'];
+// The same fields as paths, one per field, with # for a collection's index (commits[0] or commits.*).
+// Matching is by path, segment by segment, so an object filter, an element of a collection and an
+// object that holds a field are all read the same way.
+const UNTRUSTED_PATHS = [
+  'github.event.issue.title', 'github.event.issue.body',
+  'github.event.pull_request.title', 'github.event.pull_request.body',
+  'github.event.discussion.title', 'github.event.discussion.body',
+  'github.event.comment.body', 'github.event.review.body', 'github.event.review_comment.body',
+  'github.event.pages.#.page_name',
+  'github.event.commits.#.message', 'github.event.commits.#.author.email', 'github.event.commits.#.author.name',
+  'github.event.head_commit.message', 'github.event.head_commit.author.email', 'github.event.head_commit.author.name',
+  'github.event.pull_request.head.ref', 'github.event.pull_request.head.label', 'github.event.pull_request.head.repo.default_branch',
+  'github.event.workflow_run.head_branch', 'github.event.workflow_run.head_commit.message',
+  'github.event.workflow_run.head_commit.author.email', 'github.event.workflow_run.head_commit.author.name',
+  'github.head_ref',
+].map((p) => p.split('.'));
 
 /**
- * The concrete paths an object filter can select: each * (other than a collection's own index,
- * which the patterns already read as *) replaced by each name in SEGMENTS. Bounded: a path with
- * more than three filters is judged by its first three.
+ * Whether a normalised path (lower case, a collection index or an object filter as *) reaches an
+ * untrusted field: it is the field, or an object that holds one. Segment by segment, a * in the
+ * path matches any name or index (an object filter selects every property; github.event.issue.*
+ * holds the title), while a named segment matches only that name, and a collection's index (#)
+ * only an index: github.event.*.number reaches no title.
  */
-function filterCandidates(path) {
-  const parts = path.split('.');
-  const stars = parts.map((p, i) => (p === '*' ? i : -1)).filter((i) => i >= 0).slice(0, 3);
-  let out = [parts];
-  for (const i of stars) out = out.flatMap((ps) => ['*', ...SEGMENTS].map((name) => ps.map((p, j) => (j === i ? name : p))));
-  return out.map((ps) => ps.join('.'));
+function untrustedPath(path) {
+  const segs = path.split('.');
+  return UNTRUSTED_PATHS.some((u) => segs.length <= u.length
+    && segs.every((seg, i) => seg === '*' || seg === u[i]));
 }
 
 /** The dotted path of a context reference (github.event.commits[0].message), or null for anything else. */
@@ -128,13 +121,10 @@ function flowingFields(node) {
       // untrusted text (github.event.issue[inputs.field]), the expression counts.
       if (path.includes('[?]')) {
         const before = path.slice(0, path.indexOf('[?]'));
-        const beforeNorm = before.replace(/\[[^\]]*\]/g, '.*');
-        const holds = [before, beforeNorm, ...filterCandidates(beforeNorm)]
-          .some((b) => CONTAINERS.has(b) || [...CONTAINERS].some((c) => c.startsWith(`${b}.`)));
-        return holds ? [before] : [];
+        return untrustedPath(before.replace(/\[[^\]]*\]/g, '.*')) ? [before] : [];
       }
-      const norm = path.replace(/\[[^\]]*\]/g, '.*').replace(/\.\*\.\*/g, '.*');
-      return [norm, ...filterCandidates(norm)].some(untrustedPath) ? [path] : [];
+      const norm = path.replace(/\[[^\]]*\]/g, '.*');
+      return untrustedPath(norm) ? [path] : [];
     }
     // a || b gives a when a is truthy, else b: either can be the result. a && b gives a only when a
     // is falsy, and the only falsy text is the empty string, so only b's text can reach the result:

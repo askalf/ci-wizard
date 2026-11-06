@@ -319,8 +319,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   `fromJSON(toJSON(github.event)).issue.title` carries the title. It ends where GitHub ends it (a
   `}}` inside a quoted string does not), a key built from constants is resolved
   (`issue[format('tit{0}', 'le')]` is the title), and a key that reads the run
-  (`issue[inputs.field]`) counts wherever the object can hold untrusted text, as does an object
-  filter that can select one (`join(github.event.*.title, '')`). *Trade-off:* none to
+  (`issue[inputs.field]`) counts wherever the object can hold untrusted text. Paths are matched
+  segment by segment against each untrusted field, so an object that holds one (`toJSON(github.event)`,
+  `commits[0]`) and an object filter that can select one (`join(github.event.*.title, '')`,
+  `toJSON(github.event.issue.*)`) count, and `github.event.*.number` does not. *Trade-off:* none to
   speak of: the step reads the same value, and only the shell no longer runs it.
 
 ## job token wider than the job
