@@ -47,7 +47,7 @@ Pin the action to a release commit's full SHA, not to a tag: ci-wizard's own sca
 because a tag can be moved to other code. This prints the SHA of a release:
 
 ```sh
-gh api repos/askalf/ci-wizard/commits/v0.2.0 --jq .sha
+gh api repos/askalf/ci-wizard/commits/v0.3.0 --jq .sha
 ```
 
 Dependabot or Renovate then propose new pins as releases come.
@@ -70,11 +70,11 @@ Outputs: `report-path`, `findings`.
 ### From the command line
 
 ```sh
-npx ci-wizard@0.2.0 owner/repo
-npx ci-wizard@0.2.0 owner/repo --save before.json      # keep a baseline
-npx ci-wizard@0.2.0 owner/repo --html audit.html       # a self-contained page
-npx ci-wizard@0.2.0 owner/repo --only CI --json        # one workflow, as JSON
-npx ci-wizard@0.2.0 compare before.json after.json     # did the fix work?
+npx ci-wizard@0.3.0 owner/repo
+npx ci-wizard@0.3.0 owner/repo --save before.json      # keep a baseline
+npx ci-wizard@0.3.0 owner/repo --html audit.html       # a self-contained page
+npx ci-wizard@0.3.0 owner/repo --only CI --json        # one workflow, as JSON
+npx ci-wizard@0.3.0 compare before.json after.json     # did the fix work?
 ```
 
 You can name the repository as `owner/repo`, a GitHub URL or an SSH remote. Leave it out and the

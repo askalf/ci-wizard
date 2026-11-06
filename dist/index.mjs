@@ -10467,7 +10467,7 @@ function compare2(before, after) {
 }
 
 // src/version.mjs
-var VERSION = "0.2.0";
+var VERSION = "0.3.0";
 
 // src/index.mjs
 var REPO_RE = /^(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/;

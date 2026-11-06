@@ -1,6 +1,6 @@
 {
   "name": "ci-wizard",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Where your GitHub Actions time goes and what to fix first: measured from the Actions API, confirmed in your workflow files, savings labelled as estimates.",
   "type": "module",
   "bin": {

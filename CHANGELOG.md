@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 Merge gates: what stands between a pull request and the default branch.
 
