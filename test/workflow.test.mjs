@@ -110,4 +110,11 @@ test('shell commands: split outside quotes, without comments or here-document bo
   assert.deepEqual(shellCommands('cat <<"a b"\nsemgrep ci\na b\nmake'), [['cat'], ['make']]);
   assert.deepEqual(shellCommands('cat << E\\OF > f\nsemgrep ci\nEOF\nmake'), [['cat', '>', 'f'], ['make']]);
   assert.deepEqual(shellCommands('cat <<END.txt\nsemgrep ci\nEND.txt\nmake'), [['cat'], ['make']]);
+  // An empty quoted delimiter: the first empty line ends the here-document.
+  assert.deepEqual(shellCommands("cat <<''\nsemgrep ci\n\nmake"), [['cat'], ['make']]);
+  // A here-string is not a here-document: the next line is a command.
+  assert.deepEqual(shellCommands('cat <<< "hello"\nsemgrep ci'), [['cat', 'hello'], ['semgrep', 'ci']]);
+  // A shift in arithmetic is not a here-document either.
+  assert.deepEqual(shellCommands('x=$((1 << 2))\nsemgrep ci'), [['x=$((1 << 2))'], ['semgrep', 'ci']]);
+  assert.deepEqual(shellCommands('(( n << 1 ))\nsemgrep ci'), [['(( n << 1 ))'], ['semgrep', 'ci']]);
 });

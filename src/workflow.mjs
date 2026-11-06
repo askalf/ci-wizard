@@ -238,7 +238,20 @@ export function shellCommands(script) {
     } else if (c === '#' && !inWord) {
       const nl = s.indexOf('\n', i);
       i = (nl === -1 ? s.length : nl) - 1;
-    } else if (c === '<' && s.startsWith('<<', i) && s[i + 2] !== '<') {
+    } else if (s.startsWith('<<<', i)) {
+      // A here-string: the word after it is input, read as an ordinary word.
+      endWord();
+      i += 2;
+    } else if (s.startsWith('$((', i) || (c === '(' && s[i + 1] === '(' && !inWord)) {
+      // Arithmetic, $((...)) or ((...)): its << is a shift, not a here-document. Kept as one word.
+      const end = s.indexOf('))', i + 2);
+      const stop = end === -1 ? s.length : end + 2;
+      if (c === '(') endCommand();
+      word += s.slice(i, stop);
+      inWord = true;
+      if (c === '(') endCommand();
+      i = stop - 1;
+    } else if (c === '<' && s.startsWith('<<', i)) {
       // A here-document: its body, from the next line to the delimiter, is input, not commands.
       const tabs = s[i + 2] === '-';
       const d = heredocWord(s, i + (tabs ? 3 : 2));
@@ -284,23 +297,27 @@ function heredocWord(s, from) {
   let i = from;
   while (s[i] === ' ' || s[i] === '\t') i += 1;
   let word = '';
+  let present = false; // a quoted empty word ('') is a delimiter: an empty line ends it
   for (; i < s.length; i++) {
     const c = s[i];
     if (c === "'" || c === '"') {
       const end = s.indexOf(c, i + 1);
       if (end === -1) return null;
       word += s.slice(i + 1, end);
+      present = true;
       i = end;
     } else if (c === '\\' && i + 1 < s.length && s[i + 1] !== '\n') {
       word += s[i + 1];
+      present = true;
       i += 1;
     } else if (/[\s;&|()<>]/.test(c)) {
       break;
     } else {
       word += c;
+      present = true;
     }
   }
-  return word ? { word, end: i } : null;
+  return present ? { word, end: i } : null;
 }
 
 // Words that run the command after them: an assignment (FOO=1), a wrapper, or a wrapper's option.

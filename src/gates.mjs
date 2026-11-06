@@ -30,7 +30,7 @@ const SCAN_COMMAND = /^(semgrep (ci|scan)|snyk code test|codeql database (create
 
 // Tools whose SARIF is about the repository's settings or its workflows, and the programs that run
 // another program by its path, package or image (go run, pipx run, a container).
-const NOT_CODE_TOOLS = new Set(['scorecard', 'zizmor', 'actionlint', 'poutine']);
+const NOT_CODE_TOOLS = new Set(['scorecard', 'scorecard-action', 'zizmor', 'actionlint', 'poutine']);
 const RUNNERS = new Set(['go', 'docker', 'podman', 'pipx']);
 
 // Checks that test, build or analyse the change: the ones a merge should wait for. Matched on the
@@ -59,10 +59,11 @@ function fileFacts(scanFiles) {
       // The job's container, and any step that runs an image (uses: docker://...).
       const images = [job.container && typeof job.container === 'object' ? job.container.image : job.container, ...uses.filter((u) => u.startsWith('docker://'))];
       const commands = runs.flatMap((r) => shellCommands(r)).map(programWords).filter((c) => c.length);
-      // A job that runs Scorecard or a workflow linter (by action, or by a command that runs one,
-      // directly or through go run or a container) uploads results about settings or workflows,
-      // not about the code.
+      // A job that runs Scorecard or a workflow linter (by action, by its image as the job's
+      // container or a docker:// step, or by a command that runs one, directly or through go run
+      // or a container) uploads results about settings or workflows, not about the code.
       const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u))
+        || images.some((i) => NOT_CODE_TOOLS.has(imageName(i)))
         || commands.some(([program, ...args]) => NOT_CODE_TOOLS.has(program.toLowerCase())
           || (RUNNERS.has(program) && args.some((a) => NOT_CODE_TOOLS.has(imageName(a)))));
       if (uses.some((u) => CODE_SCANNERS.test(u))

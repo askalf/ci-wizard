@@ -276,6 +276,8 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   assert.ok(counts(job('      - run: ./bin/bearer scan .\n')));
   // Inside a conditional or a loop.
   assert.ok(counts(job('      - run: if true; then semgrep ci; fi\n')));
+  // After a here-string, a scan command still runs.
+  assert.ok(counts(job('      - run: |\n          cat <<< "hello"\n          semgrep ci\n')));
   assert.ok(counts(job('      - run: if semgrep ci; then echo ok; fi\n')));
   assert.ok(counts(job('      - run: for d in a b; do (cd $d && snyk code test); done\n')));
   assert.ok(counts(job('      - run: |\n          while false\n          do\n            bearer scan .\n          done\n')));
@@ -306,6 +308,11 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   // is not a scan; an image whose name only contains a scanner's is another image.
   assert.ok(!counts(job('      - uses: SonarSource/sonarqube-quality-gate-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(!counts(job('      - uses: snyk/actions/setup@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n      - run: npm run build\n')));
+  // A here-document with an empty quoted delimiter, ended by an empty line.
+  assert.ok(!counts(job("      - run: \"cat <<''\\nsemgrep ci\\n\\n\"\n")));
+  // A linter run from its image, as a docker:// step or as the job's container: its SARIF is about workflows.
+  assert.ok(!counts(job('      - uses: docker://ghcr.io/zizmorcore/zizmor:latest\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(!counts(job('      - run: ./scripts/lint-workflows.sh\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n', '    container:\n      image: rhysd/actionlint:1.7.7\n')));
   // A here-document whose quoted delimiter has punctuation in it.
   assert.ok(!counts(job("      - run: \"cat <<'END-TEXT'\\nsemgrep ci\\nEND-TEXT\\n\"\n")));
   assert.ok(!counts(job('      - run: make\n', '    container:\n      image: sonarqube:lts-community\n')));
