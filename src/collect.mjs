@@ -295,9 +295,12 @@ async function collectGates(client, repo, { runs, byWf, defaultBranch, rootNames
   const classicRead = protection !== undefined && protection !== null;
   if (rulesRead || classicRead) {
     const seen = new Map();
+    // Kept per name and app: two rules can require the same name, one from any app and one from
+    // GitHub Actions, and the stricter one must not be lost to whichever the API lists first.
     const add = (context, integrationId) => {
       if (typeof context !== 'string' || !context) return;
-      if (!seen.has(context)) seen.set(context, { context, integrationId: integrationId ?? null });
+      const key = `${context}\u0000${integrationId ?? ''}`;
+      if (!seen.has(key)) seen.set(key, { context, integrationId: integrationId ?? null });
     };
     if (rulesRead) {
       for (const rule of rules.value) {

@@ -78,7 +78,7 @@ export function gateFindings(gates, { scanFiles = new Map(), scanned = null, vis
       // Absence needs every sampled pull request run's jobs read; presence needs any.
       // A required check no pull request reported: renamed, path-filtered, or removed. GitHub waits
       // for it forever, so merges block or the rule is bypassed.
-      const missing = jobsComplete ? actionsRequired.filter((c) => !prChecks.includes(c.context)).map((c) => c.context) : [];
+      const missing = jobsComplete ? [...new Set(actionsRequired.filter((c) => !prChecks.includes(c.context)).map((c) => c.context))] : [];
       if (missing.length) {
         F.push({
           saving: 0, unit: 'risk', confidence: 'inferred', what: 'required checks no pull request reports', workflow: branch,
@@ -101,7 +101,9 @@ export function gateFindings(gates, { scanFiles = new Map(), scanned = null, vis
         });
       }
       // Say which required checks could not be judged, on the missing-check finding when there is one.
-      const unjudged = required.filter((c) => !isActionsCheck(c)).map((c) => c.context);
+      // A name also required from Actions was judged; only names required from no other way are not.
+      const judged = new Set(actionsRequired.map((c) => c.context));
+      const unjudged = [...new Set(required.filter((c) => !isActionsCheck(c) && !judged.has(c.context)).map((c) => c.context))];
       const missingFinding = F.find((f) => f.what === 'required checks no pull request reports');
       if (unjudged.length && missingFinding) missingFinding.evidence += `; ${list(unjudged.map((u) => `"${u}"`))} ${unjudged.length === 1 ? 'is' : 'are'} not bound to GitHub Actions, so another app may report ${unjudged.length === 1 ? 'it' : 'them'}, and ${unjudged.length === 1 ? 'it was' : 'they were'} not judged`;
     }

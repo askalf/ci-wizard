@@ -234,3 +234,28 @@ test('a required context bound to no app, reported by another app, is never call
   // It is still required: not listed as a check merges do not wait for, and no "none required".
   assert.ok(!whats(F).includes('merges do not wait for any check'));
 });
+
+test('two rulesets requiring the same name, one from any app and one from Actions: the Actions requirement stands, in either order', async () => {
+  const now = new Date(Date.parse(t(7 * 86400)));
+  const rs = runs(3).map((r) => ({ ...r, path: '.github/workflows/ci.yml', event: 'pull_request' }));
+  const unbound = { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'test' }] } };
+  const actions = { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'test', integration_id: 15368 }] } };
+  const routes = (rules) => ({
+    'repos/o/r/actions/runs?': { workflow_runs: rs },
+    'repos/o/r/actions/runs/': { total_count: 1, jobs: [{ ...job(), name: 'lint' }] },
+    'repos/o/r/rules/branches/main': rules,
+    'repos/o/r/branches/main': { name: 'main', protection: { enabled: false } },
+    'repos/o/r/contents/.github/workflows': [{ name: 'ci.yml', type: 'file' }],
+    'repos/o/r/contents/.github': [{ name: 'dependabot.yml', type: 'file' }],
+    'repos/o/r/contents/': prFile,
+    'repos/o/r/contents': [],
+    'repos/o/r': { default_branch: 'main', visibility: 'public' },
+  });
+  for (const order of [[unbound, actions], [actions, unbound]]) {
+    const d = await collect(createClient({ fetchImpl: fakeFetch(routes(order)) }), 'o/r', { now });
+    const f = gateFindings(d.gates, { scanFiles: d.scanFiles, scanned: d.scanned }).find((x) => x.what === 'required checks no pull request reports');
+    assert.ok(f, 'the Actions requirement for "test" is judged');
+    assert.match(f.evidence, /main requires "test",/);
+    assert.doesNotMatch(f.evidence, /not judged/); // "test" was judged through its Actions binding
+  }
+});

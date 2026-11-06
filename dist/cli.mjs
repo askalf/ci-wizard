@@ -7767,7 +7767,8 @@ async function collectGates(client, repo, { runs, byWf, defaultBranch, rootNames
     const seen = /* @__PURE__ */ new Map();
     const add = (context, integrationId) => {
       if (typeof context !== "string" || !context) return;
-      if (!seen.has(context)) seen.set(context, { context, integrationId: integrationId ?? null });
+      const key = `${context}\0${integrationId ?? ""}`;
+      if (!seen.has(key)) seen.set(key, { context, integrationId: integrationId ?? null });
     };
     if (rulesRead) {
       for (const rule of rules.value) {
@@ -8920,7 +8921,7 @@ function gateFindings(gates, { scanFiles = /* @__PURE__ */ new Map(), scanned = 
       });
     }
     if (required.length && prSeen) {
-      const missing = jobsComplete ? actionsRequired.filter((c) => !prChecks.includes(c.context)).map((c) => c.context) : [];
+      const missing = jobsComplete ? [...new Set(actionsRequired.filter((c) => !prChecks.includes(c.context)).map((c) => c.context))] : [];
       if (missing.length) {
         F.push({
           saving: 0,
@@ -8949,7 +8950,8 @@ function gateFindings(gates, { scanFiles = /* @__PURE__ */ new Map(), scanned = 
           example: ""
         });
       }
-      const unjudged = required.filter((c) => !isActionsCheck(c)).map((c) => c.context);
+      const judged = new Set(actionsRequired.map((c) => c.context));
+      const unjudged = [...new Set(required.filter((c) => !isActionsCheck(c) && !judged.has(c.context)).map((c) => c.context))];
       const missingFinding = F.find((f) => f.what === "required checks no pull request reports");
       if (unjudged.length && missingFinding) missingFinding.evidence += `; ${list2(unjudged.map((u) => `"${u}"`))} ${unjudged.length === 1 ? "is" : "are"} not bound to GitHub Actions, so another app may report ${unjudged.length === 1 ? "it" : "them"}, and ${unjudged.length === 1 ? "it was" : "they were"} not judged`;
     }
