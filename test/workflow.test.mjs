@@ -105,4 +105,9 @@ test('shell commands: split outside quotes, without comments or here-document bo
   assert.deepEqual(shellCommands("cat <<'EOF'\nEOF \nsemgrep ci\nEOF\nmake"), [['cat'], ['make']]);
   assert.deepEqual(shellCommands('cat <<EOF\n\tEOF\nsemgrep ci\nEOF\nmake'), [['cat'], ['make']]);
   assert.deepEqual(shellCommands('cat <<-EOF\n\tEOF\nmake'), [['cat'], ['make']]);
+  // The delimiter is the whole shell word, quoted punctuation and escapes included.
+  assert.deepEqual(shellCommands("cat <<'END-TEXT'\nsemgrep ci\nEND-TEXT\nmake"), [['cat'], ['make']]);
+  assert.deepEqual(shellCommands('cat <<"a b"\nsemgrep ci\na b\nmake'), [['cat'], ['make']]);
+  assert.deepEqual(shellCommands('cat << E\\OF > f\nsemgrep ci\nEOF\nmake'), [['cat', '>', 'f'], ['make']]);
+  assert.deepEqual(shellCommands('cat <<END.txt\nsemgrep ci\nEND.txt\nmake'), [['cat'], ['make']]);
 });

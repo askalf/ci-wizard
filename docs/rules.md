@@ -408,7 +408,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
     `snyk code test`, `bearer scan` or `codeql database` command. A command counts where a shell
     command starts (after an assignment, `sudo`, `npx` and the like), not in text it passes on:
     an echoed message, a comment or a here-document. SonarSource's quality-gate action only waits
-    for a scan's result and does not count;
+    for a scan's result, and `snyk/actions/setup` only installs the CLI: neither counts (a scan
+    command after the setup does);
   - a SARIF upload (`github/codeql-action/upload-sarif`), unless its job runs Scorecard or a
     workflow linter (zizmor, actionlint, poutine; by action, or by a command that runs one,
     directly or through `go run`, `pipx run` or a container), whose results are about settings

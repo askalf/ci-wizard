@@ -240,11 +240,12 @@ export function shellCommands(script) {
       i = (nl === -1 ? s.length : nl) - 1;
     } else if (c === '<' && s.startsWith('<<', i) && s[i + 2] !== '<') {
       // A here-document: its body, from the next line to the delimiter, is input, not commands.
-      const m = /^<<-?[ \t]*(['"]?)([A-Za-z0-9_]+)\1/.exec(s.slice(i, i + 80));
-      if (m) {
+      const tabs = s[i + 2] === '-';
+      const d = heredocWord(s, i + (tabs ? 3 : 2));
+      if (d) {
         endWord();
-        heredocs.push({ delim: m[2], tabs: m[0].startsWith('<<-') });
-        i += m[0].length - 1;
+        heredocs.push({ delim: d.word, tabs });
+        i = d.end - 1;
       } else {
         word += c;
         inWord = true;
@@ -275,6 +276,31 @@ export function shellCommands(script) {
   }
   endCommand();
   return commands;
+}
+
+// A here-document's delimiter: the shell word after << (spaces first), with its quotes removed, so
+// 'END-TEXT', "EOF" and E\OF are END-TEXT, EOF and EOF. Null when no word follows.
+function heredocWord(s, from) {
+  let i = from;
+  while (s[i] === ' ' || s[i] === '\t') i += 1;
+  let word = '';
+  for (; i < s.length; i++) {
+    const c = s[i];
+    if (c === "'" || c === '"') {
+      const end = s.indexOf(c, i + 1);
+      if (end === -1) return null;
+      word += s.slice(i + 1, end);
+      i = end;
+    } else if (c === '\\' && i + 1 < s.length && s[i + 1] !== '\n') {
+      word += s[i + 1];
+      i += 1;
+    } else if (/[\s;&|()<>]/.test(c)) {
+      break;
+    } else {
+      word += c;
+    }
+  }
+  return word ? { word, end: i } : null;
 }
 
 // Words that run the command after them: an assignment (FOO=1), a wrapper, or a wrapper's option.

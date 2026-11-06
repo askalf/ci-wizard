@@ -14,8 +14,9 @@ const PR_TRIGGERS = new Set(['pull_request', 'pull_request_target', 'merge_group
 
 // Actions that scan a repository's code and report its vulnerabilities: CodeQL, Semgrep, Snyk,
 // SonarSource's scan actions (SonarCloud, SonarQube; not its quality-gate action, which only waits
-// for a scan's result), Bearer.
-const CODE_SCANNERS = /^(github\/codeql-action\/(init|analyze)|returntocorp\/semgrep-action|semgrep\/semgrep-action|snyk\/actions\/|sonarsource\/(sonarcloud-github-action|sonarqube-scan-action|sonarcloud-github-c-cpp|sonarqube-github-c-cpp)|bearer\/bearer-action)/i;
+// for a scan's result), Bearer. snyk/actions/setup only installs the CLI: a scan it runs is a
+// command, counted as one.
+const CODE_SCANNERS = /^(github\/codeql-action\/(init|analyze)|returntocorp\/semgrep-action|semgrep\/semgrep-action|snyk\/actions\/(?!setup@)|sonarsource\/(sonarcloud-github-action|sonarqube-scan-action|sonarcloud-github-c-cpp|sonarqube-github-c-cpp)|bearer\/bearer-action)/i;
 
 // The same scanners' container images, by the image's name without its registry, owner or tag:
 // semgrep/semgrep, snyk/snyk, sonarsource/sonar-scanner-cli, bearer/bearer. A SonarQube server

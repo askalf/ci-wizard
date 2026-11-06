@@ -8398,11 +8398,12 @@ function shellCommands(script) {
       const nl = s.indexOf("\n", i);
       i = (nl === -1 ? s.length : nl) - 1;
     } else if (c === "<" && s.startsWith("<<", i) && s[i + 2] !== "<") {
-      const m = /^<<-?[ \t]*(['"]?)([A-Za-z0-9_]+)\1/.exec(s.slice(i, i + 80));
-      if (m) {
+      const tabs = s[i + 2] === "-";
+      const d = heredocWord(s, i + (tabs ? 3 : 2));
+      if (d) {
         endWord();
-        heredocs.push({ delim: m[2], tabs: m[0].startsWith("<<-") });
-        i += m[0].length - 1;
+        heredocs.push({ delim: d.word, tabs });
+        i = d.end - 1;
       } else {
         word += c;
         inWord = true;
@@ -8432,6 +8433,28 @@ function shellCommands(script) {
   }
   endCommand();
   return commands;
+}
+function heredocWord(s, from) {
+  let i = from;
+  while (s[i] === " " || s[i] === "	") i += 1;
+  let word = "";
+  for (; i < s.length; i++) {
+    const c = s[i];
+    if (c === "'" || c === '"') {
+      const end = s.indexOf(c, i + 1);
+      if (end === -1) return null;
+      word += s.slice(i + 1, end);
+      i = end;
+    } else if (c === "\\" && i + 1 < s.length && s[i + 1] !== "\n") {
+      word += s[i + 1];
+      i += 1;
+    } else if (/[\s;&|()<>]/.test(c)) {
+      break;
+    } else {
+      word += c;
+    }
+  }
+  return word ? { word, end: i } : null;
 }
 var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "env", "time", "exec", "command", "nice", "npx", "pnpx", "bunx", "uvx"]);
 var OPENERS = /* @__PURE__ */ new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{"]);
@@ -8991,7 +9014,7 @@ function scanFindings(files, { repo = null } = {}) {
 var ACTIONS_APP = 15368;
 var isActionsCheck = (c) => c.integrationId === ACTIONS_APP;
 var PR_TRIGGERS = /* @__PURE__ */ new Set(["pull_request", "pull_request_target", "merge_group"]);
-var CODE_SCANNERS = /^(github\/codeql-action\/(init|analyze)|returntocorp\/semgrep-action|semgrep\/semgrep-action|snyk\/actions\/|sonarsource\/(sonarcloud-github-action|sonarqube-scan-action|sonarcloud-github-c-cpp|sonarqube-github-c-cpp)|bearer\/bearer-action)/i;
+var CODE_SCANNERS = /^(github\/codeql-action\/(init|analyze)|returntocorp\/semgrep-action|semgrep\/semgrep-action|snyk\/actions\/(?!setup@)|sonarsource\/(sonarcloud-github-action|sonarqube-scan-action|sonarcloud-github-c-cpp|sonarqube-github-c-cpp)|bearer\/bearer-action)/i;
 var SCANNER_IMAGES = /* @__PURE__ */ new Set(["semgrep", "snyk", "sonar-scanner-cli", "bearer"]);
 var imageName = (image) => String(image || "").trim().toLowerCase().replace(/^docker:\/\//, "").split("/").pop().split(/[:@]/)[0];
 var SCAN_COMMAND = /^(semgrep (ci|scan)|snyk code test|codeql database (create|analyze)|bearer scan)( |$)/;

@@ -266,6 +266,8 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   const counts = (text) => !whats(gateFindings(g, { scanFiles: files(text), scanned: all(1) })).includes('no code scanning');
   assert.ok(counts(job('      - uses: semgrep/semgrep-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(counts(job('      - uses: snyk/actions/node@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  // Snyk's setup action installs the CLI; the scan is the command after it.
+  assert.ok(counts(job('      - uses: snyk/actions/setup@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n      - run: snyk code test\n')));
   assert.ok(counts(job('      - uses: SonarSource/sonarqube-scan-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(counts(job('      - run: semgrep ci --sarif > out.sarif\n')));
   // After an assignment, a wrapper, a path or another command on the line, it is still a run.
@@ -303,6 +305,9 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   // SonarSource's quality gate only waits for an earlier scan's result; a SonarQube server image
   // is not a scan; an image whose name only contains a scanner's is another image.
   assert.ok(!counts(job('      - uses: SonarSource/sonarqube-quality-gate-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(!counts(job('      - uses: snyk/actions/setup@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n      - run: npm run build\n')));
+  // A here-document whose quoted delimiter has punctuation in it.
+  assert.ok(!counts(job("      - run: \"cat <<'END-TEXT'\\nsemgrep ci\\nEND-TEXT\\n\"\n")));
   assert.ok(!counts(job('      - run: make\n', '    container:\n      image: sonarqube:lts-community\n')));
   assert.ok(!counts(job('      - run: make\n', '    container:\n      image: example/bearer-token-tools:1\n')));
   // A workflow linter run by command, whose SARIF is about the workflows.
