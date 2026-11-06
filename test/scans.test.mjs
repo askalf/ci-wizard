@@ -62,6 +62,11 @@ test('untrustedExpressions: only an expression whose value carries the text; a b
   assert.deepEqual(hits('echo "${{ GitHub.Event.Pull_Request.Head.Ref }}"'), ['github.event.pull_request.head.ref']);
   assert.deepEqual(hits("echo ${{ github.event['Issue']['Body'] }}"), ['github.event.issue.body']);
   assert.deepEqual(hits('echo ${{ toJSON(GITHUB.EVENT) }}'), ['github.event']);
+  // An object filter selects whichever object the event has: github.event.*.title is the title.
+  assert.deepEqual(hits("echo ${{ join(github.event.*.title, '') }}"), ['github.event.*.title']);
+  assert.deepEqual(hits('echo ${{ toJSON(github.event.*) }}'), ['github.event.*']);
+  assert.deepEqual(hits('echo ${{ github.*.issue.body }}'), ['github.*.issue.body']);
+  assert.deepEqual(hits("echo ${{ join(github.event.*.number, ',') }} ${{ join(github.event.*.id, ',') }}"), []);
   // }} inside a quoted string does not end the expression, as GitHub reads it.
   assert.deepEqual(hits("echo \"${{ format('}}{0}', github.event.issue.title) }}\""), ['github.event.issue.title']);
   assert.deepEqual(hits("echo ${{ format('it''s }}{0}', github.event.issue.body) }}"), ['github.event.issue.body']);
@@ -73,6 +78,7 @@ test('untrustedExpressions: only an expression whose value carries the text; a b
   assert.deepEqual(hits('echo ${{ github.event.issue[inputs.field] }}'), ['github.event.issue']);
   assert.deepEqual(hits('echo ${{ github.event.commits[inputs.i].message }}'), ['github.event.commits']);
   assert.deepEqual(hits('echo ${{ github.event.repository[inputs.field] }}'), []); // holds no untrusted text
+  assert.deepEqual(hits('echo ${{ github.event.*[inputs.field] }}'), ['github.event.*']);
   // A property of a computed value carries what the value carries.
   assert.deepEqual(hits('echo "${{ fromJSON(toJSON(github.event)).issue.title }}"'), ['github.event']);
   assert.deepEqual(hits("echo ${{ fromJSON(toJSON(github.event))['issue']['body'] }}"), ['github.event']);
@@ -198,6 +204,9 @@ test('the injection example is the pattern, in the step\'s language, never a rew
   const gs = parse(injectionExample(`      - uses: actions/github-script@${SHA}\n        with:\n          script: core.info("\${{ github.event.issue.title }}")\n`).example)[0];
   assert.equal(gs.env.ISSUE_TITLE, '${{ github.event.issue.title }}');
   assert.match(gs.with.script, /process\.env\.ISSUE_TITLE/);
+  // An expression with a colon and a space is quoted as a YAML value and kept whole.
+  const colon = parse(injectionExample("      - run: |\n          echo \"${{ format('Title: {0}', github.event.issue.title) }}\"\n").example)[0];
+  assert.equal(colon.env.ISSUE_TITLE, "${{ format('Title: {0}', github.event.issue.title) }}");
   // A step name YAML would misread (a colon, a #) is quoted, so the example still parses.
   assert.equal(parse(injectionExample('      - name: "Greet: #1"\n        run: echo ${{ github.head_ref }}\n').example)[0].name, 'Greet: #1');
   // An unknown shell (a matrix OS) gets the forms for the shells it could be, said as such.

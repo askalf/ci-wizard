@@ -8353,6 +8353,30 @@ var CONTAINERS = /* @__PURE__ */ new Set([
   "github.event.commits.*.author",
   "github.event.pages.*"
 ]);
+var untrustedPath = (p) => UNTRUSTED_FULL.test(p) || CONTAINERS.has(p);
+var SEGMENTS = [
+  "event",
+  "issue",
+  "pull_request",
+  "discussion",
+  "comment",
+  "review",
+  "review_comment",
+  "pages",
+  "commits",
+  "head_commit",
+  "workflow_run",
+  "head",
+  "repo",
+  "author"
+];
+function filterCandidates(path) {
+  const parts = path.split(".");
+  const stars = parts.map((p, i) => p === "*" ? i : -1).filter((i) => i >= 0).slice(0, 3);
+  let out = [parts];
+  for (const i of stars) out = out.flatMap((ps) => ["*", ...SEGMENTS].map((name) => ps.map((p, j) => j === i ? name : p)));
+  return out.map((ps) => ps.join("."));
+}
 function pathOf(node) {
   if (node.k === "ctx") return node.path[0];
   if (node.k === "prop") {
@@ -8391,13 +8415,11 @@ function flowingFields(node) {
       if (path.includes("[?]")) {
         const before = path.slice(0, path.indexOf("[?]"));
         const beforeNorm = before.replace(/\[[^\]]*\]/g, ".*");
-        const holds = CONTAINERS.has(before) || CONTAINERS.has(beforeNorm) || [...CONTAINERS].some((c) => c.startsWith(`${beforeNorm}.`));
+        const holds = [before, beforeNorm, ...filterCandidates(beforeNorm)].some((b) => CONTAINERS.has(b) || [...CONTAINERS].some((c) => c.startsWith(`${b}.`)));
         return holds ? [before] : [];
       }
       const norm = path.replace(/\[[^\]]*\]/g, ".*").replace(/\.\*\.\*/g, ".*");
-      if (UNTRUSTED_FULL.test(path) || UNTRUSTED_FULL.test(norm)) return [path];
-      if (CONTAINERS.has(path) || CONTAINERS.has(norm)) return [path];
-      return [];
+      return [norm, ...filterCandidates(norm)].some(untrustedPath) ? [path] : [];
     }
     // a || b gives a when a is truthy, else b: either can be the result. a && b gives a only when a
     // is falsy, and the only falsy text is the empty string, so only b's text can reach the result:
@@ -8451,7 +8473,7 @@ function patternExample(x) {
   const head = `# the pattern, not a drop-in edit: the expression moves to env, the script reads the variable
 - name: ${JSON.stringify(x.step)}
   env:
-    ${name}: ${x.expression}
+    ${name}: ${JSON.stringify(x.expression)}
 `;
   const read = {
     js: `  with:
