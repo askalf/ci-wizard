@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+Faster audits:
+
+- Requests now run up to six at a time, and the work that doesn't depend on order is overlapped:
+  - the remaining run pages, once the first page gives the count;
+  - every sampled run's jobs;
+  - the workflow files;
+  - the repository's metadata and listings.
+
+  Measured on three real repositories, an audit went from 33 s to 9.5 s and from 21 s to 7 s, with
+  the same API calls.
+- The 25-call reserve holds with requests in flight: each one counts as spent until it is answered,
+  and an answer that arrives late with an older, higher count doesn't raise it.
+- A run that moves between pages while they are read is counted once.
+
 Security review (hostile input from the audited repository):
 
 - No more slow matching. A long unterminated `${{` in a workflow value took minutes to hours to

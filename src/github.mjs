@@ -74,6 +74,7 @@ async function readCapped(res, max, path) {
  * @param {number} [o.minRemaining] calls always left for others: no request is sent once the token has this many or fewer
  * @param {number} [o.timeoutMs] each attempt's deadline, the body included (30 s)
  * @param {number} [o.maxBytes] the largest answer read (20 MB); a larger one is an error
+ * @param {number} [o.concurrency] requests in flight at once (6)
  * @param {number[]} [o.backoffMs] wait before each retry
  */
 /**
@@ -94,10 +95,27 @@ export function apiBase(env = {}) {
   return u.href.replace(/\/+$/, '');
 }
 
-export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'https://api.github.com', minRemaining = 25, backoffMs = [1000, 3000], timeoutMs = 30000, maxBytes = 20 * 1048576 } = {}) {
+export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'https://api.github.com', minRemaining = 25, backoffMs = [1000, 3000], timeoutMs = 30000, maxBytes = 20 * 1048576, concurrency = 6 } = {}) {
   if (!/^https:\/\/[^/?#@\s]+(\/[^?#\s]*)?$/.test(String(baseUrl))) throw new Error(`the API base must be an https URL: ${baseUrl}`);
   let calls = 0;
   let remaining = null;
+  // When the count's hour resets (x-ratelimit-reset): answers can arrive out of order, so within
+  // one hour the lowest count seen stands, and only a later reset raises it again.
+  let hourResetsAt = null;
+  // Requests sent and not yet answered. Each will cost one call, so the reserve is checked against
+  // the count less these: several requests in flight together cannot spend the calls kept for the
+  // repository's own CI.
+  let inFlight = 0;
+  // At most `concurrency` requests at once: the audit's calls are independent reads, and GitHub
+  // asks clients not to send many at the same moment.
+  let active = 0;
+  const waiting = [];
+  const acquire = () => (active < concurrency ? (active++, Promise.resolve()) : new Promise((r) => waiting.push(r)));
+  const release = () => {
+    const next = waiting.shift();
+    if (next) next();
+    else active--;
+  };
   // The token's hourly budget as GitHub reports it (x-ratelimit-limit): 1,000 for a workflow's
   // GITHUB_TOKEN, 5,000 for a person's token, 5,000 or more for a GitHub App installation, 60 with
   // no token. It says which budget an audit drew on, and so whether a larger one is available.
@@ -115,14 +133,16 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
       // Checked before every attempt, retries included: a request is only sent while more than
       // minRemaining calls are left, and costs one, so the audit always leaves at least
       // minRemaining for the repository's own CI.
-      if (remaining !== null && remaining <= minRemaining) throw new RateLimitError(remaining, null, limit);
+      if (remaining !== null && remaining - inFlight <= minRemaining) throw new RateLimitError(remaining - inFlight, null, limit);
       let res;
+      inFlight++;
       try {
         calls++;
         // Each attempt has its own deadline, the body's reading included, so a server that stops
         // answering cannot hold the audit (and, in the action, the runner) indefinitely.
         res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
       } catch (err) {
+        inFlight--;
         // No answer means no new count, but GitHub may have received and charged the request: count
         // it as spent, so the reserve check before a retry never works from a stale, higher number.
         if (remaining !== null) remaining -= 1;
@@ -132,11 +152,18 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
         }
         throw new GitHubError('network', path, err && err.message);
       }
+      inFlight--;
       const left = res.headers.get('x-ratelimit-remaining');
-      // An answer with a count replaces ours; an answer without one (or with one that is not a
-      // number) was still charged, so it counts as spent, like an attempt with no answer at all.
-      if (left !== null && Number.isFinite(Number(left))) remaining = Number(left);
-      else if (remaining !== null) remaining -= 1;
+      const resetHeader = Number(res.headers.get('x-ratelimit-reset'));
+      // An answer with a count replaces ours, unless it is older news: within the same hour the
+      // lower count stands (another answer may have come back first). An answer without one (or
+      // with one that is not a number) was still charged, so it counts as spent.
+      if (left !== null && Number.isFinite(Number(left))) {
+        const n = Number(left);
+        const newHour = Number.isFinite(resetHeader) && resetHeader > 0 && (hourResetsAt === null || resetHeader > hourResetsAt);
+        if (newHour) hourResetsAt = resetHeader;
+        remaining = remaining === null || newHour ? n : Math.min(remaining, n);
+      } else if (remaining !== null) remaining -= 1;
       const cap = res.headers.get('x-ratelimit-limit');
       if (cap !== null && Number.isFinite(Number(cap))) limit = Number(cap);
       const reset = res.headers.get('x-ratelimit-reset');
@@ -176,9 +203,18 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
     }
   }
 
+  async function limited(path, opts) {
+    await acquire();
+    try {
+      return await request(path, opts);
+    } finally {
+      release();
+    }
+  }
+
   return {
-    get: (path) => request(path),
-    getRaw: (path) => request(path, { raw: true }),
+    get: (path) => limited(path),
+    getRaw: (path) => limited(path, { raw: true }),
     get calls() {
       return calls;
     },

@@ -7420,10 +7420,20 @@ async function readCapped(res, max, path) {
   }
   return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength))).toString("utf8");
 }
-function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://api.github.com", minRemaining = 25, backoffMs = [1e3, 3e3], timeoutMs = 3e4, maxBytes = 20 * 1048576 } = {}) {
+function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://api.github.com", minRemaining = 25, backoffMs = [1e3, 3e3], timeoutMs = 3e4, maxBytes = 20 * 1048576, concurrency = 6 } = {}) {
   if (!/^https:\/\/[^/?#@\s]+(\/[^?#\s]*)?$/.test(String(baseUrl))) throw new Error(`the API base must be an https URL: ${baseUrl}`);
   let calls = 0;
   let remaining = null;
+  let hourResetsAt = null;
+  let inFlight = 0;
+  let active = 0;
+  const waiting = [];
+  const acquire = () => active < concurrency ? (active++, Promise.resolve()) : new Promise((r) => waiting.push(r));
+  const release = () => {
+    const next = waiting.shift();
+    if (next) next();
+    else active--;
+  };
   let limit = null;
   async function request(path, { raw = false } = {}) {
     const headers = {
@@ -7434,12 +7444,14 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
     if (token) headers.Authorization = `Bearer ${token}`;
     const url = `${baseUrl}/${path.replace(/^\//, "")}`;
     for (let attempt = 0; ; attempt++) {
-      if (remaining !== null && remaining <= minRemaining) throw new RateLimitError(remaining, null, limit);
+      if (remaining !== null && remaining - inFlight <= minRemaining) throw new RateLimitError(remaining - inFlight, null, limit);
       let res;
+      inFlight++;
       try {
         calls++;
         res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
       } catch (err) {
+        inFlight--;
         if (remaining !== null) remaining -= 1;
         if (attempt < backoffMs.length) {
           await sleep(backoffMs[attempt]);
@@ -7447,9 +7459,15 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
         }
         throw new GitHubError("network", path, err && err.message);
       }
+      inFlight--;
       const left = res.headers.get("x-ratelimit-remaining");
-      if (left !== null && Number.isFinite(Number(left))) remaining = Number(left);
-      else if (remaining !== null) remaining -= 1;
+      const resetHeader = Number(res.headers.get("x-ratelimit-reset"));
+      if (left !== null && Number.isFinite(Number(left))) {
+        const n = Number(left);
+        const newHour = Number.isFinite(resetHeader) && resetHeader > 0 && (hourResetsAt === null || resetHeader > hourResetsAt);
+        if (newHour) hourResetsAt = resetHeader;
+        remaining = remaining === null || newHour ? n : Math.min(remaining, n);
+      } else if (remaining !== null) remaining -= 1;
       const cap = res.headers.get("x-ratelimit-limit");
       if (cap !== null && Number.isFinite(Number(cap))) limit = Number(cap);
       const reset = res.headers.get("x-ratelimit-reset");
@@ -7485,9 +7503,17 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
       }
     }
   }
+  async function limited(path, opts) {
+    await acquire();
+    try {
+      return await request(path, opts);
+    } finally {
+      release();
+    }
+  }
   return {
-    get: (path) => request(path),
-    getRaw: (path) => request(path, { raw: true }),
+    get: (path) => limited(path),
+    getRaw: (path) => limited(path, { raw: true }),
     get calls() {
       return calls;
     },
@@ -7530,16 +7556,49 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   const runs = [];
   let truncated = false;
   onProgress("reading workflow runs");
-  for (let page = 1; page <= maxPages; page++) {
-    const d = await client.get(`repos/${repo}/actions/runs?per_page=100&page=${page}&created=${encodeURIComponent(">=" + since)}`);
-    if (!d) {
-      if (page === 1) throw new NotFoundError(repo);
-      break;
+  const runsPage = (page) => client.get(`repos/${repo}/actions/runs?per_page=100&page=${page}&created=${encodeURIComponent(">=" + since)}`);
+  const first = await runsPage(1);
+  if (!first) throw new NotFoundError(repo);
+  runs.push(...first.workflow_runs || []);
+  if (!runs.length) return null;
+  const total = Number.isFinite(first.total_count) ? first.total_count : null;
+  const settle = (p) => p.then((value) => ({ value }), (error) => ({ error }));
+  const settled = async (p) => {
+    const r = await p;
+    if (r.error) throw r.error;
+    return r.value;
+  };
+  const early = {
+    listing: settle(client.get(`repos/${repo}/contents/.github/workflows`)),
+    meta: settle(client.get(`repos/${repo}`)),
+    root: settle(client.get(`repos/${repo}/contents`)),
+    workflows: settle(client.get(`repos/${repo}/actions/workflows?per_page=100&page=1`))
+  };
+  if ((first.workflow_runs || []).length === 100 && maxPages > 1) {
+    if (total !== null) {
+      const pages = Math.min(maxPages, Math.ceil(total / 100));
+      const rest = await Promise.all(Array.from({ length: pages - 1 }, (_, i) => runsPage(i + 2)));
+      for (const d of rest) if (d) runs.push(...d.workflow_runs || []);
+      truncated = total > maxPages * 100;
+    } else {
+      for (let page = 2; page <= maxPages; page++) {
+        const d = await runsPage(page);
+        if (!d) break;
+        const batch = d.workflow_runs || [];
+        runs.push(...batch);
+        if (batch.length < 100) break;
+        if (page === maxPages) truncated = true;
+      }
     }
-    const batch = d.workflow_runs || [];
-    runs.push(...batch);
-    if (batch.length < 100) break;
-    if (page === maxPages) truncated = true;
+  } else if ((first.workflow_runs || []).length === 100 && maxPages === 1) {
+    truncated = total === null || total > 100;
+  }
+  const seenRuns = /* @__PURE__ */ new Set();
+  for (let i = runs.length - 1; i >= 0; i--) {
+    const id = runs[i] && runs[i].id;
+    if (id == null) continue;
+    if (seenRuns.has(id)) runs.splice(i, 1);
+    else seenRuns.add(id);
   }
   if (!runs.length) return null;
   const oldest = Math.min(...runs.map((r) => Date.parse(r.created_at)));
@@ -7548,79 +7607,79 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   const wantedIds = new Set(runs.map((r) => r.workflow_id).filter((id) => id != null));
   try {
     for (let page = 1, seen = 0; ; page++) {
-      const listed2 = await client.get(`repos/${repo}/actions/workflows?per_page=100&page=${page}`);
+      const listed2 = page === 1 ? await settled(early.workflows) : await client.get(`repos/${repo}/actions/workflows?per_page=100&page=${page}`);
       const batch = listed2 && Array.isArray(listed2.workflows) ? listed2.workflows : [];
       seen += batch.length;
       for (const w of batch) if (w && w.id != null && typeof w.name === "string") workflowNames.set(w.id, w.name);
-      const total = listed2 && Number.isFinite(listed2.total_count) ? listed2.total_count : Infinity;
-      if (batch.length < 100 || seen >= total || [...wantedIds].every((id) => workflowNames.has(id))) break;
+      const total2 = listed2 && Number.isFinite(listed2.total_count) ? listed2.total_count : Infinity;
+      if (batch.length < 100 || seen >= total2 || [...wantedIds].every((id) => workflowNames.has(id))) break;
     }
   } catch (e) {
     if (e instanceof RateLimitError) throw e;
   }
   const byWf = groupRuns(runs, workflowNames);
-  const wanted = only.map((n2) => String(n2).trim().toLowerCase()).filter(Boolean);
+  const wanted = only.map((n) => String(n).trim().toLowerCase()).filter(Boolean);
   const ranked = [...byWf.entries()].sort((a, b) => b[1].length - a[1].length);
   const namesOf = (label, rs) => /* @__PURE__ */ new Set([String(label).toLowerCase(), ...rs.map((r) => String(r.name).toLowerCase())]);
-  const matches = (label, rs, n2) => namesOf(label, rs).has(String(n2).trim().toLowerCase());
-  const top = wanted.length ? ranked.filter(([label, rs]) => wanted.some((n2) => matches(label, rs, n2))) : ranked.slice(0, workflows);
-  const onlyMissing = wanted.length ? only.filter((n2) => String(n2).trim() && !ranked.some(([label, rs]) => matches(label, rs, n2))) : [];
+  const matches = (label, rs, n) => namesOf(label, rs).has(String(n).trim().toLowerCase());
+  const top = wanted.length ? ranked.filter(([label, rs]) => wanted.some((n) => matches(label, rs, n))) : ranked.slice(0, workflows);
+  const onlyMissing = wanted.length ? only.filter((n) => String(n).trim() && !ranked.some(([label, rs]) => matches(label, rs, n))) : [];
   const samples = /* @__PURE__ */ new Map();
   const outcomeSamples = /* @__PURE__ */ new Map();
   const jobsOf2 = async (r) => {
     const j = await client.get(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`);
     return j ? (j.jobs || []).filter((x) => x.started_at && x.completed_at && x.conclusion !== "skipped") : null;
   };
-  let n = 0;
-  for (const [wf, rs] of top) {
-    onProgress(`timing ${wf} (${++n}/${top.length})`);
+  const samplePaths = [...new Set(top.map(([, rs]) => String(rs[0].path || "").split("@")[0]).filter((p) => p.startsWith(".github/workflows/")))];
+  const sampleTextsP = Promise.all(samplePaths.map((path) => settle(client.getRaw(`repos/${repo}/contents/${encodePath(path)}`))));
+  const timed = await Promise.all(top.map(async ([wf, rs], n) => {
+    onProgress(`timing ${wf} (${n + 1}/${top.length})`);
     const ok = rs.filter((r) => r.status === "completed" && r.conclusion === "success").slice(0, perWorkflow);
-    const jobsPerRun = [];
-    for (const r of ok) {
-      const jobs = await jobsOf2(r);
-      if (jobs) jobsPerRun.push(jobs);
-    }
-    samples.set(wf, jobsPerRun);
+    const outcomes = ["failure", "cancelled", "timed_out"].map((outcome) => [outcome, rs.filter((r) => r.status === "completed" && r.conclusion === outcome).slice(0, perOutcome)]);
+    const [okJobs, ...outcomeJobs] = await Promise.all([
+      Promise.all(ok.map(jobsOf2)),
+      ...outcomes.map(([, picked]) => Promise.all(picked.map(jobsOf2)))
+    ]);
     const byOutcome = {};
-    for (const outcome of ["failure", "cancelled", "timed_out"]) {
-      const picked = rs.filter((r) => r.status === "completed" && r.conclusion === outcome).slice(0, perOutcome);
-      for (const r of picked) {
-        const jobs = await jobsOf2(r);
-        if (jobs) (byOutcome[outcome] ||= []).push(jobs);
-      }
-    }
+    outcomes.forEach(([outcome], i) => {
+      const got = outcomeJobs[i].filter(Boolean);
+      if (got.length) byOutcome[outcome] = got;
+    });
+    return [wf, okJobs.filter(Boolean), byOutcome];
+  }));
+  for (const [wf, jobsPerRun, byOutcome] of timed) {
+    samples.set(wf, jobsPerRun);
     outcomeSamples.set(wf, byOutcome);
   }
   onProgress("reading workflow files");
   const files = /* @__PURE__ */ new Map();
   const fileReads = /* @__PURE__ */ new Map();
-  for (const [, rs] of top) {
-    const path = String(rs[0].path || "").split("@")[0];
-    if (path.startsWith(".github/workflows/") && !files.has(path)) {
-      const text = await client.getRaw(`repos/${repo}/contents/${encodePath(path)}`);
-      fileReads.set(path, typeof text === "string" ? text : null);
-      files.set(path, text || "");
-    }
-  }
+  const sampleTexts = await Promise.all((await sampleTextsP).map((r) => settled(Promise.resolve(r))));
+  samplePaths.forEach((path, i) => {
+    const text = sampleTexts[i];
+    fileReads.set(path, typeof text === "string" ? text : null);
+    files.set(path, text || "");
+  });
   onProgress("scanning workflow files");
-  const listing = await client.get(`repos/${repo}/contents/.github/workflows`);
+  const [listing, meta, rootListing] = await Promise.all([settled(early.listing), settled(early.meta), settled(early.root)]);
   const workflowPaths = (Array.isArray(listing) ? listing : []).filter((x) => x && x.type === "file" && /\.ya?ml$/i.test(String(x.name || ""))).map((x) => `.github/workflows/${x.name}`).sort();
   const listed = Array.isArray(listing);
   const scanFiles = /* @__PURE__ */ new Map();
   const unreadable = [];
   const candidates = listed ? workflowPaths : [...files.keys()];
-  for (const path of candidates) {
-    if (scanFiles.size + unreadable.length >= maxScanFiles) break;
+  const toScan = candidates.slice(0, maxScanFiles);
+  const scanTexts = await Promise.all(toScan.map((path) => {
     const known = fileReads.get(path);
-    const text = known !== void 0 ? known : await client.getRaw(`repos/${repo}/contents/${encodePath(path)}`);
-    if (typeof text === "string") scanFiles.set(path, text);
+    return known !== void 0 ? known : client.getRaw(`repos/${repo}/contents/${encodePath(path)}`);
+  }));
+  toScan.forEach((path, i) => {
+    if (typeof scanTexts[i] === "string") scanFiles.set(path, scanTexts[i]);
     else unreadable.push(path);
-  }
+  });
   const scanned = { read: scanFiles.size, of: listed ? workflowPaths.length : null, unreadable };
-  const meta = await client.get(`repos/${repo}`);
   const defaultBranch = meta && typeof meta.default_branch === "string" ? meta.default_branch : null;
   const visibility = meta && typeof meta.visibility === "string" ? meta.visibility : meta && typeof meta.private === "boolean" ? meta.private ? "private" : "public" : null;
-  const root = await client.get(`repos/${repo}/contents`) || [];
+  const root = rootListing || [];
   const names = new Set((Array.isArray(root) ? root : []).map((x) => x && x.name));
   const lockfiles = LOCKFILES.filter((f) => names.has(f)).sort();
   return { runs, byWf, samples, outcomeSamples, scanFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, only: wanted.length ? only : [], onlyMissing };
