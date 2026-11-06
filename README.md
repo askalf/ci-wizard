@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: askalf/ci-wizard@ab1dd192931c91d56058c57f68fe9e3004d362aa # v0.2.0
+      - uses: askalf/ci-wizard@5eb81ea55106f8c798f855afee58e68044f09bb2 # v0.3.0
 ```
 
 Pin the action to a release commit's full SHA, not to a tag: ci-wizard's own scan flags a tag pin,
@@ -269,7 +269,7 @@ its client ID as a variable and its key as a secret, and mint a token in the job
           owner: ${{ github.repository_owner }}
           permission-actions: read
           permission-contents: read
-      - uses: askalf/ci-wizard@ab1dd192931c91d56058c57f68fe9e3004d362aa # v0.2.0
+      - uses: askalf/ci-wizard@5eb81ea55106f8c798f855afee58e68044f09bb2 # v0.3.0
         with:
           token: ${{ steps.app.outputs.token }}
 ```
