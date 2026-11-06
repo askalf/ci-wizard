@@ -4,6 +4,10 @@ import { NotFoundError, RateLimitError } from './github.mjs';
 // jobs (with their steps) of the newest successful runs of the busiest workflows, those
 // workflows' files, and the repository's root listing (to see which lockfiles it commits).
 
+// Each segment of a file path percent-encoded: a name with ? or # would otherwise change which
+// file, or which ref, the contents API reads.
+const encodePath = (path) => String(path).split('/').map(encodeURIComponent).join('/');
+
 const LOCKFILES = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock', 'poetry.lock', 'uv.lock', 'Pipfile.lock', 'go.sum', 'Cargo.lock', 'Gemfile.lock'];
 
 /**
@@ -139,7 +143,7 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
   for (const [, rs] of top) {
     const path = String(rs[0].path || '').split('@')[0];
     if (path.startsWith('.github/workflows/') && !files.has(path)) {
-      const text = await client.getRaw(`repos/${repo}/contents/${path}`);
+      const text = await client.getRaw(`repos/${repo}/contents/${encodePath(path)}`);
       fileReads.set(path, typeof text === 'string' ? text : null);
       files.set(path, text || '');
     }
@@ -162,7 +166,7 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
   for (const path of candidates) {
     if (scanFiles.size + unreadable.length >= maxScanFiles) break;
     const known = fileReads.get(path);
-    const text = known !== undefined ? known : await client.getRaw(`repos/${repo}/contents/${path}`);
+    const text = known !== undefined ? known : await client.getRaw(`repos/${repo}/contents/${encodePath(path)}`);
     if (typeof text === 'string') scanFiles.set(path, text);
     else unreadable.push(path);
   }

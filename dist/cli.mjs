@@ -7400,7 +7400,45 @@ var GitHubError = class extends Error {
   }
 };
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://api.github.com", minRemaining = 25, backoffMs = [1e3, 3e3] } = {}) {
+async function readCapped(res, max, path) {
+  const tooLarge = () => new GitHubError("answer too large", path, `more than ${Math.round(max / 1048576)} MB`);
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > max) throw tooLarge();
+  if (!res.body || typeof res.body.getReader !== "function") {
+    const text = await res.text();
+    if (Buffer.byteLength(text) > max) throw tooLarge();
+    return text;
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let n = 0;
+  for (; ; ) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    n += value.byteLength;
+    if (n > max) {
+      await reader.cancel().catch(() => {
+      });
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength))).toString("utf8");
+}
+function apiBase(env = {}) {
+  const raw = String(env.GITHUB_API_URL || "").trim();
+  if (!raw) return "https://api.github.com";
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new Error(`GITHUB_API_URL is not a URL: ${raw}`);
+  }
+  if (u.protocol !== "https:" || u.username || u.password || u.search || u.hash) throw new Error(`GITHUB_API_URL must be a plain https URL: ${raw}`);
+  return u.href.replace(/\/+$/, "");
+}
+function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://api.github.com", minRemaining = 25, backoffMs = [1e3, 3e3], timeoutMs = 3e4, maxBytes = 20 * 1048576 } = {}) {
+  if (!/^https:\/\/[^/?#@\s]+(\/[^?#\s]*)?$/.test(String(baseUrl))) throw new Error(`the API base must be an https URL: ${baseUrl}`);
   let calls = 0;
   let remaining = null;
   let limit = null;
@@ -7417,7 +7455,7 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
       let res;
       try {
         calls++;
-        res = await fetchImpl(url, { headers });
+        res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
       } catch (err) {
         if (remaining !== null) remaining -= 1;
         if (attempt < backoffMs.length) {
@@ -7449,7 +7487,19 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
         }
         throw new GitHubError(res.status, path, msg);
       }
-      return raw ? res.text() : res.json();
+      let text;
+      try {
+        text = await readCapped(res, maxBytes, path);
+      } catch (err) {
+        if (err instanceof GitHubError) throw err;
+        throw new GitHubError("network", path, `the answer stopped arriving (${err && err.message})`);
+      }
+      if (raw) return text;
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new GitHubError(res.status, path, "the answer is not JSON");
+      }
     }
   }
   return {
@@ -7468,6 +7518,7 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
 }
 
 // src/collect.mjs
+var encodePath = (path) => String(path).split("/").map(encodeURIComponent).join("/");
 var LOCKFILES = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock", "poetry.lock", "uv.lock", "Pipfile.lock", "go.sum", "Cargo.lock", "Gemfile.lock"];
 function groupRuns(runs, names = /* @__PURE__ */ new Map()) {
   const groups = /* @__PURE__ */ new Map();
@@ -7563,7 +7614,7 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   for (const [, rs] of top) {
     const path = String(rs[0].path || "").split("@")[0];
     if (path.startsWith(".github/workflows/") && !files.has(path)) {
-      const text = await client.getRaw(`repos/${repo}/contents/${path}`);
+      const text = await client.getRaw(`repos/${repo}/contents/${encodePath(path)}`);
       fileReads.set(path, typeof text === "string" ? text : null);
       files.set(path, text || "");
     }
@@ -7578,7 +7629,7 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   for (const path of candidates) {
     if (scanFiles.size + unreadable.length >= maxScanFiles) break;
     const known = fileReads.get(path);
-    const text = known !== void 0 ? known : await client.getRaw(`repos/${repo}/contents/${path}`);
+    const text = known !== void 0 ? known : await client.getRaw(`repos/${repo}/contents/${encodePath(path)}`);
     if (typeof text === "string") scanFiles.set(path, text);
     else unreadable.push(path);
   }
@@ -9762,10 +9813,10 @@ function compare2(before, after) {
 var VERSION = "0.1.2";
 
 // src/index.mjs
-var REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-async function audit({ repo, token, fetchImpl, days = 7, workflows = 8, perWorkflow = 5, only = [], now, client, onProgress } = {}) {
+var REPO_RE = /^(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/;
+async function audit({ repo, token, fetchImpl, baseUrl, days = 7, workflows = 8, perWorkflow = 5, only = [], now, client, onProgress } = {}) {
   if (!REPO_RE.test(String(repo))) throw new Error(`not an owner/name repository: ${repo}`);
-  const c = client || createClient({ token, fetchImpl });
+  const c = client || createClient({ token, fetchImpl, baseUrl });
   const data = await collect(c, repo, { days, workflows, perWorkflow, only, now, onProgress });
   if (!data) return null;
   const a = analyse(repo, data);
@@ -9967,7 +10018,7 @@ ${USAGE}
   let a;
   try {
     const only = values.only.flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
-    a = await audit({ repo, token, fetchImpl, days, workflows, perWorkflow, only, onProgress });
+    a = await audit({ repo, token, fetchImpl, baseUrl: apiBase(env), days, workflows, perWorkflow, only, onProgress });
   } catch (err) {
     if (live) stderr.write("\r\x1B[K");
     stderr.write(`ci-wizard: ${err.message}

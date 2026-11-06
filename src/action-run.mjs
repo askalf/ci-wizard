@@ -5,6 +5,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { audit, report, RateLimitError, REPO_RE } from './index.mjs';
 import { budgetText } from './report.mjs';
+import { apiBase } from './github.mjs';
 
 /** Inputs as the runner passes them: INPUT_<NAME> with the name upper-cased and spaces as underscores. */
 export function input(env, name, fallback = '') {
@@ -44,7 +45,7 @@ export async function run({ env = process.env, stdout = process.stdout, fetchImp
   let a;
   try {
     const only = input(env, 'only', '').split(',').map((v) => v.trim()).filter(Boolean);
-    a = await audit({ repo, token, fetchImpl, days, workflows: Math.floor(workflows), perWorkflow: Math.floor(perWorkflow), only, now });
+    a = await audit({ repo, token, fetchImpl, baseUrl: apiBase(env), days, workflows: Math.floor(workflows), perWorkflow: Math.floor(perWorkflow), only, now });
   } catch (err) {
     if (err instanceof RateLimitError) {
       command(stdout, 'warning', `ci-wizard: ${err.message}; no report this run`);

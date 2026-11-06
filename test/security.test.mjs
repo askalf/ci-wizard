@@ -81,3 +81,63 @@ test('report and compare: a hostile step name and workflow name stay text', () =
   const c = compare(a, a);
   assert.doesNotMatch(c, /\n## Fix: curl|\x1b/);
 });
+
+import { apiBase, createClient } from '../src/github.mjs';
+import { REPO_RE } from '../src/index.mjs';
+import { run } from '../src/action-run.mjs';
+import { collect } from '../src/collect.mjs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fakeFetch, t } from './helpers.mjs';
+
+test('the token goes to the API the runner names, and only over https', () => {
+  assert.equal(apiBase({}), 'https://api.github.com');
+  assert.equal(apiBase({ GITHUB_API_URL: 'https://ghes.example.com/api/v3/' }), 'https://ghes.example.com/api/v3');
+  assert.equal(apiBase({ GITHUB_API_URL: 'https://api.acme.ghe.com' }), 'https://api.acme.ghe.com');
+  assert.throws(() => apiBase({ GITHUB_API_URL: 'http://ghes.example.com/api/v3' }), /plain https URL/);
+  assert.throws(() => apiBase({ GITHUB_API_URL: 'https://user:pw@ghes.example.com' }), /plain https URL/);
+  assert.throws(() => apiBase({ GITHUB_API_URL: 'not a url' }), /not a URL/);
+  assert.throws(() => createClient({ baseUrl: 'http://api.github.com' }), /https/);
+});
+
+test('the action audits through GITHUB_API_URL on GitHub Enterprise Server', async () => {
+  const hosts = new Set();
+  const fetchImpl = async (url, init) => {
+    hosts.add(new URL(url).host);
+    return fakeFetch({ 'api/v3/repos/o/r/actions/runs?': { workflow_runs: [] } })(url.replace('https://ghes.example.com/', 'https://api.github.com/'), init);
+  };
+  const dir = mkdtempSync(join(tmpdir(), 'ciw-'));
+  const out = [];
+  await run({ env: { INPUT_REPOSITORY: 'o/r', GITHUB_TOKEN: 'x', GITHUB_API_URL: 'https://ghes.example.com/api/v3', RUNNER_TEMP: dir }, stdout: { write: (s) => out.push(s) }, fetchImpl });
+  assert.deepEqual([...hosts], ['ghes.example.com']);
+});
+
+test('a repository name cannot walk the API path, and a file name cannot change the request', async () => {
+  for (const bad of ['../x', 'o/..', 'o/.', './r', '..%2f/x']) assert.equal(REPO_RE.test(bad), false, bad);
+  for (const ok of ['o/r', 'my.org/repo.js', 'o/.github', 'a-b/c_d']) assert.equal(REPO_RE.test(ok), true, ok);
+  const asked = [];
+  const routes = {
+    'repos/o/r/actions/runs?': { workflow_runs: runs(3).map((r) => ({ ...r, path: '.github/workflows/ci?ref=evil#x.yml' })) },
+    'repos/o/r/actions/runs/': { jobs: [job()] },
+    'repos/o/r/contents': [],
+  };
+  await collect(createClient({ fetchImpl: fakeFetch(routes, { calls: asked }) }), 'o/r', { now: new Date(Date.parse(t(7 * 86400))) });
+  assert.ok(asked.some((u) => u.endsWith('contents/.github/workflows/ci%3Fref%3Devil%23x.yml')), asked.join('\n'));
+  assert.ok(!asked.some((u) => /contents\/[^%]*\?ref=evil/.test(u)));
+});
+
+test('an answer too large, or one that never finishes, is an error, not a hang', async () => {
+  const big = createClient({ maxBytes: 1024, backoffMs: [], fetchImpl: async () => new Response('x'.repeat(4096), { status: 200, headers: { 'x-ratelimit-remaining': '4000' } }) });
+  await assert.rejects(big.getRaw('repos/o/r/contents/a.yml'), /answer too large/);
+  const declared = createClient({ maxBytes: 1024, backoffMs: [], fetchImpl: async () => new Response('{}', { status: 200, headers: { 'content-length': '999999999' } }) });
+  await assert.rejects(declared.get('repos/o/r'), /answer too large/);
+  const stalled = createClient({ timeoutMs: 50, backoffMs: [], fetchImpl: (url, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))) });
+  // The deadline's timer does not hold the process open (a real request's socket does), so the
+  // test keeps it alive while it waits.
+  const keepAlive = setTimeout(() => {}, 5000);
+  const t0 = Date.now();
+  await assert.rejects(stalled.get('repos/o/r'), /network/);
+  assert.ok(Date.now() - t0 < 2000);
+  clearTimeout(keepAlive);
+});

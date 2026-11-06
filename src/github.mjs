@@ -37,14 +37,65 @@ export class GitHubError extends Error {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * A response body as text, no more than max bytes of it: a hostile or broken server cannot make
+ * the audit hold an unbounded answer in memory (a workflow file can be 100 MB through the contents
+ * API; none that matters is more than a few).
+ */
+async function readCapped(res, max, path) {
+  const tooLarge = () => new GitHubError('answer too large', path, `more than ${Math.round(max / 1048576)} MB`);
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > max) throw tooLarge();
+  if (!res.body || typeof res.body.getReader !== 'function') {
+    const text = await res.text();
+    if (Buffer.byteLength(text) > max) throw tooLarge();
+    return text;
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let n = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    n += value.byteLength;
+    if (n > max) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength))).toString('utf8');
+}
+
+/**
  * @param {object} o
  * @param {string} [o.token] a token with actions:read and contents:read on the repository
  * @param {typeof fetch} [o.fetchImpl]
  * @param {string} [o.baseUrl]
  * @param {number} [o.minRemaining] calls always left for others: no request is sent once the token has this many or fewer
+ * @param {number} [o.timeoutMs] each attempt's deadline, the body included (30 s)
+ * @param {number} [o.maxBytes] the largest answer read (20 MB); a larger one is an error
  * @param {number[]} [o.backoffMs] wait before each retry
  */
-export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'https://api.github.com', minRemaining = 25, backoffMs = [1000, 3000] } = {}) {
+/**
+ * The API the token belongs to: GITHUB_API_URL, which the runner sets (https://api.github.com on
+ * github.com, the server's own API on GitHub Enterprise Server or GHE.com), else github.com's.
+ * Only an https URL is taken: the token is sent to it.
+ */
+export function apiBase(env = {}) {
+  const raw = String(env.GITHUB_API_URL || '').trim();
+  if (!raw) return 'https://api.github.com';
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new Error(`GITHUB_API_URL is not a URL: ${raw}`);
+  }
+  if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash) throw new Error(`GITHUB_API_URL must be a plain https URL: ${raw}`);
+  return u.href.replace(/\/+$/, '');
+}
+
+export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'https://api.github.com', minRemaining = 25, backoffMs = [1000, 3000], timeoutMs = 30000, maxBytes = 20 * 1048576 } = {}) {
+  if (!/^https:\/\/[^/?#@\s]+(\/[^?#\s]*)?$/.test(String(baseUrl))) throw new Error(`the API base must be an https URL: ${baseUrl}`);
   let calls = 0;
   let remaining = null;
   // The token's hourly budget as GitHub reports it (x-ratelimit-limit): 1,000 for a workflow's
@@ -68,7 +119,9 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
       let res;
       try {
         calls++;
-        res = await fetchImpl(url, { headers });
+        // Each attempt has its own deadline, the body's reading included, so a server that stops
+        // answering cannot hold the audit (and, in the action, the runner) indefinitely.
+        res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
       } catch (err) {
         // No answer means no new count, but GitHub may have received and charged the request: count
         // it as spent, so the reserve check before a retry never works from a stale, higher number.
@@ -106,7 +159,19 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
         throw new GitHubError(res.status, path, msg);
       }
       // An answer that brings the token down to minRemaining is still returned; the next attempt stops.
-      return raw ? res.text() : res.json();
+      let text;
+      try {
+        text = await readCapped(res, maxBytes, path);
+      } catch (err) {
+        if (err instanceof GitHubError) throw err;
+        throw new GitHubError('network', path, `the answer stopped arriving (${err && err.message})`);
+      }
+      if (raw) return text;
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new GitHubError(res.status, path, 'the answer is not JSON');
+      }
     }
   }
 
