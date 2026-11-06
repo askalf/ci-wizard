@@ -49,6 +49,13 @@ const WAITED_ON = new Set(['push', 'pull_request', 'pull_request_target', 'merge
 const PR_EVENTS = new Set(['pull_request', 'pull_request_target']);
 // Kinds reported once per repository, listing the workflows, when they repeat.
 const GROUPED = new Set(['self-hosted wrap-up tail', 'toolchain setup', 'queue wait', 'short hosted jobs bill a whole minute']);
+// What a grouped finding measures, said once before each workflow's own figure (its brief).
+const GROUP_LEADS = {
+  'self-hosted wrap-up tail': "median time after the last step before a job reports done (GitHub-hosted is about 2 s), by workflow",
+  'toolchain setup': 'toolchain setup per job, by workflow',
+  'queue wait': 'p90 wait for a runner, by workflow',
+  'short hosted jobs bill a whole minute': 'GitHub bills each hosted job rounded up to a whole minute; a week, by workflow',
+};
 
 function ranOnGitHubHosted(job) {
   // The runner group is the reliable field: GitHub-hosted jobs report "GitHub Actions". Labels are
@@ -278,8 +285,10 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
   const F = [];
   // A timing from one or two runs can be an outlier; the evidence says so rather than hiding it.
   const thin = w.thin_sample ? ` (timed from only ${w.sampled_runs} successful run${w.sampled_runs === 1 ? '' : 's'})` : '';
-  const add = (saving, what, evidence, fix, { confidence = 'measured', tradeoff = '', example = '', unit = 'job', parts = null } = {}) => F.push({
+  // brief: this workflow's own figure, for a finding groupFindings merges across workflows.
+  const add = (saving, what, evidence, fix, { confidence = 'measured', tradeoff = '', example = '', unit = 'job', parts = null, brief = null } = {}) => F.push({
     saving, workflow: w.workflow, what, evidence: evidence + thin, fix, tradeoff, example, confidence, unit, parts,
+    brief, thin: w.thin_sample ? w.sampled_runs : null,
   });
   const perRun = w.cats_secs_per_run;
   const jobs = Math.max(1, w.jobs_per_run);
@@ -346,7 +355,7 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
     const note = w.setup_cache ? ' (this includes restoring the dependency cache, which the setup step does)' : '';
     add(0.5 * tc * w.runs_week / 60, 'toolchain setup', `toolchain setup takes ${fmtS(tc / jobs)} per job${note}`,
       'use runtime versions the runner image already has, or an image with the toolchain baked in',
-      { confidence: 'inferred', tradeoff: "pinning to the image's version ties the job to the image's update schedule" });
+      { confidence: 'inferred', tradeoff: "pinning to the image's version ties the job to the image's update schedule", brief: `${fmtS(tc / jobs)}${w.setup_cache ? ' (with its dependency cache restore)' : ''}` });
   }
 
   if (w.dup_commits_week >= T.duplicateCommitsWeek) {
@@ -391,13 +400,13 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
     add((w.tail_p50 - 2) * w.jobs_per_run * w.runs_week / 60, 'self-hosted wrap-up tail',
       `median ${Math.round(w.tail_p50)} s after the last step before the job reports done (GitHub-hosted is about 2 s)`,
       "fewer steps per job (the runner uploads each step's log before it reports), and a runner close to GitHub's service region",
-      { tradeoff: 'merging steps merges their logs' });
+      { tradeoff: 'merging steps merges their logs', brief: `${Math.round(w.tail_p50)} s` });
   }
 
   if (w.wait_p90 >= T.queueP90) {
     add(0, 'queue wait', `p90 wait for a runner ${Math.round(w.wait_p90)} s (over ${w.jobs_sampled} sampled jobs)`,
       'more runner capacity at peak, or fewer jobs per event (merge small jobs, skip work by changed paths)',
-      { tradeoff: 'path filters on required checks need care, or a skipped check blocks the merge', unit: 'wait' });
+      { tradeoff: 'path filters on required checks need care, or a skipped check blocks the merge', unit: 'wait', brief: `${Math.round(w.wait_p90)} s over ${w.jobs_sampled} sampled jobs` });
   }
 
   if (w.jobs_per_run >= T.shortJobsCount && w.job_minutes_per_run / w.jobs_per_run < 1.0) {
@@ -418,7 +427,7 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
     add(0.5 * (billed - w.job_minutes_week), 'short hosted jobs bill a whole minute',
       `about ${Math.round(jobsWeek)} jobs a week averaging ${fmtS(w.median_job_s)}, but GitHub bills each hosted job rounded up to a whole minute: about ${Math.round(billed)} billed minutes a week for ${Math.round(w.job_minutes_week)} job-minutes`,
       'fewer, longer jobs: merge the short jobs of a run into one, run the workflow less often, or move it to a self-hosted runner',
-      { tradeoff: 'a merged job reports one status where there were several; a self-hosted runner is yours to run, patch and secure', unit: 'billed' });
+      { tradeoff: 'a merged job reports one status where there were several; a self-hosted runner is yours to run, patch and secure', unit: 'billed', brief: `${Math.round(billed)} billed minutes for ${Math.round(w.job_minutes_week)} job-minutes, jobs averaging ${fmtS(w.median_job_s)}` });
   }
   // A job with no timeout (GitHub's default is 360 minutes), or one far above anything it has taken,
   // lets a hung run hold its runner, and bill on a hosted one, for hours. The limit to suggest comes
@@ -596,6 +605,20 @@ function timeoutText(parts) {
   return { evidence, example: blocks.join('\n---\n') + more };
 }
 
+/**
+ * The evidence of a finding merged across workflows: what it measures, then each workflow's own
+ * figure, its saving, and whether it was thinly sampled, largest saving first. A finding without a
+ * figure for each workflow keeps the largest one's evidence and says so.
+ */
+function groupedEvidence(what, members, largest) {
+  if (!GROUP_LEADS[what] || members.some((m) => !m.brief)) return `${largest} (shown for the largest; the same holds in the others)`;
+  const saved = (m) => (m.unit === 'job' || m.unit === 'billed') && m.saving >= 1 ? `, about ${Math.round(m.saving)} ${m.unit}-min/week` : '';
+  const thin = (m) => (m.thin === null || m.thin === undefined ? '' : `, timed from only ${m.thin} successful run${m.thin === 1 ? '' : 's'}`);
+  const shown = members.slice(0, 6).map((m) => `${m.workflow} ${m.brief}${saved(m)}${thin(m)}`);
+  const more = members.length > 6 ? `; and ${members.length - 6} more` : '';
+  return `${GROUP_LEADS[what]}: ${shown.join('; ')}${more}`;
+}
+
 export function groupFindings(F) {
   // Jobs without a working timeout, found in several workflows, are one finding naming each job.
   const timeouts = F.filter((f) => f.what === 'jobs without a working timeout' && f.parts);
@@ -612,20 +635,20 @@ export function groupFindings(F) {
   const grouped = new Map();
   for (const f of [...F].sort((a, b) => b.saving - a.saving)) {
     if (GROUPED.has(f.what)) {
-      if (!grouped.has(f.what)) grouped.set(f.what, { ...f, workflows: [] });
+      if (!grouped.has(f.what)) grouped.set(f.what, { ...f, members: [] });
       const g = grouped.get(f.what);
-      if (g.workflows.length) g.saving += f.saving;
-      g.workflows.push(f.workflow);
+      if (g.members.length) g.saving += f.saving;
+      g.members.push(f);
     } else {
-      grouped.set(`${f.what}\u0000${f.workflow}`, { ...f, workflows: [f.workflow] });
+      grouped.set(`${f.what}\u0000${f.workflow}`, { ...f, members: [f] });
     }
   }
   const out = [];
   for (const g of grouped.values()) {
-    const wfs = g.workflows;
+    const ms = g.members;
+    const wfs = ms.map((m) => m.workflow);
     const where = wfs.length === 1 ? wfs[0] : `${wfs.length} workflows: ${wfs.slice(0, 5).join(', ')}${wfs.length > 5 ? ' and more' : ''}`;
-    const evidence = wfs.length === 1 ? g.evidence : `${g.evidence} (shown for the largest; the same holds in the others)`;
-    out.push({ ...g, workflow: where, evidence, workflows: undefined });
+    out.push({ ...g, workflow: where, evidence: ms.length === 1 ? g.evidence : groupedEvidence(g.what, ms, g.evidence), members: undefined, brief: undefined, thin: undefined });
   }
   // A security risk comes before any saving: it is the first thing to fix whatever the minutes say.
   const risk = (f) => (f.unit === 'risk' ? 1 : 0);

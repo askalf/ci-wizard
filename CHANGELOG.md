@@ -28,6 +28,10 @@ and every untrusted expression found in a script was one the scan reports):
 - **Each guard says what it guards against:** the required-checks guard read "a guard against
   hung jobs", the timeout finding's wording, and the summary counted it among them. Each guard
   now names its own purpose, and one unrequired check reads in the singular.
+- **Grouped findings show each workflow's figure:** a self-hosted tail, toolchain setup, queue
+  wait or short-hosted-jobs finding found in several workflows gave the largest workflow's figure
+  and "the same holds in the others". The evidence now gives each workflow's own figure and
+  saving, largest first, and marks a workflow timed from only a few successful runs.
 - **One timeout finding:** jobs without a working timeout in several workflows are one finding,
   naming each job with its workflow, with an example block for each workflow file, instead of one
   finding per workflow.
