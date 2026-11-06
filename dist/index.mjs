@@ -8219,12 +8219,20 @@ function category(name) {
   for (const [c, rx] of CATS) if (rx.test(n)) return c;
   return "work";
 }
-var parsed = /* @__PURE__ */ new Map();
-var PARSED_MAX = 512;
+var parsed = null;
+function withParseCache(fn) {
+  if (parsed) return fn();
+  parsed = /* @__PURE__ */ new Map();
+  try {
+    return fn();
+  } finally {
+    parsed = null;
+  }
+}
 function parseWorkflow(text) {
   if (!text) return {};
   const key = String(text);
-  if (parsed.has(key)) return parsed.get(key);
+  if (parsed && parsed.has(key)) return parsed.get(key);
   let doc;
   try {
     doc = (0, import_yaml.parse)(key, { uniqueKeys: false });
@@ -8232,8 +8240,7 @@ function parseWorkflow(text) {
   } catch {
     doc = {};
   }
-  if (parsed.size >= PARSED_MAX) parsed.clear();
-  parsed.set(key, doc);
+  if (parsed) parsed.set(key, doc);
   return doc;
 }
 function stepsOfJob(job) {
@@ -9693,6 +9700,9 @@ function groupFindings(F) {
   return out.sort((a, b) => risk(b) - risk(a) || b.saving - a.saving);
 }
 function analyse(repo, data) {
+  return withParseCache(() => analyseParsed(repo, data));
+}
+function analyseParsed(repo, data) {
   const week = 7 / data.coveredDays;
   const hasLock = data.lockfiles.length > 0;
   const lockKey = hasLock ? `keyed on ${data.lockfiles[0]}` : "keyed on package.json (the repository commits no lockfile, so the key must come from the manifest)";

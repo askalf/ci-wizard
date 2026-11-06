@@ -21,8 +21,8 @@ and every untrusted expression found in a script was one the scan reports):
   workflow at a branch gets a local `./` reference as its example, which needs no pin.
 - **More code scanners:** Semgrep, Snyk, SonarSource, Bearer and code-scanner SARIF uploads now
   count as code scanning. Scorecard and workflow-linter uploads don't.
-- **One parse per file:** each workflow file is parsed once per audit and shared by the scans,
-  the gate checks and the measurements.
+- **One parse per file:** within an audit, each distinct workflow file is parsed once and shared
+  by the measurements, the scans and the gate checks. The parses are dropped when the audit ends.
 
 Required checks come from the default branch's rulesets and protection summary, which every
 token can read. A pull request's checks are the jobs of each workflow's newest pull request run,

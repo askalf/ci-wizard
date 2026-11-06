@@ -279,8 +279,8 @@ test('code scanning: Semgrep, Snyk, SonarSource and a code scanner\'s SARIF uplo
   assert.ok(!counts(job('      - run: actionlint -format "{{json .}}" > a.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
 });
 
-test('a workflow file is parsed once: the scans and the gate checks share the document', async () => {
-  const { parseWorkflow } = await import('../src/workflow.mjs');
-  const text = `on: [push]\njobs:\n  x${Date.now()}:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make\n`;
-  assert.equal(parseWorkflow(text), parseWorkflow(text));
+test('a workflow file is parsed once in an audit: the scans and the gate checks share the document', async () => {
+  const { parseWorkflow, withParseCache } = await import('../src/workflow.mjs');
+  const text = 'on: [push]\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make\n';
+  withParseCache(() => assert.equal(parseWorkflow(text), parseWorkflow(text)));
 });

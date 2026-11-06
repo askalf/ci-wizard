@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { allSteps, category, categoryOf, concurrencyGroupOf, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, workflowFacts } from '../src/workflow.mjs';
+import { allSteps, category, categoryOf, concurrencyGroupOf, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, withParseCache, workflowFacts } from '../src/workflow.mjs';
 
 const WF = `name: CI
 on:
@@ -75,4 +75,15 @@ test('a job whose steps are not a list has no steps, and does not stop the rest 
 
 test('a file whose top level is a list or a scalar is not a workflow, and yields no facts', () => {
   for (const text of ['[]', '- a\n- b', 'just text', '3']) assert.deepEqual(parseWorkflow(text), {}, text);
+});
+
+test('an audit parses each distinct file once, however many, and keeps nothing after it', () => {
+  const texts = Array.from({ length: 600 }, (_, i) => `on: push\njobs:\n  j${i}:\n    runs-on: ubuntu-latest\n`);
+  withParseCache(() => {
+    const first = texts.map((t) => parseWorkflow(t));
+    const again = texts.map((t) => parseWorkflow(t));
+    assert.ok(first.every((d, i) => d === again[i]), 'every file is parsed once in the audit, past 512 files');
+    assert.equal(withParseCache(() => parseWorkflow(texts[0])), first[0], 'a nested audit shares the cache');
+  });
+  assert.notEqual(parseWorkflow(texts[0]), parseWorkflow(texts[0]), 'outside an audit nothing is kept');
 });

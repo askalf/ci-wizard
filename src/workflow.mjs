@@ -25,15 +25,27 @@ export function category(name) {
   return 'work';
 }
 
-// The scans, the merge-gate checks and the measurements each read the same files: a parsed file is
-// kept by its text, so each is parsed once per audit. Callers treat the document as read-only.
-const parsed = new Map();
-const PARSED_MAX = 512;
+// The scans, the merge-gate checks and the measurements each read the same files. Inside an audit
+// (withParseCache) a parsed file is kept by its text for the whole audit, so each is parsed once;
+// the cache goes with the audit, so a long-lived process holds nothing between audits. Outside one,
+// every call parses. Callers treat the document as read-only.
+let parsed = null;
+
+/** Runs fn (synchronous) with one parse per distinct workflow text; a nested call shares the outer cache. */
+export function withParseCache(fn) {
+  if (parsed) return fn();
+  parsed = new Map();
+  try {
+    return fn();
+  } finally {
+    parsed = null;
+  }
+}
 
 export function parseWorkflow(text) {
   if (!text) return {};
   const key = String(text);
-  if (parsed.has(key)) return parsed.get(key);
+  if (parsed && parsed.has(key)) return parsed.get(key);
   let doc;
   try {
     doc = parse(key, { uniqueKeys: false });
@@ -41,8 +53,7 @@ export function parseWorkflow(text) {
   } catch {
     doc = {};
   }
-  if (parsed.size >= PARSED_MAX) parsed.clear();
-  parsed.set(key, doc);
+  if (parsed) parsed.set(key, doc);
   return doc;
 }
 

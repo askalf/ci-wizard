@@ -3,7 +3,7 @@
 // the cause; measured: the numbers show it; inferred: the cause is a likely reading), an
 // estimated weekly saving, and a fix written as an option with its trade-off. docs/rules.md
 // documents every rule, its threshold and its estimate.
-import { concurrencyGroupOf, categoryOf, forkReachableSelfHosted, allJobTimeouts, assignJobRuns, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, workflowFacts } from './workflow.mjs';
+import { concurrencyGroupOf, categoryOf, forkReachableSelfHosted, allJobTimeouts, assignJobRuns, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, withParseCache, workflowFacts } from './workflow.mjs';
 import { countBy, fmtS, mean, median, pct, round, secs, sum } from './util.mjs';
 import { scanFindings } from './scans.mjs';
 import { gateFindings } from './gates.mjs';
@@ -590,6 +590,11 @@ export function groupFindings(F) {
  * @param {Awaited<ReturnType<import('./collect.mjs').collect>>} data
  */
 export function analyse(repo, data) {
+  // One parse per workflow file for the whole audit: the measurements, scans and gate checks share it.
+  return withParseCache(() => analyseParsed(repo, data));
+}
+
+function analyseParsed(repo, data) {
   const week = 7 / data.coveredDays;
   const hasLock = data.lockfiles.length > 0;
   const lockKey = hasLock
