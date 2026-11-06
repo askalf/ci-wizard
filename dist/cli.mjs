@@ -8864,7 +8864,7 @@ function scanFindings(files) {
 
 // src/gates.mjs
 var ACTIONS_APP = 15368;
-var isActionsCheck = (c) => c.integrationId === null || c.integrationId === void 0 || c.integrationId === ACTIONS_APP;
+var isActionsCheck = (c) => c.integrationId === ACTIONS_APP;
 var PR_TRIGGERS = /* @__PURE__ */ new Set(["pull_request", "pull_request_target", "merge_group"]);
 var GATE_LIKE = /\b(test|tests|lint|build|check|checks|verify|analy[sz]e|codeql|typecheck|types|dist|unit|e2e|ci|fuzz|fuzzing)\b/i;
 var list2 = (xs, n = 6) => `${xs.slice(0, n).join(", ")}${xs.length > n ? ` and ${xs.length - n} more` : ""}`;
@@ -8949,8 +8949,9 @@ function gateFindings(gates, { scanFiles = /* @__PURE__ */ new Map(), scanned = 
           example: ""
         });
       }
-      const otherApps = required.filter((c) => !isActionsCheck(c)).map((c) => c.context);
-      if (otherApps.length && F.length) F[F.length - 1].evidence += `; required checks from other apps (${list2(otherApps)}) are not read from the runs`;
+      const unjudged = required.filter((c) => !isActionsCheck(c)).map((c) => c.context);
+      const missingFinding = F.find((f) => f.what === "required checks no pull request reports");
+      if (unjudged.length && missingFinding) missingFinding.evidence += `; ${list2(unjudged.map((u) => `"${u}"`))} ${unjudged.length === 1 ? "is" : "are"} not bound to GitHub Actions, so another app may report ${unjudged.length === 1 ? "it" : "them"}, and ${unjudged.length === 1 ? "it was" : "they were"} not judged`;
     }
   }
   if (listedAll && !files.codeql && !gates.code_scanning_runs) {

@@ -137,7 +137,7 @@ as the markdown report in the job summary, and `--html` renders it as a page.
 | fork pull requests run on self-hosted runners | a fork's code can reach your runner |
 | self-hosted runners reused across jobs | a persistent runner lets a job see what the one before left |
 | merges do not wait for any check | pull requests get checks, but the default branch requires none, so a red pull request can merge |
-| required checks no pull request reports | a required check name that no recent pull request produced (a renamed job, a path filter): GitHub waits for it forever |
+| required checks no pull request reports | a required check bound to GitHub Actions that no recent completed pull request run produced (a renamed job, a path filter): GitHub waits for it forever |
 | no workflow checks pull requests | no workflow file triggers on `pull_request`, and none ran on one |
 | no code scanning | no CodeQL workflow and no default-setup run |
 | no dependency updates | no Dependabot or Renovate configuration, so pinned actions never move to fixed versions |

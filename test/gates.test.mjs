@@ -14,9 +14,9 @@ const all = (n) => ({ read: n, of: n, unreadable: [] });
 const gates = (over = {}) => ({ branch: 'main', required: [], pr_runs_seen: 1, pr_runs_read: 1, pr_checks: ['test'], code_scanning_runs: true, dependency_updates: true, ...over });
 const whats = (F) => F.map((f) => f.what);
 
-test('isActionsCheck: a check with no app or with GitHub Actions is a workflow job; another app is not', () => {
-  assert.equal(isActionsCheck({ context: 'test', integrationId: null }), true);
+test('isActionsCheck: only a check bound to GitHub Actions is known to be a workflow job', () => {
   assert.equal(isActionsCheck({ context: 'test', integrationId: 15368 }), true);
+  assert.equal(isActionsCheck({ context: 'test', integrationId: null }), false); // any app may report it
   assert.equal(isActionsCheck({ context: 'codecov/patch', integrationId: 254 }), false);
 });
 
@@ -32,12 +32,14 @@ test('merges that wait for no check: pull requests get checks, the branch requir
 });
 
 test('a required check no pull request reports: renamed, path-filtered or removed', () => {
-  const g = gates({ required: [{ context: 'test (node 20)', integrationId: 15368 }, { context: 'build', integrationId: null }, { context: 'codecov/patch', integrationId: 254 }], pr_checks: ['test (node 22)', 'build'], pr_runs_read: 2 });
+  const g = gates({ required: [{ context: 'test (node 20)', integrationId: 15368 }, { context: 'build', integrationId: 15368 }, { context: 'codecov/patch', integrationId: 254 }, { context: 'lint', integrationId: null }], pr_checks: ['test (node 22)', 'build'], pr_runs_read: 2 });
   const f = gateFindings(g, { scanFiles: files(prFile), scanned: all(1) }).find((x) => x.what === 'required checks no pull request reports');
   assert.equal(f.unit, 'risk');
   assert.match(f.evidence, /main requires "test \(node 20\)", but the newest pull request run of each of 2 workflows/);
   assert.doesNotMatch(f.evidence, /requires[^,]*"build"/); // reported, so not missing
   assert.doesNotMatch(f.evidence, /requires[^,]*"codecov\/patch"/); // another app: not read from the runs
+  assert.doesNotMatch(f.evidence, /requires[^,]*"lint"/); // bound to no app: any app may report it
+  assert.match(f.evidence, /"codecov\/patch", "lint" are not bound to GitHub Actions, so another app may report them, and they were not judged/);
   // Near miss: no pull request run in the window, so nothing can be said about what they report.
   assert.ok(!whats(gateFindings({ ...g, pr_runs_read: 0, pr_runs_seen: 0, pr_checks: [] }, { scanFiles: files(prFile), scanned: all(1) })).includes('required checks no pull request reports'));
 });
@@ -143,7 +145,7 @@ test('one unreadable source of required checks: what was seen stays required, bu
 });
 
 test('one unreadable pull request run: no required check is called unreported', () => {
-  const g = gates({ required: [{ context: 'test', integrationId: null }], required_complete: true, pr_runs_seen: 2, pr_runs_read: 1, pr_jobs_complete: false, pr_checks: ['lint'] });
+  const g = gates({ required: [{ context: 'test', integrationId: 15368 }], required_complete: true, pr_runs_seen: 2, pr_runs_read: 1, pr_jobs_complete: false, pr_checks: ['lint'] });
   assert.ok(!whats(gateFindings(g, { scanFiles: files(prFile), scanned: all(1) })).includes('required checks no pull request reports'));
   // With every run read, the same absence is a finding.
   const full = { ...g, pr_runs_read: 2, pr_jobs_complete: true };
@@ -157,7 +159,7 @@ test('a run with more than 100 jobs is read page by page, so a required check on
   const routes = {
     'repos/o/r/actions/runs?': { workflow_runs: rs },
     'repos/o/r/actions/runs/': (path) => ({ total_count: 120, jobs: page(Number(/[?&]page=(\d+)/.exec(path)[1])) }),
-    'repos/o/r/rules/branches/main': [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'all tests pass' }] } }],
+    'repos/o/r/rules/branches/main': [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'all tests pass', integration_id: 15368 }] } }],
     'repos/o/r/branches/main': { name: 'main', protection: { enabled: false } },
     'repos/o/r/contents/.github/workflows': [{ name: 'ci.yml', type: 'file' }],
     'repos/o/r/contents/.github': [{ name: 'dependabot.yml', type: 'file' }],
@@ -191,7 +193,7 @@ test('absence is judged from the newest completed pull request run, not one stil
     'repos/o/r/actions/runs?': { workflow_runs: [running, done] },
     'repos/o/r/actions/runs/9001/jobs': { total_count: 1, jobs: [{ ...job(), name: 'setup' }] },
     'repos/o/r/actions/runs/9002/jobs': { total_count: 2, jobs: [{ ...job(), name: 'setup' }, { ...job(), name: 'test (node 22)' }] },
-    'repos/o/r/rules/branches/main': [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'test (node 22)' }] } }],
+    'repos/o/r/rules/branches/main': [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'test (node 22)', integration_id: 15368 }] } }],
     'repos/o/r/branches/main': { name: 'main', protection: { enabled: false } },
     'repos/o/r/contents/.github/workflows': [{ name: 'ci.yml', type: 'file' }],
     'repos/o/r/contents/.github': [{ name: 'dependabot.yml', type: 'file' }],
@@ -207,4 +209,28 @@ test('absence is judged from the newest completed pull request run, not one stil
   assert.equal(onlyRunning.gates.pr_jobs_complete, false);
   assert.deepEqual(onlyRunning.gates.pr_checks, ['setup']);
   assert.ok(!whats(gateFindings(onlyRunning.gates, { scanFiles: onlyRunning.scanFiles, scanned: onlyRunning.scanned })).includes('required checks no pull request reports'));
+});
+
+test('a required context bound to no app, reported by another app, is never called unreported', async () => {
+  const now = new Date(Date.parse(t(7 * 86400)));
+  const rs = runs(3).map((r) => ({ ...r, path: '.github/workflows/ci.yml', event: 'pull_request' }));
+  const routes = {
+    'repos/o/r/actions/runs?': { workflow_runs: rs },
+    'repos/o/r/actions/runs/': { total_count: 1, jobs: [{ ...job(), name: 'test' }] },
+    'repos/o/r/rules/branches/main': [],
+    // Classic protection requires Codecov's check by context alone (no app bound) and test.
+    'repos/o/r/branches/main': { name: 'main', protection: { enabled: true, required_status_checks: { enforcement_level: 'everyone', contexts: ['codecov/patch', 'test'], checks: [] } } },
+    'repos/o/r/contents/.github/workflows': [{ name: 'ci.yml', type: 'file' }],
+    'repos/o/r/contents/.github': [{ name: 'dependabot.yml', type: 'file' }],
+    'repos/o/r/contents/': prFile,
+    'repos/o/r/contents': [],
+    'repos/o/r': { default_branch: 'main', visibility: 'public' },
+  };
+  const d = await collect(createClient({ fetchImpl: fakeFetch(routes) }), 'o/r', { now });
+  assert.equal(d.gates.pr_jobs_complete, true);
+  assert.deepEqual(d.gates.required.map((c) => c.context), ['codecov/patch', 'test']);
+  const F = gateFindings(d.gates, { scanFiles: d.scanFiles, scanned: d.scanned });
+  assert.ok(!whats(F).includes('required checks no pull request reports'));
+  // It is still required: not listed as a check merges do not wait for, and no "none required".
+  assert.ok(!whats(F).includes('merges do not wait for any check'));
 });

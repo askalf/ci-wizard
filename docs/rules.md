@@ -355,7 +355,7 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 
 ## required checks no pull request reports
 
-- **Fires when** a required check from GitHub Actions (integration 15368, or none named) matches no
+- **Fires when** a required check bound to GitHub Actions (integration 15368) matches no
   job of the newest completed pull request run of any workflow in the window (a run still going
   may not have created all its jobs; a workflow with only an unfinished run leaves the absence
   unknown). A job's name is the check
@@ -364,8 +364,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   request without it cannot merge unless the rule is bypassed.
 - **Confidence** inferred: a workflow that ran on no pull request in the window, or one with a path
   filter that the sampled pull requests did not touch, also leaves the name unreported.
-- **Not judged:** a required check from another app (a coverage service, a review bot), which the
-  runs do not show. Nothing is claimed unless every sampled pull request run's jobs were read in
+- **Not judged:** a required check bound to another app (a coverage service, a review bot), or
+  bound to no app (a classic protection context, or a ruleset entry without an app: any app may
+  report it, as Codecov reports `codecov/patch`), which the runs do not show. The evidence names
+  them. Nothing is claimed unless every sampled pull request run's jobs were read in
   full (`gates.pr_jobs_complete`): a run with more than 100 jobs is read page by page, up to 10
   pages, and a list cut short, or a run whose jobs could not be read, leaves the absence unknown.
 - **Fix** require the name pull requests show, or run the workflow on every pull request and skip

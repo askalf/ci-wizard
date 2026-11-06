@@ -4,10 +4,11 @@
 // could not read (a ruleset, a listing) yields no finding rather than a guess.
 import { allSteps, parseWorkflow, triggersOf } from './workflow.mjs';
 
-// GitHub Actions' app id. A required check with this integration, or none, is one a workflow job
-// reports; one from another app (a coverage service, a review bot) cannot be read from the runs.
+// GitHub Actions' app id. Only a required check bound to it is known to come from a workflow job,
+// which the runs show. One bound to another app (a coverage service, a review bot), or bound to no
+// app (any app may report it, as Codecov reports codecov/patch), cannot be judged absent from them.
 const ACTIONS_APP = 15368;
-export const isActionsCheck = (c) => c.integrationId === null || c.integrationId === undefined || c.integrationId === ACTIONS_APP;
+export const isActionsCheck = (c) => c.integrationId === ACTIONS_APP;
 
 const PR_TRIGGERS = new Set(['pull_request', 'pull_request_target', 'merge_group']);
 
@@ -99,8 +100,10 @@ export function gateFindings(gates, { scanFiles = new Map(), scanned = null, vis
           example: '',
         });
       }
-      const otherApps = required.filter((c) => !isActionsCheck(c)).map((c) => c.context);
-      if (otherApps.length && F.length) F[F.length - 1].evidence += `; required checks from other apps (${list(otherApps)}) are not read from the runs`;
+      // Say which required checks could not be judged, on the missing-check finding when there is one.
+      const unjudged = required.filter((c) => !isActionsCheck(c)).map((c) => c.context);
+      const missingFinding = F.find((f) => f.what === 'required checks no pull request reports');
+      if (unjudged.length && missingFinding) missingFinding.evidence += `; ${list(unjudged.map((u) => `"${u}"`))} ${unjudged.length === 1 ? 'is' : 'are'} not bound to GitHub Actions, so another app may report ${unjudged.length === 1 ? 'it' : 'them'}, and ${unjudged.length === 1 ? 'it was' : 'they were'} not judged`;
     }
   }
 
