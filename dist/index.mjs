@@ -8182,15 +8182,17 @@ function forkReachableSelfHosted(doc, repo = "owner/repo") {
   return out;
 }
 var DEFAULT_JOB_TIMEOUT = 360;
-function jobTimeouts(doc) {
+function allJobTimeouts(doc) {
   const out = [];
   for (const [id, job] of Object.entries(doc.jobs || {})) {
-    if (!job || typeof job !== "object" || job.uses !== void 0) continue;
+    if (!job || typeof job !== "object") continue;
     const raw = job["timeout-minutes"];
     const name = typeof job.name === "string" ? job.name : id;
-    if (raw === void 0 || raw === null) out.push({ id, name, minutes: DEFAULT_JOB_TIMEOUT, isDefault: true });
-    else if (typeof raw === "number" && Number.isFinite(raw)) out.push({ id, name, minutes: raw, isDefault: false });
-    else if (typeof raw === "string" && /^\s*\d+(\.\d+)?\s*$/.test(raw)) out.push({ id, name, minutes: Number(raw), isDefault: false });
+    if (job.uses !== void 0) out.push({ id, name, minutes: null, isDefault: false, judged: false });
+    else if (raw === void 0 || raw === null) out.push({ id, name, minutes: DEFAULT_JOB_TIMEOUT, isDefault: true, judged: true });
+    else if (typeof raw === "number" && Number.isFinite(raw)) out.push({ id, name, minutes: raw, isDefault: false, judged: true });
+    else if (typeof raw === "string" && /^\s*\d+(\.\d+)?\s*$/.test(raw)) out.push({ id, name, minutes: Number(raw), isDefault: false, judged: true });
+    else out.push({ id, name, minutes: null, isDefault: false, judged: false });
   }
   return out;
 }
@@ -8608,7 +8610,7 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     events,
     installers: facts.installers,
     fork_reachable: forkReachableSelfHosted(doc, repo),
-    job_timeouts: jobTimeouts(doc),
+    job_timeouts: allJobTimeouts(doc),
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3)
   };
@@ -8784,7 +8786,7 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
   const timeouts = w.job_timeouts || [];
   const assigned = assignJobRuns(timeouts.map((t) => t.name), Object.keys(durations));
   const loose = [];
-  for (const t of timeouts) {
+  for (const t of timeouts.filter((x) => x.judged !== false)) {
     const runs = assigned.get(t.name) || [];
     if (!runs.length) continue;
     const maxS = Math.max(...runs.map((n) => durations[n].max_s));

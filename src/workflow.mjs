@@ -358,14 +358,25 @@ export const DEFAULT_JOB_TIMEOUT = 360;
  * @returns {{ id: string, name: string, minutes: number, isDefault: boolean }[]}
  */
 export function jobTimeouts(doc) {
+  return allJobTimeouts(doc).filter((t) => t.judged).map(({ judged, ...t }) => t);
+}
+
+/**
+ * Every job of the file, judged or not: `judged` is false for a job whose limit the file does not
+ * say (an expression timeout, a reusable-workflow call). Those still take part in matching runs to
+ * jobs, so their runs are never credited to another job.
+ */
+export function allJobTimeouts(doc) {
   const out = [];
   for (const [id, job] of Object.entries(doc.jobs || {})) {
-    if (!job || typeof job !== 'object' || job.uses !== undefined) continue;
+    if (!job || typeof job !== 'object') continue;
     const raw = job['timeout-minutes'];
     const name = typeof job.name === 'string' ? job.name : id;
-    if (raw === undefined || raw === null) out.push({ id, name, minutes: DEFAULT_JOB_TIMEOUT, isDefault: true });
-    else if (typeof raw === 'number' && Number.isFinite(raw)) out.push({ id, name, minutes: raw, isDefault: false });
-    else if (typeof raw === 'string' && /^\s*\d+(\.\d+)?\s*$/.test(raw)) out.push({ id, name, minutes: Number(raw), isDefault: false });
+    if (job.uses !== undefined) out.push({ id, name, minutes: null, isDefault: false, judged: false });
+    else if (raw === undefined || raw === null) out.push({ id, name, minutes: DEFAULT_JOB_TIMEOUT, isDefault: true, judged: true });
+    else if (typeof raw === 'number' && Number.isFinite(raw)) out.push({ id, name, minutes: raw, isDefault: false, judged: true });
+    else if (typeof raw === 'string' && /^\s*\d+(\.\d+)?\s*$/.test(raw)) out.push({ id, name, minutes: Number(raw), isDefault: false, judged: true });
+    else out.push({ id, name, minutes: null, isDefault: false, judged: false });
   }
   return out;
 }

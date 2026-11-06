@@ -156,3 +156,15 @@ test('a suggestion never reaches the limit the job already has: long jobs are le
   // An explicit limit is never "fixed" upward.
   assert.equal(find(timeoutAudit(200, 100 * 60), 'jobs without a working timeout').length, 0);
 });
+
+test('a job left out of the advice still claims its own runs', () => {
+  // Only "Test ubuntu" ran, and its timeout is an expression; the unmeasured "Test ${{ matrix.os }}"
+  // must not take that run and get a limit from it.
+  const file = 'on: push\njobs:\n  generic:\n    name: Test ${{ matrix.os }}\n    runs-on: ubuntu-latest\n    steps: [{run: make}]\n  ubuntu:\n    name: Test ubuntu\n    timeout-minutes: ${{ inputs.limit }}\n    runs-on: ubuntu-latest\n    steps: [{run: make}]\n';
+  const a = analyse('o/r', data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[timed(60, 'Test ubuntu')]], file }] }));
+  assert.equal(find(a, 'jobs without a working timeout').length, 0);
+  // The same for a reusable-workflow call: its runs ("call / build") are its own.
+  const reusable = 'on: push\njobs:\n  any:\n    name: call ${{ matrix.x }}\n    runs-on: ubuntu-latest\n    steps: [{run: make}]\n  call:\n    uses: ./.github/workflows/build.yml\n';
+  const b = analyse('o/r', data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[timed(60, 'call')]], file: reusable }] }));
+  assert.equal(find(b, 'jobs without a working timeout').length, 0);
+});

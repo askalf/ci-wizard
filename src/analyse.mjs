@@ -3,7 +3,7 @@
 // the cause; measured: the numbers show it; inferred: the cause is a likely reading), an
 // estimated weekly saving, and a fix written as an option with its trade-off. docs/rules.md
 // documents every rule, its threshold and its estimate.
-import { concurrencyGroupOf, categoryOf, forkReachableSelfHosted, assignJobRuns, jobTimeouts, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, workflowFacts } from './workflow.mjs';
+import { concurrencyGroupOf, categoryOf, forkReachableSelfHosted, allJobTimeouts, assignJobRuns, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, workflowFacts } from './workflow.mjs';
 import { countBy, fmtS, mean, median, pct, round, secs, sum } from './util.mjs';
 import { CANCEL_OUTDATED, ONE_RUN_PER_COMMIT, cacheExample, checkoutAdvice, forkGuardExample, managerOf, triggerExample } from './advice.mjs';
 
@@ -256,7 +256,7 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     events,
     installers: facts.installers,
     fork_reachable: forkReachableSelfHosted(doc, repo),
-    job_timeouts: jobTimeouts(doc),
+    job_timeouts: allJobTimeouts(doc),
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3),
   };
@@ -422,10 +422,12 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
   // lets a hung run hold its runner, and bill on a hosted one, for hours. The limit to suggest comes
   // from the job's own longest sampled run.
   const durations = w.job_durations || {};
+  // Every file job takes part in matching, so a job left out of the advice (an expression timeout,
+  // a reusable-workflow call) keeps its own runs; only the judged ones are then advised.
   const timeouts = w.job_timeouts || [];
   const assigned = assignJobRuns(timeouts.map((t) => t.name), Object.keys(durations));
   const loose = [];
-  for (const t of timeouts) {
+  for (const t of timeouts.filter((x) => x.judged !== false)) {
     const runs = assigned.get(t.name) || [];
     if (!runs.length) continue;
     const maxS = Math.max(...runs.map((n) => durations[n].max_s));
