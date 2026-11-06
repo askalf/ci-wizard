@@ -388,8 +388,7 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   lint, analysis or fuzzing job (`test`, `build`, `lint`, `check`, `verify`, `analyze`, `codeql`,
   `typecheck`, `dist`, `e2e`, `fuzz`...). Other unrequired checks are counted, not listed.
 - **Confidence** inferred, from the name. A guard against merging a pull request whose checks fail:
-  it saves no minutes. Only claimed when both
-  sources of required checks were read.
+  it saves no minutes. Only claimed when both sources of required checks were read.
 - **Fix** require the ones that must pass. *Trade-off:* a slow or flaky required check holds every
   merge.
 
