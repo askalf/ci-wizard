@@ -138,6 +138,24 @@ test('jobs without a working timeout: one finding across workflows, naming each 
   assert.match(f.example, /\n---\n# \.github\/workflows\/ci\.yml\n/);
 });
 
+test('jobs without a working timeout: across many workflows, the thin samples are named and no job is dropped unsaid', () => {
+  const wf = (name, job, n) => ({
+    name, path: `.github/workflows/${name.toLowerCase()}.yml`, runs: runs(10), jobsPerRun: Array.from({ length: n }, () => [timed(240, job)]),
+    file: `on: push\njobs:\n  ${job}:\n    runs-on: ubuntu-latest\n    steps: [{run: make}]\n`,
+  });
+  // A, B and C are timed from 5 runs; D from only one.
+  const a = analyse('o/r', data({ workflows: [wf('A', 'a', 5), wf('B', 'b', 5), wf('C', 'c', 5), wf('D', 'd', 1)] }));
+  const [f] = find(a, 'jobs without a working timeout');
+  assert.equal(find(a, 'jobs without a working timeout').length, 1);
+  assert.match(f.evidence, /^4 jobs in 4 workflows: /);
+  assert.match(f.evidence, /; D was timed from only 1 successful run$/);
+  assert.doesNotMatch(f.evidence, /[ABC] was timed from only/);
+  // Three jobs set in the example, and the fourth named in its closing comment.
+  const docs = parseAllDocuments(f.example).map((d) => d.toJS());
+  assert.equal(docs.length, 3);
+  assert.match(f.example, /\n# and 1 more job \(D: d\): the same rule, each from its own longest sampled run$/);
+});
+
 test('jobs without a working timeout: a loose limit fires, a working one and unmeasured jobs do not', () => {
   assert.equal(find(timeoutAudit(300), 'jobs without a working timeout').length, 1); // 300 > 10 x 4 min
   assert.equal(find(timeoutAudit(15), 'jobs without a working timeout').length, 0);
