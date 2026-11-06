@@ -2,7 +2,7 @@
 // measured cost, and a job's timeout is judged against its own longest sampled run.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parse } from 'yaml';
+import { parse, parseAllDocuments } from 'yaml';
 import { analyse, measureWorkflow } from '../src/analyse.mjs';
 import { collect } from '../src/collect.mjs';
 import { createClient } from '../src/github.mjs';
@@ -113,6 +113,29 @@ test('jobs without a working timeout: a limit from the job\'s longest sampled ru
   assert.match(lines, /1 finding guards against hung jobs\./);
   // With no saving among the findings, the summary makes no claim about savings.
   assert.doesNotMatch(lines, /Savings are estimates/);
+});
+
+test('jobs without a working timeout: one finding across workflows, naming each workflow\'s jobs', () => {
+  const wf = (name, path, job, seconds) => ({
+    name, path, runs: runs(10), jobsPerRun: [[timed(seconds, job)], [timed(seconds / 2, job)]],
+    file: `on: push\njobs:\n  ${job}:\n    runs-on: ubuntu-latest\n    steps: [{run: make}]\n`,
+  });
+  const a = analyse('o/r', data({ workflows: [wf('CI', '.github/workflows/ci.yml', 'test', 240), wf('Release', '.github/workflows/release.yml', 'publish', 600)] }));
+  const fs = find(a, 'jobs without a working timeout');
+  assert.equal(fs.length, 1);
+  const [f] = fs;
+  // In the report's order: the workflow with the most job minutes first.
+  assert.equal(f.workflow, '2 workflows: Release, CI');
+  assert.match(f.evidence, /^2 jobs in 2 workflows: /);
+  assert.match(f.evidence, /CI: test \(no timeout-minutes, so GitHub's 360; longest of 2 sampled runs 4\.0 min\)/);
+  assert.match(f.evidence, /Release: publish \(no timeout-minutes, so GitHub's 360; longest of 2 sampled runs 10\.0 min\)/);
+  // One YAML document per file, each headed by its path and each a valid jobs block.
+  const docs = parseAllDocuments(f.example).map((d) => d.toJS());
+  assert.equal(docs.length, 2);
+  assert.equal(docs[0].jobs.publish['timeout-minutes'], 30);
+  assert.equal(docs[1].jobs.test['timeout-minutes'], 15);
+  assert.match(f.example, /^# \.github\/workflows\/release\.yml\n/);
+  assert.match(f.example, /\n---\n# \.github\/workflows\/ci\.yml\n/);
 });
 
 test('jobs without a working timeout: a loose limit fires, a working one and unmeasured jobs do not', () => {

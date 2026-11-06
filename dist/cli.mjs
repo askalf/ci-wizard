@@ -9601,7 +9601,7 @@ var T = THRESHOLDS;
 function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch = null, isPublic = false }) {
   const F = [];
   const thin = w.thin_sample ? ` (timed from only ${w.sampled_runs} successful run${w.sampled_runs === 1 ? "" : "s"})` : "";
-  const add = (saving, what, evidence, fix, { confidence = "measured", tradeoff = "", example = "", unit = "job" } = {}) => F.push({
+  const add = (saving, what, evidence, fix, { confidence = "measured", tradeoff = "", example = "", unit = "job", parts = null } = {}) => F.push({
     saving,
     workflow: w.workflow,
     what,
@@ -9610,7 +9610,8 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
     tradeoff,
     example,
     confidence,
-    unit
+    unit,
+    parts
   });
   const perRun = w.cats_secs_per_run;
   const jobs = Math.max(1, w.jobs_per_run);
@@ -9778,20 +9779,14 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
     if (t.isDefault || t.minutes > T.timeoutLoose * Math.max(maxS / 60, 1)) loose.push({ ...t, maxS, sampled, suggest });
   }
   if (loose.length) {
-    const shown = loose.slice(0, 5).map((t) => `${t.id} (${t.isDefault ? "no timeout-minutes, so GitHub's 360" : `timeout-minutes ${t.minutes}`}; longest of ${t.sampled} sampled run${t.sampled === 1 ? "" : "s"} ${fmtS(t.maxS)})`).join("; ");
-    const example = `jobs:
-${loose.slice(0, 3).map((t) => `  ${t.id}:
-    timeout-minutes: ${t.suggest}   # ${T.timeoutFactor}x its longest sampled run`).join("\n")}`;
+    const part = { workflow: w.workflow, path: w.path, hosted: w.hosted_share >= 0.5, loose };
+    const { evidence, example } = timeoutText([part]);
     add(
       0,
       "jobs without a working timeout",
-      `${loose.length === 1 ? "job" : "jobs"} ${shown}: a hung run holds its runner${w.hosted_share >= 0.5 ? ", billing every minute," : ""} for up to ${Math.max(...loose.map((t) => t.minutes))} minutes before GitHub stops it`,
-      `set timeout-minutes on each job from its own longest runs, ${T.timeoutFactor} times the longest sampled, rounded up to 5 minutes and at least ${T.timeoutFloorMin}`,
-      {
-        tradeoff: "a run slower than the limit (a cold cache, a busy runner) is cancelled and must be re-run, so set it from the slowest legitimate runs and raise it when a job grows; a timed-out run shows as timed out, which says what happened",
-        example,
-        unit: "guard"
-      }
+      evidence,
+      TIMEOUT_FIX,
+      { tradeoff: TIMEOUT_TRADEOFF, example, unit: "guard", parts: [part] }
     );
   }
   const reach = w.fork_reachable || [];
@@ -9904,7 +9899,45 @@ function repoFindings(workflows) {
   }
   return F;
 }
+var TIMEOUT_FIX = `set timeout-minutes on each job from its own longest runs, ${T.timeoutFactor} times the longest sampled, rounded up to 5 minutes and at least ${T.timeoutFloorMin}`;
+var TIMEOUT_TRADEOFF = "a run slower than the limit (a cold cache, a busy runner) is cancelled and must be re-run, so set it from the slowest legitimate runs and raise it when a job grows; a timed-out run shows as timed out, which says what happened";
+function timeoutText(parts) {
+  const many = parts.length > 1;
+  const jobs = parts.flatMap((p) => p.loose.map((t) => ({ ...t, workflow: p.workflow, path: p.path })));
+  const one = (t) => `${many ? `${t.workflow}: ` : ""}${t.id} (${t.isDefault ? "no timeout-minutes, so GitHub's 360" : `timeout-minutes ${t.minutes}`}; longest of ${t.sampled} sampled run${t.sampled === 1 ? "" : "s"} ${fmtS(t.maxS)})`;
+  const shown = jobs.slice(0, many ? 6 : 5).map(one).join("; ") + (jobs.length > (many ? 6 : 5) ? `; and ${jobs.length - (many ? 6 : 5)} more` : "");
+  const where2 = many ? ` in ${parts.length} workflows` : "";
+  const evidence = `${jobs.length === 1 ? "job" : `${jobs.length} jobs${where2}:`} ${shown}: a hung run holds its runner${parts.every((p) => p.hosted) ? ", billing every minute," : parts.some((p) => p.hosted) ? " (a GitHub-hosted one billing every minute)" : ""} for up to ${Math.max(...jobs.map((t) => t.minutes))} minutes before GitHub stops it`;
+  const block = (ts) => `jobs:
+${ts.map((t) => `  ${t.id}:
+    timeout-minutes: ${t.suggest}   # ${T.timeoutFactor}x its longest sampled run`).join("\n")}`;
+  if (!many) return { evidence, example: block(parts[0].loose.slice(0, 3)) };
+  const blocks = [];
+  let left = 3;
+  for (const p of parts) {
+    if (left <= 0) break;
+    const ts = p.loose.slice(0, left);
+    left -= ts.length;
+    blocks.push(`# ${p.path || p.workflow}
+${block(ts)}`);
+  }
+  return { evidence, example: blocks.join("\n---\n") };
+}
 function groupFindings(F) {
+  const timeouts = F.filter((f) => f.what === "jobs without a working timeout" && f.parts);
+  if (timeouts.length > 1) {
+    const parts = timeouts.flatMap((f) => f.parts);
+    const { evidence, example } = timeoutText(parts);
+    const names = parts.map((p) => p.workflow);
+    const merged = {
+      ...timeouts[0],
+      evidence,
+      example,
+      parts: null,
+      workflow: `${names.length} workflows: ${names.slice(0, 5).join(", ")}${names.length > 5 ? " and more" : ""}`
+    };
+    F = [...F.filter((f) => !timeouts.includes(f)), merged];
+  }
   const grouped = /* @__PURE__ */ new Map();
   for (const f of [...F].sort((a, b) => b.saving - a.saving)) {
     if (GROUPED.has(f.what)) {

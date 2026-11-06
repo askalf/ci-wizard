@@ -222,7 +222,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   (20)"); a name with expressions matches on all of its literal text, a run two jobs match equally
   is given to neither, and a name that is all expression matches nothing. A timeout set by an expression, and a job that
   calls a reusable workflow, are left alone: the file does not say the limit.
-- **Confidence** measured. Reported as a guard against hung jobs, not a saving.
+- **Confidence** measured. Reported as a guard against hung jobs, not a saving. One finding for
+  the repository: across workflows, each job is named with its workflow, and the example gives
+  each workflow file its own YAML document, headed by its path.
 - **Fix** `timeout-minutes` on each job: 3 times its longest sampled run, rounded up to 5 minutes,
   at least 10. *Trade-off:* a run slower than the limit (a cold cache, a busy runner) is cancelled
   and must be re-run, so set it from the slowest legitimate runs and raise it as the job grows.
