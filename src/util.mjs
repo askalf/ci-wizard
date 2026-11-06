@@ -5,6 +5,11 @@ export function secs(a, b) {
   return Math.max(0, (Date.parse(b) - Date.parse(a)) / 1000);
 }
 
+/** The arithmetic mean; 0 for an empty list. A total is a mean times a count, never a median times one. */
+export function mean(v) {
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
+}
+
 export function median(v) {
   if (!v.length) return 0;
   const s = [...v].sort((x, y) => x - y);

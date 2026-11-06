@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+Measurement precision:
+
+- A weekly total is now a count times a mean, never a median: run times are skewed by a few long
+  runs, and the median understated the week. The table's per-run figure stays the median, labelled
+  typical; the savings that multiply a per-run cost (duplicates, outdated runs, reruns) use the mean.
+- Every outcome is costed at its own measured cost: up to two failed, cancelled and timed-out runs
+  per sampled workflow are timed beside the successes (`cost_by_outcome` in the JSON), since a
+  failure often stops early and a timeout runs to its limit. An outcome with no sampled run is
+  costed like a success and named in the report. Runs that ran no job (skipped, waiting for
+  approval, failed to start, stale) cost nothing.
+
+Recommendations:
+
+- New rule **jobs without a working timeout**: a job with no `timeout-minutes` (GitHub's default is
+  360 minutes), or one more than 10 times its longest sampled run, gets a limit from its own runs:
+  3 times the longest, rounded up to 5 minutes, at least 10. Matrix legs are matched to their job.
+  Reported as a guard against hung jobs (`guard` unit), not a saving.
+
 Self-hosted runners (the askalf/pitlane method, measured):
 
 - New rule **fork pull requests run on self-hosted runners**: each job's `if` and `runs-on` are

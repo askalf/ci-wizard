@@ -20,6 +20,14 @@ and its findings' evidence says how many runs it was timed from.
 for `yarn`, `yarn install` or `yarn --frozen-lockfile`, never `yarn test`. A step whose name has an
 expression (`Test on ${{ matrix.node }}`) is matched to its command after GitHub expands it.
 
+**Cost.** A weekly total is a count times a mean, per outcome: successes at the mean of the sampled
+successful runs, and failed, cancelled and timed-out runs at the mean of up to two sampled runs of
+each, since a failure often stops early and a timeout runs to its limit. An outcome with no run
+sampled is costed like a success and marked (`cost_by_outcome`). Runs that ran no job (skipped,
+waiting for approval, failed to start, stale) cost nothing. The typical run in the table is the
+median successful run; the savings that multiply a per-run cost (duplicates, outdated runs, reruns)
+use the mean, because they add up to a total.
+
 **Estimates.** Weekly figures scale the sampled window to 7 days. A saving is a formula over
 measured time, never the result of running the fix; the formulas are below. Thresholds live in
 `THRESHOLDS` in `src/analyse.mjs`.
@@ -204,6 +212,17 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **Fix** fewer, longer jobs: merge the short jobs of a run into one, run the workflow less often,
   or move it to a self-hosted runner. *Trade-off:* a merged job reports one status where there
   were several; a self-hosted runner is yours to run, patch and secure.
+
+## jobs without a working timeout
+
+- **Fires when** a job the sample ran has no `timeout-minutes` (GitHub stops a job after 360
+  minutes), or one more than 10 times its longest sampled run. A job's runs are matched by the name
+  GitHub shows, matrix legs included ("test (20)"). A timeout set by an expression, and a job that
+  calls a reusable workflow, are left alone: the file does not say the limit.
+- **Confidence** measured. Reported as a guard against hung jobs, not a saving.
+- **Fix** `timeout-minutes` on each job: 3 times its longest sampled run, rounded up to 5 minutes,
+  at least 10. *Trade-off:* a run slower than the limit (a cold cache, a busy runner) is cancelled
+  and must be re-run, so set it from the slowest legitimate runs and raise it as the job grows.
 
 ## fork pull requests run on self-hosted runners
 

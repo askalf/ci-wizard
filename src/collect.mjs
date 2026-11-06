@@ -39,9 +39,9 @@ export function groupRuns(runs) {
 /**
  * @param {ReturnType<import('./github.mjs').createClient>} client
  * @param {string} repo owner/name
- * @param {{ days?: number, perWorkflow?: number, workflows?: number, only?: string[], now?: Date, maxPages?: number, onProgress?: (msg: string) => void }} [o]
+ * @param {{ days?: number, perWorkflow?: number, perOutcome?: number, workflows?: number, only?: string[], now?: Date, maxPages?: number, onProgress?: (msg: string) => void }} [o]
  */
-export async function collect(client, repo, { days = 7, perWorkflow = 5, workflows = 8, only = [], now = new Date(), maxPages = 5, onProgress = () => {} } = {}) {
+export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2, workflows = 8, only = [], now = new Date(), maxPages = 5, onProgress = () => {} } = {}) {
   const since = new Date(now.getTime() - days * 86400e3).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const runs = [];
   let truncated = false;
@@ -78,16 +78,33 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, workflo
   const top = wanted.length ? ranked.filter(([label, rs]) => wanted.some((n) => matches(label, rs, n))) : ranked.slice(0, workflows);
   const onlyMissing = wanted.length ? only.filter((n) => String(n).trim() && !ranked.some(([label, rs]) => matches(label, rs, n))) : [];
   const samples = new Map();
+  // Runs that did not succeed cost job time too, and not the same as a success: a failure often
+  // stops early, a timeout runs to its limit. A few of each are timed apart, so the weekly cost
+  // counts every outcome at its own measured cost (OUTCOMES in analyse.mjs).
+  const outcomeSamples = new Map();
+  const jobsOf = async (r) => {
+    const j = await client.get(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`);
+    return j ? (j.jobs || []).filter((x) => x.started_at && x.completed_at && x.conclusion !== 'skipped') : null;
+  };
   let n = 0;
   for (const [wf, rs] of top) {
     onProgress(`timing ${wf} (${++n}/${top.length})`);
     const ok = rs.filter((r) => r.status === 'completed' && r.conclusion === 'success').slice(0, perWorkflow);
     const jobsPerRun = [];
     for (const r of ok) {
-      const j = await client.get(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`);
-      if (j) jobsPerRun.push((j.jobs || []).filter((x) => x.started_at && x.completed_at && x.conclusion !== 'skipped'));
+      const jobs = await jobsOf(r);
+      if (jobs) jobsPerRun.push(jobs);
     }
     samples.set(wf, jobsPerRun);
+    const byOutcome = {};
+    for (const outcome of ['failure', 'cancelled', 'timed_out']) {
+      const picked = rs.filter((r) => r.status === 'completed' && r.conclusion === outcome).slice(0, perOutcome);
+      for (const r of picked) {
+        const jobs = await jobsOf(r);
+        if (jobs) (byOutcome[outcome] ||= []).push(jobs);
+      }
+    }
+    outcomeSamples.set(wf, byOutcome);
   }
   onProgress('reading workflow files');
   const files = new Map();
@@ -107,5 +124,5 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, workflo
   const root = (await client.get(`repos/${repo}/contents/`)) || [];
   const names = new Set((Array.isArray(root) ? root : []).map((x) => x && x.name));
   const lockfiles = LOCKFILES.filter((f) => names.has(f)).sort();
-  return { runs, byWf, samples, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, only: wanted.length ? only : [], onlyMissing };
+  return { runs, byWf, samples, outcomeSamples, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, only: wanted.length ? only : [], onlyMissing };
 }

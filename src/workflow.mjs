@@ -346,3 +346,39 @@ export function forkReachableSelfHosted(doc, repo = 'owner/repo') {
   }
   return out;
 }
+
+/** GitHub's job timeout when timeout-minutes is not set, in minutes. */
+export const DEFAULT_JOB_TIMEOUT = 360;
+
+/**
+ * Each job's timeout as the file sets it: the job id, the name GitHub shows for it (its name, or
+ * its id), the minutes (DEFAULT_JOB_TIMEOUT when unset), and whether that is the default. A
+ * timeout set by an expression, or a job that calls a reusable workflow (whose own jobs carry the
+ * timeouts), is left out: the file does not say what the limit is.
+ * @returns {{ id: string, name: string, minutes: number, isDefault: boolean }[]}
+ */
+export function jobTimeouts(doc) {
+  const out = [];
+  for (const [id, job] of Object.entries(doc.jobs || {})) {
+    if (!job || typeof job !== 'object' || job.uses !== undefined) continue;
+    const raw = job['timeout-minutes'];
+    const name = typeof job.name === 'string' ? job.name : id;
+    if (raw === undefined || raw === null) out.push({ id, name, minutes: DEFAULT_JOB_TIMEOUT, isDefault: true });
+    else if (typeof raw === 'number' && Number.isFinite(raw)) out.push({ id, name, minutes: raw, isDefault: false });
+    else if (typeof raw === 'string' && /^\s*\d+(\.\d+)?\s*$/.test(raw)) out.push({ id, name, minutes: Number(raw), isDefault: false });
+  }
+  return out;
+}
+
+/**
+ * The API job names that are runs of a file job: its name exactly, or a matrix leg of it
+ * ("test (20, ubuntu)"). A name with an expression matches on the text before the expression.
+ */
+export function jobRunsOf(fileJobName, apiNames) {
+  const base = String(fileJobName);
+  if (base.includes('${{')) {
+    const prefix = base.split('${{')[0].trim();
+    return prefix ? apiNames.filter((n) => n.startsWith(prefix)) : [];
+  }
+  return apiNames.filter((n) => n === base || n.startsWith(`${base} (`));
+}

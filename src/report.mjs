@@ -20,9 +20,11 @@ export function shareText(w, n = 3) {
 /** A wait finding saves developer wait; a report from before units existed marks one by a zero saving. */
 const isWait = (f) => f.unit === 'wait' || (!f.unit && !(f.saving_min_week >= 1));
 const isRisk = (f) => f.unit === 'risk';
+const isGuard = (f) => f.unit === 'guard';
 
 export function savingText(f) {
   if (isRisk(f)) return 'a security and stability risk, not minutes';
+  if (isGuard(f)) return 'a guard against hung jobs, not minutes';
   if (isWait(f)) return 'saves developer wait, not job minutes';
   const unit = f.unit === 'billed' ? 'billed' : 'job';
   if (!(f.saving_min_week >= 1)) return `under 1 ${unit}-min/week (estimate)`;
@@ -55,9 +57,11 @@ export function budgetText(a) {
 export function summary(a) {
   const L = [];
   const risks = a.findings.filter(isRisk);
-  const waitOnly = a.findings.filter((f) => !isRisk(f) && isWait(f));
-  const jobFindings = a.findings.filter((f) => !isRisk(f) && !isWait(f) && f.unit !== 'billed');
-  const billedFindings = a.findings.filter((f) => !isRisk(f) && !isWait(f) && f.unit === 'billed');
+  const guards = a.findings.filter(isGuard);
+  const other = (f) => !isRisk(f) && !isGuard(f);
+  const waitOnly = a.findings.filter((f) => other(f) && isWait(f));
+  const jobFindings = a.findings.filter((f) => other(f) && !isWait(f) && f.unit !== 'billed');
+  const billedFindings = a.findings.filter((f) => other(f) && !isWait(f) && f.unit === 'billed');
   const total = Math.round(a.job_minutes_week_sampled || 0);
   const billed = num(a.billed_minutes_week_sampled) ? Math.round(a.billed_minutes_week_sampled) : null;
   const free = a.visibility === 'public';
@@ -85,7 +89,9 @@ export function summary(a) {
     parts.push(`${plural(billedFindings.length, 'finding')} would save about ${saved} billed minutes a week`);
   }
   if (waitOnly.length) parts.push(`${plural(waitOnly.length, 'finding')} would save developer wait rather than minutes`);
-  L.push(`${usage} ${parts.join('; ')}. Savings are estimates, and fixes can overlap, so they add up to an upper bound.`);
+  if (guards.length) parts.push(`${plural(guards.length, 'finding')} ${guards.length === 1 ? 'guards' : 'guard'} against hung jobs`);
+  const caveat = jobFindings.length || billedFindings.length ? ' Savings are estimates, and fixes can overlap, so they add up to an upper bound.' : '';
+  L.push(`${usage} ${parts.join('; ')}.${caveat}`);
   return L;
 }
 
@@ -114,7 +120,7 @@ export function report(a, { maxFindings = 8 } = {}) {
   }
 
   L.push('## Where the time goes', '');
-  L.push('| Workflow | Runs/week | Job-min/run | Job-min/week | Billed min/week | Developer wait p50 / p90 | Queue p50 / p90 | Biggest shares |');
+  L.push('| Workflow | Runs/week | Job-min/run (typical) | Job-min/week | Billed min/week | Developer wait p50 / p90 | Queue p50 / p90 | Biggest shares |');
   L.push('| --- | --- | --- | --- | --- | --- | --- | --- |');
   for (const w of a.workflows) {
     const marks = `${w.thin_sample ? ' †' : ''}${w.waited_on === false ? ' ‡' : ''}`;
@@ -123,6 +129,7 @@ export function report(a, { maxFindings = 8 } = {}) {
     L.push(`| ${cell(w.workflow)}${marks} | ${Math.round(w.runs_week)} | ${w.job_minutes_per_run.toFixed(1)} | ${Math.round(w.job_minutes_week)} | ${billed} | ${wait} | ${Math.round(w.wait_p50)} s / ${Math.round(w.wait_p90)} s | ${shareText(w)} |`);
   }
   L.push('');
+  L.push('- **Job-min/run (typical)** is the median successful run. **Job-min/week** counts every run at what its outcome costs: successes, failures, cancellations and timeouts each at the mean of their own sampled runs.');
   L.push('- **Job-minutes** are the time jobs ran. **Billed minutes** are what GitHub charges for its hosted runners: each job rounded up to a whole minute (self-hosted jobs count 0).'
     + (a.visibility === 'public' ? " This repository is public, so its standard GitHub-hosted runners are free and these minutes cost nothing; they matter for private repositories and larger runners." : ''));
   L.push("- **Developer wait** is a successful run's wall time, start to finish. **Queue** is how long a job waited for a runner.");
@@ -158,6 +165,8 @@ export function report(a, { maxFindings = 8 } = {}) {
       : 'GitHub reported no remaining count, so the 25-call reserve an audit normally keeps could not be enforced.'}`);
   }
   L.push("- Job time = completed minus started; queue wait = started minus created; developer wait = a successful run's wall time. All from the Actions API, in whole seconds.");
+  const estimated = a.workflows.filter((w) => Object.values(w.cost_by_outcome || {}).some((c) => c.estimated && c.runs_week > 0)).map((w) => w.workflow);
+  L.push(`- Weekly cost is a count times a mean, per outcome: successes from the sampled successful runs, and failed, cancelled and timed-out runs from up to two sampled runs of each (\`cost_by_outcome\` in the JSON).${estimated.length ? ` Where an outcome had no sampled run, it is costed like a success: ${estimated.slice(0, 5).join(', ')}${estimated.length > 5 ? ' and more' : ''}.` : ''} Runs that ran no job (skipped, waiting for approval, failed to start) cost nothing.`);
   L.push('- Per-run figures are medians over the sampled successful runs of each workflow; queue and wait percentiles are over the sampled jobs and runs, so a p90 over a handful of them is close to the slowest one.');
   L.push('- Billed minutes round each GitHub-hosted job up to a whole minute, as GitHub bills it; a job counts as GitHub-hosted when its runner group is "GitHub Actions".');
   L.push('- Steps grouped into the categories above by the command the workflow file gives each step (its run or uses line) and otherwise by its name.');

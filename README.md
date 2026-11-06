@@ -120,7 +120,8 @@ runs in the window, or an API error, 2 usage, 3 stopped near the rate limit.
 
 - Up to 500 workflow runs from the window, the jobs and steps of the newest successful runs of
   the busiest workflows, those workflows' files, the repository's root listing (to see which
-  lockfile it commits) and its default branch (for advice that names it). About 50 API calls for the defaults on a busy repository.
+  lockfile it commits) and its default branch (for advice that names it). About 50 API calls for the defaults on a busy repository, and up to 6 more per sampled workflow
+  that also fails, is cancelled or times out.
 - A token with **actions: read** and **contents: read**. The job's own `GITHUB_TOKEN` is enough
   for the repository a workflow runs in; a fine-grained token with those two permissions works
   from the command line. A repository the token cannot see reads as not found.
@@ -168,7 +169,8 @@ the same two permissions works through `GITHUB_TOKEN` or `GH_TOKEN`.
 ## Limitations
 
 - **Sampled.** The window is up to 500 runs, and job-level timing comes from a few recent
-  successful runs of each busy workflow. A busy repository's 500 runs may cover less than a day;
+  successful runs of each busy workflow, with up to two failed, cancelled and timed-out runs each
+  for their cost. A busy repository's 500 runs may cover less than a day;
   weekly figures scale the window to 7 days, so a short window is noisier, and the report says
   when the cap cut the window short. A workflow timed from fewer than 3 runs is marked †.
 - **Estimates.** Savings come from simple formulas over measured time (see

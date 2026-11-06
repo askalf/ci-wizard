@@ -3,8 +3,8 @@
 // the cause; measured: the numbers show it; inferred: the cause is a likely reading), an
 // estimated weekly saving, and a fix written as an option with its trade-off. docs/rules.md
 // documents every rule, its threshold and its estimate.
-import { concurrencyGroupOf, categoryOf, forkReachableSelfHosted, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, workflowFacts } from './workflow.mjs';
-import { countBy, fmtS, median, pct, round, secs, sum } from './util.mjs';
+import { concurrencyGroupOf, categoryOf, forkReachableSelfHosted, jobRunsOf, jobTimeouts, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, workflowFacts } from './workflow.mjs';
+import { countBy, fmtS, mean, median, pct, round, secs, sum } from './util.mjs';
 import { CANCEL_OUTDATED, ONE_RUN_PER_COMMIT, cacheExample, checkoutAdvice, forkGuardExample, managerOf, triggerExample } from './advice.mjs';
 
 export const THRESHOLDS = {
@@ -26,7 +26,19 @@ export const THRESHOLDS = {
   billedRatio: 2,
   billedExcessWeek: 30,
   minSavingWeek: 1,
+  // A timeout this many times a job's longest sampled run leaves room for a slow day; one more than
+  // timeoutLoose times it, or GitHub's default, protects nothing.
+  timeoutFactor: 3,
+  timeoutLoose: 10,
+  timeoutFloorMin: 10,
 };
+
+// How each run conclusion is costed. Success, failure, cancelled and timed_out are timed from
+// their own sampled runs; a conclusion with no run sampled is costed like a success and marked as
+// an estimate. Runs that never ran a job cost nothing: skipped, waiting for approval, failed to
+// start, stale. Anything else (in progress, neutral) is costed like a success.
+const TIMED_OUTCOMES = ['failure', 'cancelled', 'timed_out'];
+const NO_JOB_OUTCOMES = new Set(['skipped', 'action_required', 'startup_failure', 'stale']);
 
 // Events a person waits on: a push or a pull request is someone waiting for a check. A schedule,
 // a dispatch or a workflow_run is not, so its wall time is not developer wait.
@@ -53,7 +65,7 @@ function ranOnGitHubHosted(job) {
 export function timeJobs(sampledRuns, commands) {
   const t = {
     secondsByCategory: {}, workStepSeconds: new Map(), jobSecondsPerRun: [], queueWaits: [], tails: [], heads: [],
-    jobLengths: [], stepsPerJob: [], hostedJobs: 0, jobCount: 0, sawCacheStep: false, billedPerRun: [],
+    jobLengths: [], stepsPerJob: [], hostedJobs: 0, jobCount: 0, sawCacheStep: false, billedPerRun: [], jobDurations: new Map(),
   };
   for (const jobs of sampledRuns) {
     let runSeconds = 0;
@@ -61,6 +73,9 @@ export function timeJobs(sampledRuns, commands) {
     for (const job of jobs) {
       t.jobCount++;
       const length = secs(job.started_at, job.completed_at);
+      const jobName = String(job.name || '');
+      if (!t.jobDurations.has(jobName)) t.jobDurations.set(jobName, []);
+      t.jobDurations.get(jobName).push(length);
       runSeconds += length;
       t.jobLengths.push(length);
       t.queueWaits.push(secs(job.created_at, job.started_at));
@@ -146,7 +161,7 @@ export function longestSteps(workStepSeconds) {
 }
 
 /** Measures one workflow from its runs, its sampled jobs and its file. */
-export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor, repo = 'owner/repo') {
+export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor, repo = 'owner/repo', outcomeRuns = {}) {
   const doc = parseWorkflow(fileText);
   const facts = workflowFacts(doc);
   const timing = timeJobs(sampledRuns, stepCommands(doc));
@@ -158,12 +173,39 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     .map((r) => secs(r.run_started_at, r.updated_at));
   const reruns = workflowRuns.filter((r) => (r.run_attempt || 1) > 1).length;
   const failures = workflowRuns.filter((r) => r.conclusion === 'failure').length;
-  // A run whose jobs were all skipped costs no job time; it still counts as a run.
-  const costedRuns = workflowRuns.filter((r) => r.conclusion !== 'skipped').length;
+  // A run that ran no job (skipped, waiting for approval, failed to start) costs nothing; it still
+  // counts as a run.
+  const costedRuns = workflowRuns.filter((r) => !NO_JOB_OUTCOMES.has(r.conclusion)).length;
+  // The cost of a run, by how it ended: the mean of its outcome's sampled runs (job seconds and
+  // billed minutes), or a success's where none of that outcome was sampled. A total is a count
+  // times a mean: a median would understate a week whose runs are skewed by a few long ones.
+  const successSeconds = mean(timing.jobSecondsPerRun);
+  const successBilled = mean(timing.billedPerRun);
+  const costOf = (jobsPerRun) => {
+    const t = timeJobs(jobsPerRun, new Map());
+    return { seconds: mean(t.jobSecondsPerRun), billed: mean(t.billedPerRun), sampled: jobsPerRun.length };
+  };
+  const byOutcome = {};
+  let weekSeconds = 0;
+  let weekBilled = 0;
+  for (const r of workflowRuns) {
+    if (NO_JOB_OUTCOMES.has(r.conclusion)) continue;
+    const outcome = TIMED_OUTCOMES.includes(r.conclusion) ? r.conclusion : 'success';
+    if (!byOutcome[outcome]) {
+      const sampled = outcome === 'success' ? { seconds: successSeconds, billed: successBilled, sampled: sampledRuns.length } : (outcomeRuns[outcome] || []).length ? costOf(outcomeRuns[outcome]) : null;
+      byOutcome[outcome] = { runs: 0, ...(sampled || { seconds: successSeconds, billed: successBilled, sampled: 0 }), estimated: outcome !== 'success' && !sampled };
+    }
+    byOutcome[outcome].runs++;
+    weekSeconds += byOutcome[outcome].seconds;
+    weekBilled += byOutcome[outcome].billed;
+  }
   const perWeek = (n) => round(n * weekFactor, 1);
   const events = countBy(workflowRuns, (r) => r.event);
   const waitedOn = sum(Object.entries(events).filter(([e]) => WAITED_ON.has(e)).map(([, n]) => n)) >= 0.5 * workflowRuns.length;
   const billedPerRun = median(timing.billedPerRun);
+  const costByOutcome = Object.fromEntries(Object.entries(byOutcome).map(([k, v]) => [k, {
+    runs_week: perWeek(v.runs), sampled: v.sampled, minutes_per_run: round(v.seconds / 60, 2), estimated: v.estimated,
+  }]));
   return {
     workflow: workflowName,
     path: String(workflowRuns[0].path || '').split('@')[0],
@@ -172,10 +214,15 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     thin_sample: sampledCount < THRESHOLDS.thinSample,
     skipped_week: perWeek(workflowRuns.length - costedRuns),
     jobs_per_run: round(timing.jobCount / sampledCount, 1),
+    // A typical run (the median), and what a successful run costs on average (the mean), which the
+    // per-run savings multiply by.
     job_minutes_per_run: round(medianRunSeconds / 60, 2),
-    job_minutes_week: round((costedRuns * weekFactor * medianRunSeconds) / 60, 1),
+    job_minutes_per_run_mean: round(successSeconds / 60, 2),
+    job_minutes_week: round((weekFactor * weekSeconds) / 60, 1),
     billed_minutes_per_run: billedPerRun,
-    billed_minutes_week: round(costedRuns * weekFactor * billedPerRun, 1),
+    billed_minutes_week: round(weekFactor * weekBilled, 1),
+    cost_by_outcome: costByOutcome,
+    job_durations: Object.fromEntries([...timing.jobDurations].map(([k, v]) => [k, { runs: v.length, max_s: Math.max(...v), median_s: median(v) }])),
     jobs_sampled: timing.jobCount,
     waited_on: waitedOn,
     wait_p50: pct(timing.queueWaits, 0.5),
@@ -209,6 +256,7 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     events,
     installers: facts.installers,
     fork_reachable: forkReachableSelfHosted(doc, repo),
+    job_timeouts: jobTimeouts(doc),
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3),
   };
@@ -316,7 +364,7 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
     const fix = extra.length
       ? 'drop those patterns from the push trigger if every such branch gets a pull request, or key the concurrency group on the commit for both events so the second run cancels the first'
       : 'run on push only for the default branch and on pull_request for everything else, or share one concurrency group per commit';
-    add(w.dup_commits_week * w.job_minutes_per_run, 'the same commit runs twice', why, fix, {
+    add(w.dup_commits_week * (w.job_minutes_per_run_mean ?? w.job_minutes_per_run), 'the same commit runs twice', why, fix, {
       confidence,
       tradeoff: 'a branch pushed without a pull request then runs no CI until one is opened (trigger fix), or one of the two runs is cancelled and shows as such (concurrency fix)',
       example: extra.length ? ONE_RUN_PER_COMMIT : triggerExample(w.push_branches, defaultBranch),
@@ -324,7 +372,7 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
   }
 
   if (w.superseded_week >= T.supersededWeek && !w.cancels) {
-    add(w.superseded_week * w.job_minutes_per_run, 'outdated runs keep going',
+    add(w.superseded_week * (w.job_minutes_per_run_mean ?? w.job_minutes_per_run), 'outdated runs keep going',
       `${Math.round(w.superseded_week)} pull request runs a week were still running when a newer push to the same branch started a new run, and the workflow has no cancel-in-progress`,
       'a concurrency group per branch with cancel-in-progress, so a new push cancels the outdated run (runs on the default branch keep their own group)',
       { tradeoff: 'a workflow whose runs must all finish (a status that counts every run, a deploy) should not cancel, and cancelled runs show in the history', example: CANCEL_OUTDATED });
@@ -370,6 +418,33 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
       'fewer, longer jobs: merge the short jobs of a run into one, run the workflow less often, or move it to a self-hosted runner',
       { tradeoff: 'a merged job reports one status where there were several; a self-hosted runner is yours to run, patch and secure', unit: 'billed' });
   }
+  // A job with no timeout (GitHub's default is 360 minutes), or one far above anything it has taken,
+  // lets a hung run hold its runner, and bill on a hosted one, for hours. The limit to suggest comes
+  // from the job's own longest sampled run.
+  const durations = w.job_durations || {};
+  const apiNames = Object.keys(durations);
+  const loose = [];
+  for (const t of w.job_timeouts || []) {
+    const runs = jobRunsOf(t.name, apiNames);
+    if (!runs.length) continue;
+    const maxS = Math.max(...runs.map((n) => durations[n].max_s));
+    const sampled = sum(runs.map((n) => durations[n].runs));
+    const suggest = Math.max(T.timeoutFloorMin, Math.ceil((T.timeoutFactor * maxS) / 60 / 5) * 5);
+    if (t.isDefault || t.minutes > T.timeoutLoose * Math.max(maxS / 60, 1)) loose.push({ ...t, maxS, sampled, suggest });
+  }
+  if (loose.length) {
+    const shown = loose.slice(0, 5).map((t) => `${t.id} (${t.isDefault ? 'no timeout-minutes, so GitHub\'s 360' : `timeout-minutes ${t.minutes}`}; longest of ${t.sampled} sampled run${t.sampled === 1 ? '' : 's'} ${fmtS(t.maxS)})`).join('; ');
+    const example = `jobs:\n${loose.slice(0, 3).map((t) => `  ${t.id}:\n    timeout-minutes: ${t.suggest}   # ${T.timeoutFactor}x its longest sampled run`).join('\n')}`;
+    add(0, 'jobs without a working timeout',
+      `${loose.length === 1 ? 'job' : 'jobs'} ${shown}: a hung run holds its runner${w.hosted_share >= 0.5 ? ', billing every minute,' : ''} for up to ${Math.max(...loose.map((t) => t.minutes))} minutes before GitHub stops it`,
+      `set timeout-minutes on each job from its own longest runs, ${T.timeoutFactor} times the longest sampled, rounded up to 5 minutes and at least ${T.timeoutFloorMin}`,
+      {
+        tradeoff: 'a run slower than the limit (a cold cache, a busy runner) is cancelled and must be re-run, so set it from the slowest legitimate runs and raise it when a job grows; a timed-out run shows as timed out, which says what happened',
+        example,
+        unit: 'guard',
+      });
+  }
+
   // A fork's pull request that reaches a self-hosted runner runs a stranger's code on the host. On
   // a public repository GitHub runs such a pull request without approval once its author has had
   // one merged (the default policy), and the audit cannot read the repository's approval setting.
@@ -466,7 +541,7 @@ export function repoFindings(workflows) {
   const reruns = sum(workflows.map((w) => w.reruns_raw));
   if (reruns) {
     F.push({
-      saving: sum(workflows.map((w) => w.reruns_week * w.job_minutes_per_run)), workflow: 'all workflows', what: 'reruns',
+      saving: sum(workflows.map((w) => w.reruns_week * (w.job_minutes_per_run_mean ?? w.job_minutes_per_run))), workflow: 'all workflows', what: 'reruns',
       evidence: `${reruns} re-attempted run${reruns === 1 ? '' : 's'} in the window across the sampled workflows`,
       fix: 'find the flaky step from the failed attempts and fix or quarantine it; each rerun also costs a developer a wait',
       tradeoff: 'quarantining hides a real failure until someone looks',
@@ -517,13 +592,13 @@ export function analyse(repo, data) {
     if (!jobsPerRun.length) continue;
     const rs = data.byWf.get(wf);
     const path = String(rs[0].path || '').split('@')[0];
-    workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || '', week, repo));
+    workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || '', week, repo, (data.outcomeSamples && data.outcomeSamples.get(wf)) || {}));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
   const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === 'public' ? true : data.visibility ? 'private' : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || new Map())];
   // A finding that saves under a minute a week is noise next to the rest; one that saves developer
   // wait has no minutes to compare and always stays.
-  const findings = groupFindings(raw).filter((f) => f.unit === 'wait' || f.unit === 'risk' || f.saving >= T.minSavingWeek).map((f) => ({
+  const findings = groupFindings(raw).filter((f) => f.unit === 'wait' || f.unit === 'risk' || f.unit === 'guard' || f.saving >= T.minSavingWeek).map((f) => ({
     saving_min_week: round(f.saving, 1), unit: f.unit || 'job', workflow: f.workflow, what: f.what, evidence: f.evidence,
     fix: f.fix, tradeoff: f.tradeoff || '', example: f.example || '', confidence: f.confidence,
   }));

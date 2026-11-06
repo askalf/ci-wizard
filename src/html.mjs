@@ -53,7 +53,7 @@ function section(a) {
   <h3>What to fix first</h3>
   <ol class="finds">${finds}</ol>
   <h3>Where the time goes</h3>
-  <div class="tbl"><table><thead><tr><th>Workflow</th><th>Runs/wk</th><th>Job-min/run</th><th>Job-min/wk</th><th>Billed min/wk</th><th>Developer wait p50 / p90</th><th>Queue p50 / p90</th><th>Biggest shares</th></tr></thead><tbody>${rows}</tbody></table></div>
+  <div class="tbl"><table><thead><tr><th>Workflow</th><th>Runs/wk</th><th>Job-min/run (typical)</th><th>Job-min/wk</th><th>Billed min/wk</th><th>Developer wait p50 / p90</th><th>Queue p50 / p90</th><th>Biggest shares</th></tr></thead><tbody>${rows}</tbody></table></div>
   <p class="legend muted">Billed minutes round each GitHub-hosted job up to a whole minute, as GitHub bills it. Shares: <i>work</i> the job's own steps, <i>deps</i> installs, <i>overhead</i> the runner's set-up and wrap-up steps, <i>head</i> the wait before the first step, <i>tail</i> the time after the last step until the job reports done. † fewer than 3 runs timed. ‡ nobody waits on it (a schedule, a dispatch or another workflow).</p>
   ${steps ? `<h3>The longest steps</h3>\n  <ul class="steps">${steps}</ul>` : ''}
 </section>`;
