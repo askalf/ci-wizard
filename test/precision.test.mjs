@@ -127,7 +127,7 @@ test('jobs without a working timeout: a limit from the job\'s longest sampled ru
   assert.doesNotMatch(onlyBig.evidence, /bill/);
   // Both loose: the billing claim names the GitHub-hosted ones only.
   const [both] = find(mixed(undefined), 'jobs without a working timeout');
-  assert.match(both.evidence, /a hung run holds its runner \(on the GitHub-hosted ones, billing every minute\) for up to 360 minutes/);
+  assert.match(both.evidence, /a hung run holds its runner \(on the standard GitHub-hosted ones, billing every minute\) for up to 360 minutes/);
   const y = parse(f.example);
   assert.equal(y.jobs.test['timeout-minutes'], 15); // 3 x 4 min = 12, up to 15
   assert.equal(savingText(f), 'a guard against hung jobs, not minutes');

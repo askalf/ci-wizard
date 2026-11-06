@@ -599,7 +599,7 @@ function timeoutText(parts) {
   const thinNote = many
     ? parts.filter((p) => p.thin !== null).map((p) => `; ${p.workflow} was timed from only ${p.thin} successful run${p.thin === 1 ? '' : 's'}`).join('')
     : '';
-  const evidence = `${jobs.length === 1 ? 'job' : `${jobs.length} jobs${where}:`} ${shown}: a hung run holds its runner${jobs.every((t) => t.billed) ? ', billing every minute,' : jobs.some((t) => t.billed) ? ' (on the GitHub-hosted ones, billing every minute)' : ''} for up to ${Math.max(...jobs.map((t) => t.minutes))} minutes before GitHub stops it${thinNote}`;
+  const evidence = `${jobs.length === 1 ? 'job' : `${jobs.length} jobs${where}:`} ${shown}: a hung run holds its runner${jobs.every((t) => t.billed) ? ', billing every minute,' : jobs.some((t) => t.billed) ? ' (on the standard GitHub-hosted ones, billing every minute)' : ''} for up to ${Math.max(...jobs.map((t) => t.minutes))} minutes before GitHub stops it${thinNote}`;
   // Up to three jobs in the example; across workflows, one YAML document per file, headed by its
   // path. The jobs it leaves out are named in a comment, so none is silently dropped.
   const block = (ts) => `jobs:\n${ts.map((t) => `  ${t.id}:\n    timeout-minutes: ${t.suggest}   # ${T.timeoutFactor}x its longest sampled run`).join('\n')}`;

@@ -9905,7 +9905,7 @@ function timeoutText(parts) {
   const shown = jobs.slice(0, many ? 6 : 5).map(one).join("; ") + (jobs.length > (many ? 6 : 5) ? `; and ${jobs.length - (many ? 6 : 5)} more` : "");
   const where2 = many ? ` in ${parts.length} workflows` : "";
   const thinNote = many ? parts.filter((p) => p.thin !== null).map((p) => `; ${p.workflow} was timed from only ${p.thin} successful run${p.thin === 1 ? "" : "s"}`).join("") : "";
-  const evidence = `${jobs.length === 1 ? "job" : `${jobs.length} jobs${where2}:`} ${shown}: a hung run holds its runner${jobs.every((t) => t.billed) ? ", billing every minute," : jobs.some((t) => t.billed) ? " (on the GitHub-hosted ones, billing every minute)" : ""} for up to ${Math.max(...jobs.map((t) => t.minutes))} minutes before GitHub stops it${thinNote}`;
+  const evidence = `${jobs.length === 1 ? "job" : `${jobs.length} jobs${where2}:`} ${shown}: a hung run holds its runner${jobs.every((t) => t.billed) ? ", billing every minute," : jobs.some((t) => t.billed) ? " (on the standard GitHub-hosted ones, billing every minute)" : ""} for up to ${Math.max(...jobs.map((t) => t.minutes))} minutes before GitHub stops it${thinNote}`;
   const block = (ts) => `jobs:
 ${ts.map((t) => `  ${t.id}:
     timeout-minutes: ${t.suggest}   # ${T.timeoutFactor}x its longest sampled run`).join("\n")}`;
