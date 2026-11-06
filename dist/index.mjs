@@ -9549,8 +9549,9 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     billed_minutes_per_run: billedPerRun,
     billed_minutes_week: round(weekFactor * weekBilled, 1),
     cost_by_outcome: costByOutcome,
-    // hosted_share: the share of the job's sampled runs on GitHub's standard hosted runners.
-    job_durations: Object.fromEntries([...timing.jobDurations].map(([k, v]) => [k, { runs: v.length, max_s: Math.max(...v), median_s: median(v), hosted_share: round((timing.jobHosted.get(k) || 0) / v.length, 2) }])),
+    // hosted_runs: how many of the job's sampled runs were on GitHub's standard hosted runners, as a
+    // count, so a majority is decided exactly.
+    job_durations: Object.fromEntries([...timing.jobDurations].map(([k, v]) => [k, { runs: v.length, max_s: Math.max(...v), median_s: median(v), hosted_runs: timing.jobHosted.get(k) || 0 }])),
     jobs_sampled: timing.jobCount,
     waited_on: waitedOn,
     wait_p50: pct(timing.queueWaits, 0.5),
@@ -9771,8 +9772,8 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
     const sampled = sum(runs.map((n) => durations[n].runs));
     const suggest = Math.max(T.timeoutFloorMin, Math.ceil(T.timeoutFactor * maxS / 60 / 5) * 5);
     if (suggest >= t.minutes) continue;
-    const hostedRuns = sum(runs.map((n) => (durations[n].hosted_share ?? (w.hosted_share >= 0.5 ? 1 : 0)) * durations[n].runs));
-    const billed2 = hostedRuns >= sampled / 2 && isPublic !== true;
+    const hostedRuns = sum(runs.map((n) => durations[n].hosted_runs ?? (w.hosted_share >= 0.5 ? durations[n].runs : 0)));
+    const billed2 = 2 * hostedRuns > sampled && isPublic !== true;
     if (t.isDefault || t.minutes > T.timeoutLoose * Math.max(maxS / 60, 1)) loose.push({ ...t, maxS, sampled, suggest, billed: billed2 });
   }
   if (loose.length) {

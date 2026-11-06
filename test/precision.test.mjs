@@ -128,6 +128,11 @@ test('jobs without a working timeout: a limit from the job\'s longest sampled ru
   // Both loose: the billing claim names the GitHub-hosted ones only.
   const [both] = find(mixed(undefined), 'jobs without a working timeout');
   assert.match(both.evidence, /a hung run holds its runner \(on the standard GitHub-hosted ones, billing every minute\) for up to 360 minutes/);
+  // "Mostly" is a strict majority, counted exactly: 100 of 201 runs on standard runners is not.
+  const split = (hosted, total) => analyse('o/r', { ...data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: Array.from({ length: total }, (_, i) => [i < hosted ? timed(240, 'big') : { ...larger(240), name: 'big' }]), file: twoJobs(15) }] }), visibility: 'private' });
+  assert.doesNotMatch(find(split(100, 201), 'jobs without a working timeout')[0].evidence, /bill/);
+  assert.doesNotMatch(find(split(1, 2), 'jobs without a working timeout')[0].evidence, /bill/); // half is not most
+  assert.match(find(split(101, 201), 'jobs without a working timeout')[0].evidence, /, billing every minute,/);
   const y = parse(f.example);
   assert.equal(y.jobs.test['timeout-minutes'], 15); // 3 x 4 min = 12, up to 15
   assert.equal(savingText(f), 'a guard against hung jobs, not minutes');
