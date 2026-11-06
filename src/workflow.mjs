@@ -371,14 +371,43 @@ export function jobTimeouts(doc) {
 }
 
 /**
- * The API job names that are runs of a file job: its name exactly, or a matrix leg of it
- * ("test (20, ubuntu)"). A name with an expression matches on the text before the expression.
+ * How a file job's name matches the names GitHub gives its runs, and how specific the match is
+ * (the length of its literal text). A static name matches itself and its matrix legs
+ * ("test (20, ubuntu)"). A name with expressions matches with each expression standing for any
+ * text, every literal part kept in place; GitHub adds no matrix suffix to such a name. A name with
+ * no literal text matches nothing.
  */
-export function jobRunsOf(fileJobName, apiNames) {
+export function jobNamePattern(fileJobName) {
   const base = String(fileJobName);
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   if (base.includes('${{')) {
-    const prefix = base.split('${{')[0].trim();
-    return prefix ? apiNames.filter((n) => n.startsWith(prefix)) : [];
+    const literals = base.split(/\$\{\{[\s\S]*?\}\}/);
+    // A name that is all expression has no text to recognise its runs by: it matches nothing.
+    if (!literals.join('').trim()) return { rx: /(?!)/, specificity: 0 };
+    return { rx: new RegExp(`^${literals.map(esc).join('[\\s\\S]*')}$`), specificity: literals.join('').length };
   }
-  return apiNames.filter((n) => n === base || n.startsWith(`${base} (`));
+  return { rx: new RegExp(`^${esc(base)}( \\(.*\\))?$`), specificity: base.length + 1 };
+}
+
+/** The API job names that are runs of a file job (see jobNamePattern). */
+export function jobRunsOf(fileJobName, apiNames) {
+  const { rx } = jobNamePattern(fileJobName);
+  return apiNames.filter((n) => rx.test(n));
+}
+
+/**
+ * Each API job name assigned to at most one file job: the most specific pattern that matches it. A
+ * name two jobs match equally well is ambiguous and goes to neither, so no job is judged on
+ * another's runs.
+ * @returns {Map<string, string[]>} file job name -> its API job names
+ */
+export function assignJobRuns(fileJobNames, apiNames) {
+  const patterns = fileJobNames.map((name) => ({ name, ...jobNamePattern(name) }));
+  const out = new Map(fileJobNames.map((n) => [n, []]));
+  for (const api of apiNames) {
+    const hits = patterns.filter((p) => p.rx.test(api)).sort((a, b) => b.specificity - a.specificity);
+    if (!hits.length || (hits[1] && hits[1].specificity === hits[0].specificity)) continue;
+    out.get(hits[0].name).push(api);
+  }
+  return out;
 }

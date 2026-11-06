@@ -3,7 +3,7 @@
 // the cause; measured: the numbers show it; inferred: the cause is a likely reading), an
 // estimated weekly saving, and a fix written as an option with its trade-off. docs/rules.md
 // documents every rule, its threshold and its estimate.
-import { concurrencyGroupOf, categoryOf, forkReachableSelfHosted, jobRunsOf, jobTimeouts, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, workflowFacts } from './workflow.mjs';
+import { concurrencyGroupOf, categoryOf, forkReachableSelfHosted, assignJobRuns, jobTimeouts, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, workflowFacts } from './workflow.mjs';
 import { countBy, fmtS, mean, median, pct, round, secs, sum } from './util.mjs';
 import { CANCEL_OUTDATED, ONE_RUN_PER_COMMIT, cacheExample, checkoutAdvice, forkGuardExample, managerOf, triggerExample } from './advice.mjs';
 
@@ -422,14 +422,18 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
   // lets a hung run hold its runner, and bill on a hosted one, for hours. The limit to suggest comes
   // from the job's own longest sampled run.
   const durations = w.job_durations || {};
-  const apiNames = Object.keys(durations);
+  const timeouts = w.job_timeouts || [];
+  const assigned = assignJobRuns(timeouts.map((t) => t.name), Object.keys(durations));
   const loose = [];
-  for (const t of w.job_timeouts || []) {
-    const runs = jobRunsOf(t.name, apiNames);
+  for (const t of timeouts) {
+    const runs = assigned.get(t.name) || [];
     if (!runs.length) continue;
     const maxS = Math.max(...runs.map((n) => durations[n].max_s));
     const sampled = sum(runs.map((n) => durations[n].runs));
     const suggest = Math.max(T.timeoutFloorMin, Math.ceil((T.timeoutFactor * maxS) / 60 / 5) * 5);
+    // Only a limit below the one the job already has is a fix: GitHub stops a job at 360 minutes
+    // anyway, so a long job whose safe margin reaches that has nothing to tighten.
+    if (suggest >= t.minutes) continue;
     if (t.isDefault || t.minutes > T.timeoutLoose * Math.max(maxS / 60, 1)) loose.push({ ...t, maxS, sampled, suggest });
   }
   if (loose.length) {

@@ -8199,13 +8199,25 @@ function jobTimeouts(doc) {
   }
   return out;
 }
-function jobRunsOf(fileJobName, apiNames) {
+function jobNamePattern(fileJobName) {
   const base = String(fileJobName);
+  const esc2 = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   if (base.includes("${{")) {
-    const prefix = base.split("${{")[0].trim();
-    return prefix ? apiNames.filter((n) => n.startsWith(prefix)) : [];
+    const literals = base.split(/\$\{\{[\s\S]*?\}\}/);
+    if (!literals.join("").trim()) return { rx: /(?!)/, specificity: 0 };
+    return { rx: new RegExp(`^${literals.map(esc2).join("[\\s\\S]*")}$`), specificity: literals.join("").length };
   }
-  return apiNames.filter((n) => n === base || n.startsWith(`${base} (`));
+  return { rx: new RegExp(`^${esc2(base)}( \\(.*\\))?$`), specificity: base.length + 1 };
+}
+function assignJobRuns(fileJobNames, apiNames) {
+  const patterns = fileJobNames.map((name) => ({ name, ...jobNamePattern(name) }));
+  const out = new Map(fileJobNames.map((n) => [n, []]));
+  for (const api of apiNames) {
+    const hits = patterns.filter((p) => p.rx.test(api)).sort((a, b) => b.specificity - a.specificity);
+    if (!hits.length || hits[1] && hits[1].specificity === hits[0].specificity) continue;
+    out.get(hits[0].name).push(api);
+  }
+  return out;
 }
 
 // src/util.mjs
@@ -8774,14 +8786,16 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
     );
   }
   const durations = w.job_durations || {};
-  const apiNames = Object.keys(durations);
+  const timeouts = w.job_timeouts || [];
+  const assigned = assignJobRuns(timeouts.map((t) => t.name), Object.keys(durations));
   const loose = [];
-  for (const t of w.job_timeouts || []) {
-    const runs = jobRunsOf(t.name, apiNames);
+  for (const t of timeouts) {
+    const runs = assigned.get(t.name) || [];
     if (!runs.length) continue;
     const maxS = Math.max(...runs.map((n) => durations[n].max_s));
     const sampled = sum(runs.map((n) => durations[n].runs));
     const suggest = Math.max(T.timeoutFloorMin, Math.ceil(T.timeoutFactor * maxS / 60 / 5) * 5);
+    if (suggest >= t.minutes) continue;
     if (t.isDefault || t.minutes > T.timeoutLoose * Math.max(maxS / 60, 1)) loose.push({ ...t, maxS, sampled, suggest });
   }
   if (loose.length) {

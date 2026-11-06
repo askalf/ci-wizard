@@ -6,7 +6,7 @@ import { parse } from 'yaml';
 import { analyse, measureWorkflow } from '../src/analyse.mjs';
 import { collect } from '../src/collect.mjs';
 import { createClient } from '../src/github.mjs';
-import { jobRunsOf, jobTimeouts, parseWorkflow } from '../src/workflow.mjs';
+import { assignJobRuns, jobRunsOf, jobTimeouts, parseWorkflow } from '../src/workflow.mjs';
 import { report, savingText, summary } from '../src/report.mjs';
 import { data, fakeFetch, find, job, runs, t } from './helpers.mjs';
 
@@ -125,4 +125,34 @@ test('jobs without a working timeout: a loose limit fires, a working one and unm
   // A job the sample never ran is not judged.
   const unmeasured = analyse('o/r', data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[timed(60, 'other')]], file: timeoutFile(undefined) }] }));
   assert.equal(find(unmeasured, 'jobs without a working timeout').length, 0);
+});
+
+test('job names with expressions match on every literal part, and an ambiguous run goes to no job', () => {
+  const names = ['Test ubuntu unit', 'Test macos unit', 'Lint'];
+  assert.deepEqual(jobRunsOf('Test ${{ matrix.os }} integration', names), []);
+  assert.deepEqual(jobRunsOf('Test ${{ matrix.os }} unit', names), ['Test ubuntu unit', 'Test macos unit']);
+  const assigned = assignJobRuns(['Test ${{ matrix.os }} unit', 'Test ${{ matrix.os }} integration', 'Lint'], names);
+  assert.deepEqual(assigned.get('Test ${{ matrix.os }} integration'), []);
+  assert.deepEqual(assigned.get('Test ${{ matrix.os }} unit'), ['Test ubuntu unit', 'Test macos unit']);
+  // The more specific pattern wins; equally specific ones leave the run unassigned.
+  assert.deepEqual(assignJobRuns(['${{ matrix.x }}', 'Lint'], ['Lint']).get('Lint'), ['Lint']);
+  assert.deepEqual(assignJobRuns(['A ${{ matrix.x }}', '${{ matrix.y }} B'], ['A B']).get('A ${{ matrix.x }}'), []);
+  // A static name keeps its matrix legs and no other job's.
+  assert.deepEqual(jobRunsOf('test', ['test (20)', 'test-e2e', 'tests']), ['test (20)']);
+});
+
+test('an unmeasured job is not judged on a job that shares its prefix', () => {
+  const file = 'on: push\njobs:\n  unit:\n    name: Test ${{ matrix.os }} unit\n    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    steps: [{run: make}]\n  integration:\n    name: Test ${{ matrix.os }} integration\n    runs-on: ubuntu-latest\n    steps: [{run: make}]\n';
+  const a = analyse('o/r', data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[timed(240, 'Test ubuntu unit')]], file }] }));
+  assert.equal(find(a, 'jobs without a working timeout').length, 0);
+});
+
+test('a suggestion never reaches the limit the job already has: long jobs are left alone', () => {
+  // 3 x 180 min = 540, at or above GitHub's 360: nothing to tighten.
+  assert.equal(find(timeoutAudit(undefined, 180 * 60), 'jobs without a working timeout').length, 0);
+  // 3 x 110 min = 330, under 360: a real guard.
+  const [f] = find(timeoutAudit(undefined, 110 * 60), 'jobs without a working timeout');
+  assert.equal(parse(f.example).jobs.test['timeout-minutes'], 330);
+  // An explicit limit is never "fixed" upward.
+  assert.equal(find(timeoutAudit(200, 100 * 60), 'jobs without a working timeout').length, 0);
 });

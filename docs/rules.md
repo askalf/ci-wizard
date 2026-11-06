@@ -216,8 +216,11 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 ## jobs without a working timeout
 
 - **Fires when** a job the sample ran has no `timeout-minutes` (GitHub stops a job after 360
-  minutes), or one more than 10 times its longest sampled run. A job's runs are matched by the name
-  GitHub shows, matrix legs included ("test (20)"). A timeout set by an expression, and a job that
+  minutes), or one more than 10 times its longest sampled run, and the suggested limit is below the
+  one it has (GitHub stops a job at 360 minutes, so a long job whose margin reaches that has nothing
+  to tighten). A job's runs are matched by the name GitHub shows, matrix legs included ("test
+  (20)"); a name with expressions matches on all of its literal text, a run two jobs match equally
+  is given to neither, and a name that is all expression matches nothing. A timeout set by an expression, and a job that
   calls a reusable workflow, are left alone: the file does not say the limit.
 - **Confidence** measured. Reported as a guard against hung jobs, not a saving.
 - **Fix** `timeout-minutes` on each job: 3 times its longest sampled run, rounded up to 5 minutes,
