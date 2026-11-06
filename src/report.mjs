@@ -171,6 +171,9 @@ export function report(a, { maxFindings = 8 } = {}) {
   L.push('- Billed minutes round each GitHub-hosted job up to a whole minute, as GitHub bills it; a job counts as GitHub-hosted when its runner group is "GitHub Actions".');
   L.push('- Steps grouped into the categories above by the command the workflow file gives each step (its run or uses line) and otherwise by its name.');
   L.push('- Runs whose jobs were all skipped count as runs but cost no job-minutes. Duplicate runs = commits the workflow ran on both a push and a pull request event. Reruns = runs with a run attempt above 1. Outdated runs = a pull request run still going when a newer commit on the same branch started its run.');
+  if (a.scanned && a.scanned.of) {
+    L.push(`- Security scans (actions pinned to a commit, untrusted input in scripts, the job token) read ${a.scanned.read === a.scanned.of ? `all ${a.scanned.of}` : `${a.scanned.read} of the ${a.scanned.of}`} workflow files, not only the sampled workflows'.`);
+  }
   L.push("- Cache, checkout and concurrency facts are read from the parsed workflow file (actions/cache, a setup action's cache input, the checkout step's inputs, concurrency and cancel-in-progress), so a commented-out line never counts.");
   L.push('- Estimated savings: dependency cache 60% of install time when no cache runs, 30% when one runs but installs still dominate; checkout and toolchain 50%; duplicates, outdated runs and reruns their full job time; self-hosted tail the excess over 2 s; fixed-cost findings half of the fixed share; short hosted jobs half of the billed minutes above the job-minutes. See docs/rules.md in the ci-wizard repository.');
   return `${L.join('\n')}\n`;

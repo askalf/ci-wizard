@@ -276,6 +276,40 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   stays fast. *Trade-off:* every job re-registers, and nothing a job leaves on disk survives for
   the next, so caches go through `actions/cache` or a read-only tool cache.
 
+## actions not pinned to a commit
+
+- **Fires when** a workflow file (every workflow file, not only the sampled ones, up to 30) has a
+  step `uses:` or a reusable-workflow job `uses:` pinned to a tag or branch rather than a full
+  40-character commit SHA. A tag or branch can be moved to other code by its owner, or by anyone who
+  takes over the repository. Local actions (`./`) and Docker images are not references. One finding
+  for the repository; the evidence separates third-party actions from GitHub's own (`actions/`,
+  `github/`).
+- **Confidence** confirmed. A risk, ranked first.
+- **Fix** the full commit SHA of the release, with the tag in a comment, and Dependabot or Renovate
+  to propose new pins. *Trade-off:* a new release becomes a pull request to review instead of
+  arriving with a moved tag.
+
+## untrusted input in a script
+
+- **Fires when** a `run:` script, or actions/github-script's `script` input, interpolates a field an
+  outside contributor writes, per GitHub's security-hardening guide: an issue, pull request or
+  discussion title or body; a comment or review body; a commit message or author; a head branch name
+  or label (`github.head_ref`, `pull_request.head.ref`); a page name. An expression in `env:` or an
+  `if:` is not a script, and passing the value through `env:` is the fix.
+- **Confidence** confirmed. A risk, ranked first. The evidence names the file, job and step.
+- **Fix** an environment variable for the value, quoted in the script. *Trade-off:* none to speak
+  of: the step reads the same value, and only the shell no longer runs it.
+
+## job token wider than the job
+
+- **Fires when** a workflow or job sets `permissions: write-all` (confirmed), or a workflow has no
+  top-level `permissions:` and a job without its own (inferred: the job gets the repository's
+  default token, which the audit cannot read; write access on many repositories created before
+  February 2023). A job that calls a reusable workflow takes that workflow's permissions.
+- **Fix** a read-only default at the top of each workflow (`contents: read`) and each job granted
+  only what it uses. *Trade-off:* a job that needs more must name it, so a missing grant shows as a
+  403 the first time it runs.
+
 ## reruns
 
 - **Fires when** any sampled run was re-attempted (run attempt above 1). One finding for the

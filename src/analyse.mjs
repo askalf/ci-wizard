@@ -5,6 +5,7 @@
 // documents every rule, its threshold and its estimate.
 import { concurrencyGroupOf, categoryOf, forkReachableSelfHosted, allJobTimeouts, assignJobRuns, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, workflowFacts } from './workflow.mjs';
 import { countBy, fmtS, mean, median, pct, round, secs, sum } from './util.mjs';
+import { scanFindings } from './scans.mjs';
 import { CANCEL_OUTDATED, ONE_RUN_PER_COMMIT, cacheExample, checkoutAdvice, forkGuardExample, managerOf, triggerExample } from './advice.mjs';
 
 export const THRESHOLDS = {
@@ -601,7 +602,7 @@ export function analyse(repo, data) {
     workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || '', week, repo, (data.outcomeSamples && data.outcomeSamples.get(wf)) || {}));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
-  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === 'public' ? true : data.visibility ? 'private' : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || new Map())];
+  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === 'public' ? true : data.visibility ? 'private' : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || new Map()), ...scanFindings(data.scanFiles || new Map())];
   // A finding that saves under a minute a week is noise next to the rest; one that saves developer
   // wait has no minutes to compare and always stays.
   const findings = groupFindings(raw).filter((f) => f.unit === 'wait' || f.unit === 'risk' || f.unit === 'guard' || f.saving >= T.minSavingWeek).map((f) => ({
@@ -613,6 +614,9 @@ export function analyse(repo, data) {
     covered_days: round(data.coveredDays, 2),
     window_truncated: Boolean(data.truncated),
     visibility: data.visibility || null,
+    // The scans read every workflow file collect listed (scanFiles); an audit built without that
+    // listing (a caller's own data) runs no scans and says so by reporting none read.
+    scanned: data.scanned || { read: (data.scanFiles || new Map()).size, of: (data.scanFiles || new Map()).size },
     only: data.only || [],
     only_missing: data.onlyMissing || [],
     runs_total: data.runs.length,

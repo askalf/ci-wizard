@@ -81,8 +81,10 @@ runs in the window, or an API error, 2 usage, 3 stopped near the rate limit.
 
 ## Reading the report
 
-- **Risks come first.** For self-hosted runners, two findings are about security and stability,
-  not minutes, and lead the report: a fork's pull request that can run on a self-hosted runner,
+- **Risks come first.** Security scans of every workflow file lead the report: actions pinned to a
+  tag instead of a commit, untrusted event text (a pull request title, a branch name) pasted into a
+  script, and a job token wider than the job. For self-hosted runners, two more findings are about
+  security and stability, not minutes: a fork's pull request that can run on a self-hosted runner,
   and runners that take more than one job (persistent, so jobs can see what the one before left).
   They measure the method [askalf/pitlane](https://github.com/askalf/pitlane) documents.
 
@@ -120,7 +122,8 @@ runs in the window, or an API error, 2 usage, 3 stopped near the rate limit.
 
 - Up to 500 workflow runs from the window, the jobs and steps of the newest successful runs of
   the busiest workflows, those workflows' files, the repository's root listing (to see which
-  lockfile it commits) and its default branch (for advice that names it). About 50 API calls for the defaults on a busy repository, and up to 6 more per sampled workflow
+  lockfile it commits), its default branch (for advice that names it), and every workflow file
+  (up to 30) for the security scans. About 50 API calls for the defaults on a busy repository, and up to 6 more per sampled workflow
   that also fails, is cancelled or times out.
 - A token with **actions: read** and **contents: read**. The job's own `GITHUB_TOKEN` is enough
   for the repository a workflow runs in; a fine-grained token with those two permissions works

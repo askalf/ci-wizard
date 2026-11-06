@@ -6351,15 +6351,15 @@ var require_parser = __commonJS({
     var node_process = __require("process");
     var cst = require_cst();
     var lexer = require_lexer();
-    function includesToken(list, type) {
-      for (let i = 0; i < list.length; ++i)
-        if (list[i].type === type)
+    function includesToken(list2, type) {
+      for (let i = 0; i < list2.length; ++i)
+        if (list2[i].type === type)
           return true;
       return false;
     }
-    function findNonEmptyIndex(list) {
-      for (let i = 0; i < list.length; ++i) {
-        switch (list[i].type) {
+    function findNonEmptyIndex(list2) {
+      for (let i = 0; i < list2.length; ++i) {
+        switch (list2[i].type) {
           case "space":
           case "comment":
           case "newline":
@@ -7488,7 +7488,7 @@ function groupRuns(runs) {
   for (const g of labelled) out.set(taken.get(g.name) > 1 && g.path ? `${g.name} (${g.path})` : g.name, g.rs);
   return out;
 }
-async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2, workflows = 8, only = [], now = /* @__PURE__ */ new Date(), maxPages = 5, onProgress = () => {
+async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2, workflows = 8, only = [], now = /* @__PURE__ */ new Date(), maxPages = 5, maxScanFiles = 30, onProgress = () => {
 } } = {}) {
   const since = new Date(now.getTime() - days * 864e5).toISOString().replace(/\.\d{3}Z$/, "Z");
   const runs = [];
@@ -7517,7 +7517,7 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   const onlyMissing = wanted.length ? only.filter((n2) => String(n2).trim() && !ranked.some(([label, rs]) => matches(label, rs, n2))) : [];
   const samples = /* @__PURE__ */ new Map();
   const outcomeSamples = /* @__PURE__ */ new Map();
-  const jobsOf = async (r) => {
+  const jobsOf2 = async (r) => {
     const j = await client.get(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`);
     return j ? (j.jobs || []).filter((x) => x.started_at && x.completed_at && x.conclusion !== "skipped") : null;
   };
@@ -7527,7 +7527,7 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
     const ok = rs.filter((r) => r.status === "completed" && r.conclusion === "success").slice(0, perWorkflow);
     const jobsPerRun = [];
     for (const r of ok) {
-      const jobs = await jobsOf(r);
+      const jobs = await jobsOf2(r);
       if (jobs) jobsPerRun.push(jobs);
     }
     samples.set(wf, jobsPerRun);
@@ -7535,7 +7535,7 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
     for (const outcome of ["failure", "cancelled", "timed_out"]) {
       const picked = rs.filter((r) => r.status === "completed" && r.conclusion === outcome).slice(0, perOutcome);
       for (const r of picked) {
-        const jobs = await jobsOf(r);
+        const jobs = await jobsOf2(r);
         if (jobs) (byOutcome[outcome] ||= []).push(jobs);
       }
     }
@@ -7549,13 +7549,22 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
       files.set(path, await client.getRaw(`repos/${repo}/contents/${path}`) || "");
     }
   }
+  onProgress("scanning workflow files");
+  const listing = await client.get(`repos/${repo}/contents/.github/workflows`);
+  const workflowPaths = (Array.isArray(listing) ? listing : []).filter((x) => x && x.type === "file" && /\.ya?ml$/i.test(String(x.name || ""))).map((x) => `.github/workflows/${x.name}`).sort();
+  const scanFiles = new Map([...files].filter(([path]) => workflowPaths.includes(path) || !listing));
+  for (const path of workflowPaths) {
+    if (scanFiles.size >= maxScanFiles) break;
+    if (!scanFiles.has(path)) scanFiles.set(path, files.get(path) ?? (await client.getRaw(`repos/${repo}/contents/${path}`) || ""));
+  }
+  const scanned = { read: scanFiles.size, of: listing ? workflowPaths.length : scanFiles.size };
   const meta = await client.get(`repos/${repo}`);
   const defaultBranch = meta && typeof meta.default_branch === "string" ? meta.default_branch : null;
   const visibility = meta && typeof meta.visibility === "string" ? meta.visibility : meta && typeof meta.private === "boolean" ? meta.private ? "private" : "public" : null;
   const root = await client.get(`repos/${repo}/contents/`) || [];
   const names = new Set((Array.isArray(root) ? root : []).map((x) => x && x.name));
   const lockfiles = LOCKFILES.filter((f) => names.has(f)).sort();
-  return { runs, byWf, samples, outcomeSamples, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, only: wanted.length ? only : [], onlyMissing };
+  return { runs, byWf, samples, outcomeSamples, scanFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, only: wanted.length ? only : [], onlyMissing };
 }
 
 // src/workflow.mjs
@@ -8264,6 +8273,131 @@ function countBy(items, key) {
   return out;
 }
 
+// src/scans.mjs
+var FIRST_PARTY = /* @__PURE__ */ new Set(["actions", "github"]);
+function parseUses(uses) {
+  const s = String(uses ?? "").trim();
+  if (!s || s.startsWith("./") || s.startsWith("../") || s.startsWith("docker://")) return null;
+  const m = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_./-]+)@(.+)$/.exec(s);
+  if (!m) return null;
+  return { owner: m[1], name: m[2], ref: m[3], pinned: /^[0-9a-f]{40}$/i.test(m[3]), firstParty: FIRST_PARTY.has(m[1].toLowerCase()) };
+}
+var UNTRUSTED = new RegExp([
+  String.raw`github\.event\.(issue|pull_request|discussion)\.(title|body)`,
+  String.raw`github\.event\.(comment|review|review_comment)\.body`,
+  String.raw`github\.event\.pages(\.\*|\[[^\]]*\])\.page_name`,
+  String.raw`github\.event\.commits(\.\*|\[[^\]]*\])\.(message|author\.(email|name))`,
+  String.raw`github\.event\.head_commit\.(message|author\.(email|name))`,
+  String.raw`github\.event\.pull_request\.head\.(ref|label|repo\.default_branch)`,
+  String.raw`github\.event\.workflow_run\.(head_branch|head_commit\.(message|author\.(email|name)))`,
+  String.raw`github\.head_ref`
+].map((p) => `(?:${p})`).join("|"));
+function untrustedExpressions(script) {
+  const out = [];
+  for (const m of String(script ?? "").matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
+    const hit = UNTRUSTED.exec(m[1]);
+    if (hit) out.push({ expression: m[0], field: hit[0] });
+  }
+  return out;
+}
+function envNameFor(field) {
+  const parts = String(field).replace(/\[[^\]]*\]|\.\*/g, "").split(".");
+  const last = parts.slice(-2).join("_").replace(/^pull_request_/, "PR_").replace(/^github_/, "");
+  return last.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase();
+}
+function jobsOf(doc) {
+  return Object.entries(doc.jobs || {}).filter(([, j]) => j && typeof j === "object");
+}
+function stepsOf(job) {
+  return Array.isArray(job.steps) ? job.steps.filter((st) => st && typeof st === "object") : [];
+}
+function scanWorkflow(text) {
+  const doc = parseWorkflow(text);
+  const unpinned = [];
+  const injections = [];
+  for (const [id, job] of jobsOf(doc)) {
+    const reusable = parseUses(job.uses);
+    if (reusable && !reusable.pinned) unpinned.push({ job: id, uses: String(job.uses), firstParty: reusable.firstParty });
+    stepsOf(job).forEach((st, i) => {
+      const step = st.name ? String(st.name) : st.uses ? String(st.uses) : `step ${i + 1}`;
+      const ref = parseUses(st.uses);
+      if (ref && !ref.pinned) unpinned.push({ job: id, step, uses: String(st.uses), firstParty: ref.firstParty });
+      const scripts = [st.run];
+      if (/^actions\/github-script@/.test(String(st.uses || "")) && st.with && typeof st.with === "object") scripts.push(st.with.script);
+      for (const script of scripts) {
+        for (const hit of untrustedExpressions(script)) injections.push({ job: id, step, ...hit });
+      }
+    });
+  }
+  const isWriteAll = (p) => typeof p === "string" && p.trim().toLowerCase() === "write-all";
+  const jobs = jobsOf(doc).filter(([, j]) => j.uses === void 0 || j.permissions !== void 0);
+  const writeAll = isWriteAll(doc.permissions) ? ["(workflow)"] : jobs.filter(([, j]) => isWriteAll(j.permissions)).map(([id]) => id);
+  const unscoped = doc.permissions === void 0 ? jobs.filter(([, j]) => j.permissions === void 0).map(([id]) => id) : [];
+  return { unpinned, injections, writeAll, unscoped, parsed: Object.keys(doc).length > 0 };
+}
+var list = (xs, n = 5) => `${xs.slice(0, n).join("; ")}${xs.length > n ? ` and ${xs.length - n} more` : ""}`;
+var where = (paths) => paths.length === 1 ? paths[0] : `${paths.length} workflow files: ${list(paths, 4)}`;
+function scanFindings(files) {
+  const scans = [...files].map(([path, text]) => ({ path, ...scanWorkflow(text) })).filter((s) => s.parsed);
+  const F = [];
+  const unpinned = scans.flatMap((s) => s.unpinned.map((u) => ({ ...u, path: s.path })));
+  if (unpinned.length) {
+    const third = unpinned.filter((u) => !u.firstParty);
+    const unique = (xs) => [...new Set(xs.map((u) => u.uses))];
+    const paths = [...new Set(unpinned.map((u) => u.path))];
+    F.push({
+      saving: 0,
+      unit: "risk",
+      confidence: "confirmed",
+      what: "actions not pinned to a commit",
+      workflow: where(paths),
+      evidence: `${unpinned.length} action reference${unpinned.length === 1 ? "" : "s"} ${unpinned.length === 1 ? "is" : "are"} pinned to a tag or branch, which its owner (or anyone who takes over the repository) can move to other code` + (third.length ? `; third-party: ${list(unique(third))}` : "; all are GitHub's own actions") + (unpinned.length > third.length ? `${third.length ? "; GitHub's own" : ""}: ${list(unique(unpinned.filter((u) => u.firstParty)), 3)}` : ""),
+      fix: "pin each to the full 40-character commit SHA of the release it means, with the tag in a comment, and let Dependabot or Renovate propose new pins as releases come",
+      tradeoff: "a new release becomes a pull request to review instead of arriving silently with a moved tag",
+      example: `- uses: ${(third[0] || unpinned[0]).uses.split("@")[0]}@<full 40-character commit SHA>  # ${(third[0] || unpinned[0]).uses.split("@")[1]}`
+    });
+  }
+  const injections = scans.flatMap((s) => s.injections.map((x) => ({ ...x, path: s.path })));
+  if (injections.length) {
+    const first = injections[0];
+    const env = envNameFor(first.field);
+    F.push({
+      saving: 0,
+      unit: "risk",
+      confidence: "confirmed",
+      what: "untrusted input in a script",
+      workflow: where([...new Set(injections.map((x) => x.path))]),
+      evidence: `${list(injections.map((x) => `${x.path} job ${x.job}, ${x.step}: ${x.expression}`), 4)}; the expression is pasted into the script before it runs, so a title, branch name or comment written as shell code runs as shell code`,
+      fix: "pass the value through an environment variable and quote it in the script, so it is read as data and never parsed as code",
+      tradeoff: "none to speak of: the step reads the same value, and only the shell no longer executes it",
+      example: `- name: ${first.step}
+  env:
+    ${env}: ${first.expression}
+  run: echo "$${env}"   # quoted: the value is data, never code`
+    });
+  }
+  const writeAll = scans.filter((s) => s.writeAll.length);
+  const unscoped = scans.filter((s) => s.unscoped.length);
+  if (writeAll.length || unscoped.length) {
+    const confirmed = writeAll.length > 0;
+    const parts = [];
+    if (writeAll.length) parts.push(`write-all in ${list(writeAll.map((s) => `${s.path} (${s.writeAll.join(", ")})`), 4)}`);
+    if (unscoped.length) parts.push(`no permissions block in ${list(unscoped.map((s) => s.path), 4)}, so its jobs get the repository's default token, which is write access on many repositories created before February 2023`);
+    F.push({
+      saving: 0,
+      unit: "risk",
+      confidence: confirmed ? "confirmed" : "inferred",
+      what: "job token wider than the job",
+      workflow: where([...new Set([...writeAll, ...unscoped].map((s) => s.path))]),
+      evidence: `${parts.join("; ")}: a compromised step can use the token to push, release or change settings`,
+      fix: "set a read-only default at the top of each workflow and grant each job only what it uses",
+      tradeoff: "a job that needs more (a release, a comment, a package) must name it, so a missing grant shows as a 403 the first time it runs",
+      example: "permissions:\n  contents: read\njobs:\n  release:\n    permissions:\n      contents: write   # only the job that publishes"
+    });
+  }
+  return F;
+}
+
 // src/advice.mjs
 var LOCK_OF = {
   npm: "package-lock.json",
@@ -8947,9 +9081,9 @@ function groupFindings(F) {
   const out = [];
   for (const g of grouped.values()) {
     const wfs = g.workflows;
-    const where = wfs.length === 1 ? wfs[0] : `${wfs.length} workflows: ${wfs.slice(0, 5).join(", ")}${wfs.length > 5 ? " and more" : ""}`;
+    const where2 = wfs.length === 1 ? wfs[0] : `${wfs.length} workflows: ${wfs.slice(0, 5).join(", ")}${wfs.length > 5 ? " and more" : ""}`;
     const evidence = wfs.length === 1 ? g.evidence : `${g.evidence} (shown for the largest; the same holds in the others)`;
-    out.push({ ...g, workflow: where, evidence, workflows: void 0 });
+    out.push({ ...g, workflow: where2, evidence, workflows: void 0 });
   }
   const risk = (f) => f.unit === "risk" ? 1 : 0;
   return out.sort((a, b) => risk(b) - risk(a) || b.saving - a.saving);
@@ -8966,7 +9100,7 @@ function analyse(repo, data) {
     workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || "", week, repo, data.outcomeSamples && data.outcomeSamples.get(wf) || {}));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
-  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" ? true : data.visibility ? "private" : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || /* @__PURE__ */ new Map())];
+  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" ? true : data.visibility ? "private" : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || /* @__PURE__ */ new Map()), ...scanFindings(data.scanFiles || /* @__PURE__ */ new Map())];
   const findings = groupFindings(raw).filter((f) => f.unit === "wait" || f.unit === "risk" || f.unit === "guard" || f.saving >= T.minSavingWeek).map((f) => ({
     saving_min_week: round(f.saving, 1),
     unit: f.unit || "job",
@@ -8983,6 +9117,9 @@ function analyse(repo, data) {
     covered_days: round(data.coveredDays, 2),
     window_truncated: Boolean(data.truncated),
     visibility: data.visibility || null,
+    // The scans read every workflow file collect listed (scanFiles); an audit built without that
+    // listing (a caller's own data) runs no scans and says so by reporting none read.
+    scanned: data.scanned || { read: (data.scanFiles || /* @__PURE__ */ new Map()).size, of: (data.scanFiles || /* @__PURE__ */ new Map()).size },
     only: data.only || [],
     only_missing: data.onlyMissing || [],
     runs_total: data.runs.length,
@@ -9128,6 +9265,9 @@ function report(a, { maxFindings = 8 } = {}) {
   L.push('- Billed minutes round each GitHub-hosted job up to a whole minute, as GitHub bills it; a job counts as GitHub-hosted when its runner group is "GitHub Actions".');
   L.push("- Steps grouped into the categories above by the command the workflow file gives each step (its run or uses line) and otherwise by its name.");
   L.push("- Runs whose jobs were all skipped count as runs but cost no job-minutes. Duplicate runs = commits the workflow ran on both a push and a pull request event. Reruns = runs with a run attempt above 1. Outdated runs = a pull request run still going when a newer commit on the same branch started its run.");
+  if (a.scanned && a.scanned.of) {
+    L.push(`- Security scans (actions pinned to a commit, untrusted input in scripts, the job token) read ${a.scanned.read === a.scanned.of ? `all ${a.scanned.of}` : `${a.scanned.read} of the ${a.scanned.of}`} workflow files, not only the sampled workflows'.`);
+  }
   L.push("- Cache, checkout and concurrency facts are read from the parsed workflow file (actions/cache, a setup action's cache input, the checkout step's inputs, concurrency and cancel-in-progress), so a commented-out line never counts.");
   L.push("- Estimated savings: dependency cache 60% of install time when no cache runs, 30% when one runs but installs still dominate; checkout and toolchain 50%; duplicates, outdated runs and reruns their full job time; self-hosted tail the excess over 2 s; fixed-cost findings half of the fixed share; short hosted jobs half of the billed minutes above the job-minutes. See docs/rules.md in the ci-wizard repository.");
   return `${L.join("\n")}
