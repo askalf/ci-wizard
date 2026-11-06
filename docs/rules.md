@@ -400,8 +400,11 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   read from the parsed steps (a commented-out step or a script that only mentions one does not
   count):
   - CodeQL (`github/codeql-action/init` or `/analyze`);
-  - Semgrep, Snyk, SonarSource or Bearer, by their action, their container image, or a
-    `semgrep ci`/`semgrep scan`, `snyk code test` or `codeql database` command;
+  - Semgrep, Snyk, SonarSource's scan actions or Bearer, by their action, their container
+    image (`semgrep/semgrep`, `snyk/snyk`, `sonarsource/sonar-scanner-cli`, `bearer/bearer`, as
+    the job's container or a `docker://` step), or a `semgrep ci`/`semgrep scan`,
+    `snyk code test`, `bearer scan` or `codeql database` command. SonarSource's quality-gate
+    action only waits for a scan's result and does not count;
   - a SARIF upload (`github/codeql-action/upload-sarif`), unless its job runs Scorecard or a
     workflow linter (zizmor, actionlint, poutine), whose results are about settings or
     workflows, not the code. On a private

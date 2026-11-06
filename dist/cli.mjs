@@ -8898,7 +8898,9 @@ function scanFindings(files, { repo = null } = {}) {
 var ACTIONS_APP = 15368;
 var isActionsCheck = (c) => c.integrationId === ACTIONS_APP;
 var PR_TRIGGERS = /* @__PURE__ */ new Set(["pull_request", "pull_request_target", "merge_group"]);
-var CODE_SCANNERS = /^(github\/codeql-action\/(init|analyze)|returntocorp\/semgrep-action|semgrep\/semgrep-action|snyk\/actions\/|sonarsource\/|bearer\/bearer-action)/i;
+var CODE_SCANNERS = /^(github\/codeql-action\/(init|analyze)|returntocorp\/semgrep-action|semgrep\/semgrep-action|snyk\/actions\/|sonarsource\/(sonarcloud-github-action|sonarqube-scan-action|sonarcloud-github-c-cpp|sonarqube-github-c-cpp)|bearer\/bearer-action)/i;
+var SCANNER_IMAGES = /* @__PURE__ */ new Set(["semgrep", "snyk", "sonar-scanner-cli", "bearer"]);
+var imageName = (image) => String(image || "").trim().toLowerCase().replace(/^docker:\/\//, "").split("/").pop().split(/[:@]/)[0];
 var GATE_LIKE = /\b(test|tests|lint|build|check|checks|verify|analy[sz]e|codeql|typecheck|types|dist|unit|e2e|ci|fuzz|fuzzing)\b/i;
 var list2 = (xs, n = 6) => `${xs.slice(0, n).join(", ")}${xs.length > n ? ` and ${xs.length - n} more` : ""}`;
 function fileFacts(scanFiles) {
@@ -8913,9 +8915,9 @@ function fileFacts(scanFiles) {
       const steps = Array.isArray(job.steps) ? job.steps.filter((st) => st && typeof st === "object") : [];
       const uses = steps.map((st) => String(st.uses || "").trim().toLowerCase());
       const runs = steps.map((st) => String(st.run || ""));
-      const image = String(job.container && (job.container.image || job.container) || "").toLowerCase();
+      const images = [job.container && typeof job.container === "object" ? job.container.image : job.container, ...uses.filter((u) => u.startsWith("docker://"))];
       const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u)) || runs.some((r) => /\b(scorecard|zizmor|actionlint|poutine)\b/i.test(r));
-      if (uses.some((u) => CODE_SCANNERS.test(u)) || !notCode && uses.some((u) => u.startsWith("github/codeql-action/upload-sarif@")) || /semgrep|snyk|sonar/.test(image) || runs.some((r) => /(^|[\s;&|(])(semgrep (ci|scan)|snyk code test|codeql database (create|analyze))\b/.test(r))) codeql = true;
+      if (uses.some((u) => CODE_SCANNERS.test(u)) || !notCode && uses.some((u) => u.startsWith("github/codeql-action/upload-sarif@")) || images.some((i) => SCANNER_IMAGES.has(imageName(i))) || runs.some((r) => /(^|[\s;&|(])(semgrep (ci|scan)|snyk code test|codeql database (create|analyze)|bearer scan)\b/.test(r))) codeql = true;
     }
   }
   return { onPr, codeql };
@@ -9004,7 +9006,7 @@ function gateFindings(gates, { scanFiles = /* @__PURE__ */ new Map(), scanned = 
       confidence: "inferred",
       what: "no code scanning",
       workflow: "all workflows",
-      evidence: `no workflow file runs a code scanner (CodeQL, Semgrep, Snyk, SonarSource, or a SARIF upload) and no code scanning default-setup run is in the window, so pull requests are not scanned for vulnerabilities in the code${paid ? "; CodeQL on a private repository needs GitHub Advanced Security (or Code Security)" : ""}`,
+      evidence: `no workflow file runs a code scanner (CodeQL, Semgrep, Snyk, a SonarSource scan, Bearer, or a SARIF upload) and no code scanning default-setup run is in the window, so pull requests are not scanned for vulnerabilities in the code${paid ? "; CodeQL on a private repository needs GitHub Advanced Security (or Code Security)" : ""}`,
       fix: "turn on CodeQL default setup (Settings, Code security, Code scanning), or add a CodeQL workflow, and require its analyze check",
       tradeoff: "each push and pull request runs an analysis (minutes for most repositories); findings need triage",
       example: ""

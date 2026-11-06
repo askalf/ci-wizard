@@ -260,7 +260,7 @@ test('two rulesets requiring the same name, one from any app and one from Action
   }
 });
 
-test('code scanning: Semgrep, Snyk, SonarSource and a code scanner\'s SARIF upload count; a Scorecard upload does not', () => {
+test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner\'s SARIF upload count; a Scorecard upload or a quality gate does not', () => {
   const g = gates({ code_scanning_runs: false });
   const job = (steps, extra = '') => `on: [pull_request]\njobs:\n  scan:\n    runs-on: ubuntu-latest\n${extra}    steps:\n${steps}`;
   const counts = (text) => !whats(gateFindings(g, { scanFiles: files(text), scanned: all(1) })).includes('no code scanning');
@@ -269,12 +269,25 @@ test('code scanning: Semgrep, Snyk, SonarSource and a code scanner\'s SARIF uplo
   assert.ok(counts(job('      - uses: SonarSource/sonarqube-scan-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(counts(job('      - run: semgrep ci --sarif > out.sarif\n')));
   assert.ok(counts(job('      - run: semgrep ci\n', '    container:\n      image: semgrep/semgrep\n')));
+  // Bearer by its container (the image alone, and with its scan command), by command, and by action.
+  assert.ok(counts(job('      - run: bearer scan . --format sarif --output b.sarif\n', '    container:\n      image: bearer/bearer:latest\n')));
+  assert.ok(counts(job('      - run: make\n', '    container: bearer/bearer\n')));
+  assert.ok(counts(job('      - run: bearer scan .\n')));
+  assert.ok(counts(job('      - uses: bearer/bearer-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  // A scanner image run as a step, and SonarSource's scanner image with a registry and a digest.
+  assert.ok(counts(job('      - uses: docker://semgrep/semgrep:1.90.0\n')));
+  assert.ok(counts(job('      - run: sonar-scanner\n', '    container:\n      image: docker.io/sonarsource/sonar-scanner-cli@sha256:abc\n')));
   assert.ok(counts(job('      - run: trivy fs --format sarif -o t.sarif .\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   // Near misses: Scorecard's or a workflow linter's SARIF is not about the code; a script that only
   // mentions a scanner is not one.
   assert.ok(!counts(job('      - uses: ossf/scorecard-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(!counts(job('      - uses: zizmorcore/zizmor-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(!counts(job('      - run: echo "we should add semgrep someday"\n')));
+  // SonarSource's quality gate only waits for an earlier scan's result; a SonarQube server image
+  // is not a scan; an image whose name only contains a scanner's is another image.
+  assert.ok(!counts(job('      - uses: SonarSource/sonarqube-quality-gate-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(!counts(job('      - run: make\n', '    container:\n      image: sonarqube:lts-community\n')));
+  assert.ok(!counts(job('      - run: make\n', '    container:\n      image: example/bearer-token-tools:1\n')));
   // A workflow linter run by command, whose SARIF is about the workflows.
   assert.ok(!counts(job('      - run: actionlint -format "{{json .}}" > a.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
 });

@@ -13,8 +13,15 @@ export const isActionsCheck = (c) => c.integrationId === ACTIONS_APP;
 const PR_TRIGGERS = new Set(['pull_request', 'pull_request_target', 'merge_group']);
 
 // Actions that scan a repository's code and report its vulnerabilities: CodeQL, Semgrep, Snyk,
-// SonarSource (SonarCloud, SonarQube), Bearer.
-const CODE_SCANNERS = /^(github\/codeql-action\/(init|analyze)|returntocorp\/semgrep-action|semgrep\/semgrep-action|snyk\/actions\/|sonarsource\/|bearer\/bearer-action)/i;
+// SonarSource's scan actions (SonarCloud, SonarQube; not its quality-gate action, which only waits
+// for a scan's result), Bearer.
+const CODE_SCANNERS = /^(github\/codeql-action\/(init|analyze)|returntocorp\/semgrep-action|semgrep\/semgrep-action|snyk\/actions\/|sonarsource\/(sonarcloud-github-action|sonarqube-scan-action|sonarcloud-github-c-cpp|sonarqube-github-c-cpp)|bearer\/bearer-action)/i;
+
+// The same scanners' container images, by the image's name without its registry, owner or tag:
+// semgrep/semgrep, snyk/snyk, sonarsource/sonar-scanner-cli, bearer/bearer. A SonarQube server
+// image is not a scan.
+const SCANNER_IMAGES = new Set(['semgrep', 'snyk', 'sonar-scanner-cli', 'bearer']);
+const imageName = (image) => String(image || '').trim().toLowerCase().replace(/^docker:\/\//, '').split('/').pop().split(/[:@]/)[0];
 
 // Checks that test, build or analyse the change: the ones a merge should wait for. Matched on the
 // check's name, so the finding says "inferred" and lists the rest apart.
@@ -39,15 +46,16 @@ function fileFacts(scanFiles) {
       const steps = Array.isArray(job.steps) ? job.steps.filter((st) => st && typeof st === 'object') : [];
       const uses = steps.map((st) => String(st.uses || '').trim().toLowerCase());
       const runs = steps.map((st) => String(st.run || ''));
-      const image = String((job.container && (job.container.image || job.container)) || '').toLowerCase();
+      // The job's container, and any step that runs an image (uses: docker://...).
+      const images = [job.container && typeof job.container === 'object' ? job.container.image : job.container, ...uses.filter((u) => u.startsWith('docker://'))];
       // A job that runs Scorecard or a workflow linter (by action or by command) uploads results
       // about settings or workflows, not about the code.
       const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u))
         || runs.some((r) => /\b(scorecard|zizmor|actionlint|poutine)\b/i.test(r));
       if (uses.some((u) => CODE_SCANNERS.test(u))
         || (!notCode && uses.some((u) => u.startsWith('github/codeql-action/upload-sarif@')))
-        || /semgrep|snyk|sonar/.test(image)
-        || runs.some((r) => /(^|[\s;&|(])(semgrep (ci|scan)|snyk code test|codeql database (create|analyze))\b/.test(r))) codeql = true;
+        || images.some((i) => SCANNER_IMAGES.has(imageName(i)))
+        || runs.some((r) => /(^|[\s;&|(])(semgrep (ci|scan)|snyk code test|codeql database (create|analyze)|bearer scan)\b/.test(r))) codeql = true;
     }
   }
   return { onPr, codeql };
@@ -134,7 +142,7 @@ export function gateFindings(gates, { scanFiles = new Map(), scanned = null, vis
     const paid = visibility && visibility !== 'public';
     F.push({
       saving: 0, unit: 'risk', confidence: 'inferred', what: 'no code scanning', workflow: 'all workflows',
-      evidence: `no workflow file runs a code scanner (CodeQL, Semgrep, Snyk, SonarSource, or a SARIF upload) and no code scanning default-setup run is in the window, so pull requests are not scanned for vulnerabilities in the code${paid ? '; CodeQL on a private repository needs GitHub Advanced Security (or Code Security)' : ''}`,
+      evidence: `no workflow file runs a code scanner (CodeQL, Semgrep, Snyk, a SonarSource scan, Bearer, or a SARIF upload) and no code scanning default-setup run is in the window, so pull requests are not scanned for vulnerabilities in the code${paid ? '; CodeQL on a private repository needs GitHub Advanced Security (or Code Security)' : ''}`,
       fix: 'turn on CodeQL default setup (Settings, Code security, Code scanning), or add a CodeQL workflow, and require its analyze check',
       tradeoff: 'each push and pull request runs an analysis (minutes for most repositories); findings need triage',
       example: '',
