@@ -8342,7 +8342,7 @@ function flowingFields(node) {
     case "prop":
     case "index": {
       const spelled = pathOf(node);
-      if (spelled === null) return [];
+      if (spelled === null) return node.k === "ctx" ? [] : flowingFields(node.of);
       const path = spelled.toLowerCase();
       const norm = path.replace(/\[[^\]]*\]/g, ".*").replace(/\.\*\.\*/g, ".*");
       if (UNTRUSTED_FULL.test(path) || UNTRUSTED_FULL.test(norm)) return [path];
@@ -8386,6 +8386,8 @@ function shellLang(shell, runsOn) {
     const first = String(shell).trim().split(/\s+/)[0].toLowerCase();
     if (first === "bash" || first === "sh") return "posix";
     if (first === "pwsh" || first === "powershell") return "pwsh";
+    if (first === "python" || first === "python3") return "python";
+    if (first === "cmd") return "cmd";
     return null;
   }
   const labels = (Array.isArray(runsOn) ? runsOn : typeof runsOn === "string" ? [runsOn] : []).filter((l) => typeof l === "string").map((l) => l.toLowerCase());
@@ -8401,13 +8403,21 @@ function patternExample(x) {
   env:
     ${name}: ${x.expression}
 `;
-  if (x.lang === "js") return `${head}  with:
+  const read = {
+    js: `  with:
     script: |
-      // read process.env.${name} where the expression was`;
-  if (x.lang === "pwsh") return `${head}  run: |
-    # read $env:${name} where the expression was, e.g. Write-Host $env:${name}`;
-  return `${head}  run: |
-    # read "$${name}" (in double quotes) where the expression was, e.g. echo "$${name}"`;
+      // read process.env.${name} where the expression was`,
+    pwsh: `  run: |
+    # read $env:${name} where the expression was, e.g. Write-Host $env:${name}`,
+    posix: `  run: |
+    # read "$${name}" (in double quotes) where the expression was, e.g. echo "$${name}"`,
+    python: `  run: |
+    # read os.environ["${name}"] where the expression was (import os)`
+  }[x.lang];
+  if (x.lang === "cmd") return "";
+  if (!read) return `${head}  run: |
+    # read the variable as this step's shell does: "$${name}" in bash, $env:${name} in PowerShell`;
+  return head + read;
 }
 function jobsOf(doc) {
   return Object.entries(doc.jobs || {}).filter(([, j]) => j && typeof j === "object");
@@ -8476,9 +8486,9 @@ function scanFindings(files) {
       what: "untrusted input in a script",
       workflow: where([...new Set(injections.map((x) => x.path))]),
       evidence: `${list(injections.map((x) => `${x.path} job ${x.job}, ${x.step}: ${x.expression}`), 4)}; the expression is pasted into the script before it runs, so a title, branch name or comment written as shell code runs as shell code`,
-      fix: `pass the value through an environment variable and read the variable, quoted, where the expression was ("$VAR" in bash, $env:VAR in PowerShell, process.env.VAR in github-script), so the shell reads it as data. The variable is only data while nothing parses it again: not inside a command string (bash -c, eval, ssh, a github-script exec), a program (awk, sed, jq), an option that runs a program (tar --checkpoint-action, git --upload-pack), or a line written to $GITHUB_ENV, $GITHUB_PATH or $GITHUB_OUTPUT (a newline in it sets another variable: write it with a random multiline delimiter); where it is a command's argument, put -- before it so a leading dash is not read as an option`,
+      fix: 'pass the value through an environment variable and read the variable, quoted, where the expression was ("$VAR" in bash, $env:VAR in PowerShell, process.env.VAR in github-script, os.environ in python), so the shell reads it as data. ' + (injections.some((x) => x.lang === "cmd") ? "cmd expands %VAR% before it parses the line, so a variable is no safer there: run that step in bash or pwsh. " : "") + "The variable is only data while nothing parses it again: not inside a command string (bash -c, eval, ssh, a github-script exec), a program (awk, sed, jq), or an option that runs a program (tar --checkpoint-action, git --upload-pack). Written to $GITHUB_ENV or $GITHUB_OUTPUT, a newline in it sets another variable: write it with a random multiline delimiter (NAME<<DELIM … DELIM). Never write it to $GITHUB_PATH, which takes one path per line and has no delimiter: every line would join PATH. Where it is a command's argument, put -- before it so a leading dash is not read as an option",
       tradeoff: "none to speak of: the step reads the same value, and only the shell no longer executes it",
-      example: patternExample(injections[0])
+      example: patternExample(injections.find((x) => x.lang !== "cmd") || injections[0])
     });
   }
   const writeAll = scans.filter((s) => s.writeAll.length);

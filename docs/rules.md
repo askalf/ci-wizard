@@ -309,9 +309,14 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   would need a full parser for each language and every command's options. The fix also names what a
   variable does not fix: a command string or program that parses the value again (`bash -c`,
   `eval`, `ssh`, a github-script `exec`, `awk`, `sed`, `jq`), an option that runs a program
-  (`tar --checkpoint-action`, `git --upload-pack`), a line written to `$GITHUB_ENV`, `$GITHUB_PATH`
-  or `$GITHUB_OUTPUT` (a newline in it sets another variable; write it with a random multiline
-  delimiter), and an argument that starts with a dash (put `--` before it). *Trade-off:* none to
+  (`tar --checkpoint-action`, `git --upload-pack`), a line written to `$GITHUB_ENV` or
+  `$GITHUB_OUTPUT` (a newline in it sets another variable; write it with a random multiline
+  delimiter), `$GITHUB_PATH` (one path per line and no delimiter, so never write the value there),
+  and an argument that starts with a dash (put `--` before it). A python step reads
+  `os.environ`; a cmd step gets no example, since cmd expands `%VAR%` before it parses the line,
+  and the fix says to run it in bash or pwsh; a step whose shell is unknown (a matrix OS) gets the
+  bash and PowerShell forms, said as such. An expression is followed through computed values too:
+  `fromJSON(toJSON(github.event)).issue.title` carries the title. *Trade-off:* none to
   speak of: the step reads the same value, and only the shell no longer runs it.
 
 ## job token wider than the job

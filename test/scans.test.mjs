@@ -61,6 +61,10 @@ test('untrustedExpressions: only an expression whose value carries the text; a b
   assert.deepEqual(hits('echo "${{ GitHub.Event.Pull_Request.Head.Ref }}"'), ['github.event.pull_request.head.ref']);
   assert.deepEqual(hits("echo ${{ github.event['Issue']['Body'] }}"), ['github.event.issue.body']);
   assert.deepEqual(hits('echo ${{ toJSON(GITHUB.EVENT) }}'), ['github.event']);
+  // A property of a computed value carries what the value carries.
+  assert.deepEqual(hits('echo "${{ fromJSON(toJSON(github.event)).issue.title }}"'), ['github.event']);
+  assert.deepEqual(hits("echo ${{ fromJSON(toJSON(github.event))['issue']['body'] }}"), ['github.event']);
+  assert.deepEqual(hits("echo ${{ fromJSON('{\"a\":1}').a }} ${{ fromJSON(toJSON(github.event.issue.number)) }}"), []);
   // An element of a collection carries its message, author or page name; its other leaves do not.
   assert.deepEqual(hits("echo '${{ toJSON(github.event.commits[0]) }}'"), ['github.event.commits[0]']);
   assert.deepEqual(hits("echo '${{ toJSON(github.event.commits.*) }}'"), ['github.event.commits.*']);
@@ -171,8 +175,13 @@ test('the injection example is the pattern, in the step\'s language, never a rew
   assert.match(gs.with.script, /process\.env\.ISSUE_TITLE/);
   // A step name YAML would misread (a colon, a #) is quoted, so the example still parses.
   assert.equal(parse(injectionExample('      - name: "Greet: #1"\n        run: echo ${{ github.head_ref }}\n').example)[0].name, 'Greet: #1');
-  // An unknown runner OS gets the bash form, which is GitHub's default shell off Windows.
-  assert.match(injectionExample('      - run: echo ${{ github.head_ref }}\n', '${{ matrix.os }}').example, /"\$HEAD_REF"/);
+  // An unknown shell (a matrix OS) gets the forms for the shells it could be, said as such.
+  assert.match(injectionExample('      - run: echo ${{ github.head_ref }}\n', '${{ matrix.os }}').example, /as this step's shell does: "\$HEAD_REF" in bash, \$env:HEAD_REF in PowerShell/);
+  // python reads os.environ; cmd expands %VAR% before parsing, so it gets no example and the fix says why.
+  assert.match(parse(injectionExample('      - shell: python\n        run: print("${{ github.event.issue.title }}")\n').example)[0].run, /os\.environ\["ISSUE_TITLE"\]/);
+  const cmd = injectionExample('      - shell: cmd\n        run: echo ${{ github.head_ref }}\n', 'windows-latest');
+  assert.equal(cmd.example, '');
+  assert.match(cmd.fix, /cmd expands %VAR% before it parses the line.*bash or pwsh/);
 });
 
 test('the injection fix names what the variable does not fix: a second parser, an option that runs a program, an env file, an argument', () => {
@@ -180,7 +189,9 @@ test('the injection fix names what the variable does not fix: a second parser, a
   assert.match(fix, /bash -c, eval, ssh, a github-script exec/);
   assert.match(fix, /awk, sed, jq/);
   assert.match(fix, /tar --checkpoint-action, git --upload-pack/);
-  assert.match(fix, /\$GITHUB_ENV, \$GITHUB_PATH or \$GITHUB_OUTPUT.*random multiline delimiter/);
+  assert.match(fix, /\$GITHUB_ENV or \$GITHUB_OUTPUT.*random multiline delimiter/);
+  assert.match(fix, /Never write it to \$GITHUB_PATH, which takes one path per line and has no delimiter/);
+  assert.doesNotMatch(fix, /cmd expands/); // only when a step runs in cmd
   assert.match(fix, /put -- before it/);
 });
 
