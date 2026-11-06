@@ -19,7 +19,7 @@ test('report: findings first, every saving called an estimate, and how it was me
   const md = report(sample());
   assert.match(md, /^# CI audit: owner\/repo/);
   assert.ok(md.indexOf('## What to fix first') < md.indexOf('## Where the time goes'));
-  assert.match(md, /### 1\. cache dependencies\n\n\*\*Where:\*\* CI <main>/);
+  assert.match(md, /### 1\. cache dependencies\n\n\*\*Where:\*\* CI &lt;main&gt;/); // a name is text, never markup
   assert.match(md, /\*\*Confidence\*\* confirmed by the workflow file/);
   assert.match(md, /about \d+ job-min\/week \(estimate\)/);
   assert.match(md, /## How it was measured/);

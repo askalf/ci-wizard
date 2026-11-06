@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { audit, html, NotFoundError, report, RateLimitError, REPO_RE } from './index.mjs';
-import { budgetText } from './report.mjs';
+import { budgetText, plain } from './report.mjs';
 import { compare } from './compare.mjs';
 import { VERSION } from './version.mjs';
 
@@ -185,7 +185,8 @@ export async function main(argv = process.argv.slice(2), { env = process.env, st
   }
   // Progress only on a terminal: a redirected stderr or a CI log gets the one summary line.
   const live = Boolean(stderr.isTTY);
-  const onProgress = live ? (msg) => stderr.write(`\r\x1b[Kci-wizard: ${msg}...`) : undefined;
+  // The message names workflows, which the audited repository chose: no control character of theirs reaches the terminal.
+  const onProgress = live ? (msg) => stderr.write(`\r\x1b[Kci-wizard: ${plain(msg).replace(/\n/g, ' ')}...`) : undefined;
   let a;
   try {
     const only = values.only.flatMap((v) => v.split(',')).map((v) => v.trim()).filter(Boolean);

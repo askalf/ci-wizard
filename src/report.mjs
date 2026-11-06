@@ -6,9 +6,45 @@ import { fmtS } from './util.mjs';
 
 const CONF = { confirmed: 'confirmed by the workflow file', inferred: 'cause inferred', measured: 'measured' };
 
-// Backslashes first, then pipes: escaping the pipe alone turns `A\|B` into `A\\|B`, an escaped
-// backslash followed by a column break.
-export const cell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+// Control characters (C0 but tab, DEL, C1): a terminal escape in a step name could rewrite or hide
+// what the report shows, and none belongs in markdown.
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+
+/** Text with its control characters removed and newlines kept, for a whole report. */
+export const plain = (s) => String(s).replace(/\r\n?/g, '\n').replace(CONTROL, '');
+
+/**
+ * Inline markdown that displays as the text it is. Much of a report's text comes from the audited
+ * repository (workflow, job and step names, file names, expressions), written by whoever can push
+ * or open a pull request, so it must never become markup: newlines become spaces (no new heading
+ * or block), and outside code spans `<` `>` become entities (no HTML, no comment that hides the
+ * rest) and `[` `]` `\` are escaped (no link or tracking image). Code spans stay code spans, which
+ * markdown displays literally; backtick runs are cut to one, and an unpaired backtick is escaped,
+ * so no span is left open to swallow what follows.
+ */
+export function md(s) {
+  const text = String(s ?? '').replace(/\r?\n|\r/g, ' ').replace(CONTROL, '').replace(/`{2,}/g, '`');
+  const parts = text.split('`');
+  // An even number of parts means an odd number of backticks: the last one pairs with nothing.
+  const unpaired = parts.length % 2 === 0;
+  return parts.map((part, i) => {
+    const code = i % 2 === 1 && !(unpaired && i === parts.length - 1);
+    const out = code ? part : part.replace(/\\/g, '\\\\').replace(/\[/g, '\\[').replace(/\]/g, '\\]').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // The backtick before each part is a delimiter, except the last one when it pairs with nothing.
+    return i === 0 ? out : `${unpaired && i === parts.length - 1 ? '\\`' : '`'}${out}`;
+  }).join('');
+}
+
+/** A table cell: inline markdown, with its pipes escaped so it cannot add a column. */
+export const cell = (s) => md(s).replace(/\|/g, '\\|');
+
+/** A fenced block for an example: its fence is longer than any backtick run inside it, so the example cannot close it. */
+export function fence(body, lang = 'yaml') {
+  const text = plain(body);
+  const longest = Math.max(0, ...(text.match(/`+/g) || []).map((r) => r.length));
+  const f = '`'.repeat(Math.max(3, longest + 1));
+  return [`${f}${lang}`, text, f];
+}
 
 const num = (v) => typeof v === 'number' && Number.isFinite(v);
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -76,7 +112,7 @@ export function summary(a) {
     return L;
   }
   const top = a.findings[0];
-  L.push(`**Start with:** ${top.what} in *${top.workflow}*: ${savingText(top)}.`, '');
+  L.push(`**Start with:** ${md(top.what)} in *${md(top.workflow)}*: ${savingText(top)}.`, '');
   const parts = [];
   if (risks.length) parts.push(`${plural(risks.length, 'finding')} ${risks.length === 1 ? 'is a security risk' : 'are security risks'} to fix before any saving`);
   if (jobFindings.length) {
@@ -97,23 +133,23 @@ export function summary(a) {
 
 export function report(a, { maxFindings = 8 } = {}) {
   const L = [];
-  L.push(`# CI audit: ${a.repo}`, '');
+  L.push(`# CI audit: ${md(a.repo)}`, '');
   L.push(...summary(a), '');
   L.push(`Read-only, from GitHub's Actions API: ${a.runs_total} workflow runs over ${a.covered_days} days, and ${a.only && a.only.length ? `the ${plural(a.workflows.length, 'named workflow')}` : `the ${plural(a.workflows.length, 'busiest workflow')}`} timed job by job. Weekly figures scale that window to 7 days.`, '');
-  if (a.only && a.only.length) L.push(`Only the workflows named with \`--only\` were timed: ${a.only.join(', ')}. Repository-wide findings look at those alone.`, '');
-  if (a.only_missing && a.only_missing.length) L.push(`No runs in the window for ${a.only_missing.join(', ')}: check the workflow's name as GitHub shows it (its \`name:\` line), not its file name.`, '');
+  if (a.only && a.only.length) L.push(`Only the workflows named with \`--only\` were timed: ${a.only.map(md).join(', ')}. Repository-wide findings look at those alone.`, '');
+  if (a.only_missing && a.only_missing.length) L.push(`No runs in the window for ${a.only_missing.map(md).join(', ')}: check the workflow's name as GitHub shows it (its \`name:\` line), not its file name.`, '');
   if (a.window_truncated) L.push(`The ${a.runs_total}-run cap was reached, so the window covers ${a.covered_days} days rather than the days asked for; weekly figures are scaled from that shorter window and are noisier.`, '');
 
   if (a.findings.length) {
     L.push('## What to fix first', '');
     a.findings.slice(0, maxFindings).forEach((f, i) => {
-      L.push(`### ${i + 1}. ${f.what}`, '');
-      L.push(`**Where:** ${f.workflow}  `);
-      L.push(`**Saves** ${savingText(f)} · **Confidence** ${CONF[f.confidence] || f.confidence}  `);
-      L.push(`**Why:** ${f.evidence}.  `);
-      L.push(`**Fix:** ${f.fix}.${f.tradeoff ? '  ' : ''}`);
-      if (f.tradeoff) L.push(`**Trade-off:** ${f.tradeoff}.`);
-      if (f.example) L.push('', '```yaml', f.example, '```');
+      L.push(`### ${i + 1}. ${md(f.what)}`, '');
+      L.push(`**Where:** ${md(f.workflow)}  `);
+      L.push(`**Saves** ${savingText(f)} · **Confidence** ${md(CONF[f.confidence] || f.confidence)}  `);
+      L.push(`**Why:** ${md(f.evidence)}.  `);
+      L.push(`**Fix:** ${md(f.fix)}.${f.tradeoff ? '  ' : ''}`);
+      if (f.tradeoff) L.push(`**Trade-off:** ${md(f.tradeoff)}.`);
+      if (f.example) L.push('', ...fence(f.example));
       L.push('');
     });
     if (a.findings.length > maxFindings) L.push(`${plural(a.findings.length - maxFindings, 'smaller finding')} not shown; the JSON report (\`--json\`) lists all of them.`, '');
@@ -140,10 +176,10 @@ export function report(a, { maxFindings = 8 } = {}) {
 
   const stepLines = [];
   for (const w of a.workflows.slice(0, 4)) {
-    const steps = (w.top_steps || []).filter((t) => t.median_s >= 1).map((t) => `${stepLabel(t.step)} ${fmtS(t.median_s)}`);
+    const steps = (w.top_steps || []).filter((t) => t.median_s >= 1).map((t) => `${md(stepLabel(t.step))} ${fmtS(t.median_s)}`);
     if (!steps.length) continue;
     const facts = [w.has_cache ? 'caches dependencies' : 'no dependency cache', w.cancels ? 'cancels outdated runs' : 'no cancel-in-progress'];
-    stepLines.push(`- *${w.workflow}* (\`${w.path}\`): ${steps.join('; ')}. The workflow file: ${facts.join(', ')}.`);
+    stepLines.push(`- *${md(w.workflow)}* (${md(`\`${w.path}\``)}): ${steps.join('; ')}. The workflow file: ${facts.join(', ')}.`);
   }
   if (stepLines.length) L.push('### The longest steps (median)', '', ...stepLines, '');
 
@@ -166,7 +202,7 @@ export function report(a, { maxFindings = 8 } = {}) {
   }
   L.push("- Job time = completed minus started; queue wait = started minus created; developer wait = a successful run's wall time. All from the Actions API, in whole seconds.");
   const estimated = a.workflows.filter((w) => Object.values(w.cost_by_outcome || {}).some((c) => c.estimated && c.runs_week > 0)).map((w) => w.workflow);
-  L.push(`- Weekly cost is a count times a mean, per outcome: successes from the sampled successful runs, and failed, cancelled and timed-out runs from up to two sampled runs of each (\`cost_by_outcome\` in the JSON).${estimated.length ? ` Where an outcome had no sampled run, it is costed like a success: ${estimated.slice(0, 5).join(', ')}${estimated.length > 5 ? ' and more' : ''}.` : ''} Runs that ran no job (skipped, waiting for approval, failed to start) cost nothing.`);
+  L.push(`- Weekly cost is a count times a mean, per outcome: successes from the sampled successful runs, and failed, cancelled and timed-out runs from up to two sampled runs of each (\`cost_by_outcome\` in the JSON).${estimated.length ? ` Where an outcome had no sampled run, it is costed like a success: ${estimated.slice(0, 5).map(md).join(', ')}${estimated.length > 5 ? ' and more' : ''}.` : ''} Runs that ran no job (skipped, waiting for approval, failed to start) cost nothing.`);
   L.push('- Per-run figures are medians over the sampled successful runs of each workflow; queue and wait percentiles are over the sampled jobs and runs, so a p90 over a handful of them is close to the slowest one.');
   L.push('- Billed minutes round each GitHub-hosted job up to a whole minute, as GitHub bills it; a job counts as GitHub-hosted when its runner group is "GitHub Actions".');
   L.push('- Steps grouped into the categories above by the command the workflow file gives each step (its run or uses line) and otherwise by its name.');
@@ -176,10 +212,10 @@ export function report(a, { maxFindings = 8 } = {}) {
     const coverage = sc.of === null || sc.of === undefined
       ? `${sc.read} workflow file${sc.read === 1 ? '' : 's'} (the sampled ones; the workflow directory could not be listed, so the total is unknown)`
       : sc.read === sc.of ? `all ${sc.of} workflow files` : `${sc.read} of the ${sc.of} workflow files`;
-    const missed = sc.unreadable && sc.unreadable.length ? `; ${sc.unreadable.length} could not be read (${sc.unreadable.slice(0, 3).join(', ')}${sc.unreadable.length > 3 ? ' and more' : ''})` : '';
+    const missed = sc.unreadable && sc.unreadable.length ? `; ${sc.unreadable.length} could not be read (${sc.unreadable.slice(0, 3).map(md).join(', ')}${sc.unreadable.length > 3 ? ' and more' : ''})` : '';
     L.push(`- Security scans (actions pinned to a commit, untrusted input in scripts, the job token) read ${coverage}${missed}, not only the sampled workflows'.`);
   }
   L.push("- Cache, checkout and concurrency facts are read from the parsed workflow file (actions/cache, a setup action's cache input, the checkout step's inputs, concurrency and cancel-in-progress), so a commented-out line never counts.");
   L.push('- Estimated savings: dependency cache 60% of install time when no cache runs, 30% when one runs but installs still dominate; checkout and toolchain 50%; duplicates, outdated runs and reruns their full job time; self-hosted tail the excess over 2 s; fixed-cost findings half of the fixed share; short hosted jobs half of the billed minutes above the job-minutes. See docs/rules.md in the ci-wizard repository.');
-  return `${L.join('\n')}\n`;
+  return plain(`${L.join('\n')}\n`);
 }

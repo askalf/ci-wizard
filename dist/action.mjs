@@ -8091,22 +8091,26 @@ function allSteps(doc) {
   }
   return steps;
 }
+function wholeExpression(s) {
+  const t = String(s).trim();
+  return t.length >= 5 && t.startsWith("${{") && t.endsWith("}}") ? t.slice(3, -2).trim() : null;
+}
 function isOn(value) {
   if (value === true) return true;
   if (value === false || value === null || value === void 0) return false;
   const s = String(value).trim();
   if (s === "" || s === "false") return false;
   if (s === "true") return true;
-  const expr = /^\$\{\{\s*(.*?)\s*\}\}$/.exec(s);
-  if (expr) return expr[1] !== "false" && expr[1] !== "'false'";
+  const expr = wholeExpression(s);
+  if (expr !== null) return expr !== "false" && expr !== "'false'";
   return false;
 }
 function cacheInputOn(value) {
   if (value === void 0 || value === null || value === false) return false;
   const s = String(value).trim();
   if (s === "" || s === "false") return false;
-  const expr = /^\$\{\{\s*(.*?)\s*\}\}$/.exec(s);
-  if (expr) return expr[1] !== "false" && expr[1] !== "''" && expr[1] !== "'false'";
+  const expr = wholeExpression(s);
+  if (expr !== null) return expr !== "false" && expr !== "''" && expr !== "'false'";
   return true;
 }
 function majorOf(uses) {
@@ -8259,19 +8263,44 @@ function allJobTimeouts(doc) {
   }
   return out;
 }
+function inOrder(literals, { rest = false } = {}) {
+  return {
+    test(name) {
+      const s = String(name);
+      const last = literals.length - 1;
+      if (!s.startsWith(literals[0])) return false;
+      let pos = literals[0].length;
+      if (last === 0) return rest ? s.length > pos : s.length === pos;
+      for (let i = 1; i < last; i += 1) {
+        const at = s.indexOf(literals[i], pos);
+        if (at < 0) return false;
+        pos = at + literals[i].length;
+      }
+      if (rest) {
+        const at = s.indexOf(literals[last], pos);
+        return at >= 0 && s.length > at + literals[last].length;
+      }
+      return s.length - literals[last].length >= pos && s.endsWith(literals[last]);
+    }
+  };
+}
 function jobNamePattern(fileJobName, { reusable = false } = {}) {
   const base = String(fileJobName);
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   if (reusable) {
     const literals = base.split(/\$\{\{[\s\S]*?\}\}/);
     if (!literals.join("").trim()) return { rx: /(?!)/, specificity: 0 };
-    const head = base.includes("${{") ? literals.map(esc).join("[\\s\\S]*") : `${esc(base)}( \\(.*\\))?`;
-    return { rx: new RegExp(`^${head} / [\\s\\S]+$`), specificity: Infinity };
+    if (base.includes("${{")) {
+      const parts = [...literals];
+      parts[parts.length - 1] += " / ";
+      return { rx: inOrder(parts, { rest: true }), specificity: Infinity };
+    }
+    return { rx: new RegExp(`^${esc(base)}( \\(.*\\))? / [\\s\\S]+$`), specificity: Infinity };
   }
   if (base.includes("${{")) {
     const literals = base.split(/\$\{\{[\s\S]*?\}\}/);
     if (!literals.join("").trim()) return { rx: /(?!)/, specificity: 0 };
-    return { rx: new RegExp(`^${literals.map(esc).join("[\\s\\S]*")}$`), specificity: literals.join("").length };
+    return { rx: inOrder(literals), specificity: literals.join("").length };
   }
   return { rx: new RegExp(`^${esc(base)}( \\(.*\\))?$`), specificity: base.length + 1 };
 }
@@ -9318,7 +9347,25 @@ function analyse(repo, data) {
 
 // src/report.mjs
 var CONF = { confirmed: "confirmed by the workflow file", inferred: "cause inferred", measured: "measured" };
-var cell = (s) => String(s).replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+var CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+var plain = (s) => String(s).replace(/\r\n?/g, "\n").replace(CONTROL, "");
+function md(s) {
+  const text = String(s ?? "").replace(/\r?\n|\r/g, " ").replace(CONTROL, "").replace(/`{2,}/g, "`");
+  const parts = text.split("`");
+  const unpaired = parts.length % 2 === 0;
+  return parts.map((part, i) => {
+    const code = i % 2 === 1 && !(unpaired && i === parts.length - 1);
+    const out = code ? part : part.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return i === 0 ? out : `${unpaired && i === parts.length - 1 ? "\\`" : "`"}${out}`;
+  }).join("");
+}
+var cell = (s) => md(s).replace(/\|/g, "\\|");
+function fence(body, lang = "yaml") {
+  const text = plain(body);
+  const longest = Math.max(0, ...(text.match(/`+/g) || []).map((r) => r.length));
+  const f = "`".repeat(Math.max(3, longest + 1));
+  return [`${f}${lang}`, text, f];
+}
 var num = (v) => typeof v === "number" && Number.isFinite(v);
 var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 function shareText(w, n = 3) {
@@ -9363,7 +9410,7 @@ function summary(a) {
     return L;
   }
   const top = a.findings[0];
-  L.push(`**Start with:** ${top.what} in *${top.workflow}*: ${savingText(top)}.`, "");
+  L.push(`**Start with:** ${md(top.what)} in *${md(top.workflow)}*: ${savingText(top)}.`, "");
   const parts = [];
   if (risks.length) parts.push(`${plural(risks.length, "finding")} ${risks.length === 1 ? "is a security risk" : "are security risks"} to fix before any saving`);
   if (jobFindings.length) {
@@ -9383,22 +9430,22 @@ function summary(a) {
 }
 function report(a, { maxFindings = 8 } = {}) {
   const L = [];
-  L.push(`# CI audit: ${a.repo}`, "");
+  L.push(`# CI audit: ${md(a.repo)}`, "");
   L.push(...summary(a), "");
   L.push(`Read-only, from GitHub's Actions API: ${a.runs_total} workflow runs over ${a.covered_days} days, and ${a.only && a.only.length ? `the ${plural(a.workflows.length, "named workflow")}` : `the ${plural(a.workflows.length, "busiest workflow")}`} timed job by job. Weekly figures scale that window to 7 days.`, "");
-  if (a.only && a.only.length) L.push(`Only the workflows named with \`--only\` were timed: ${a.only.join(", ")}. Repository-wide findings look at those alone.`, "");
-  if (a.only_missing && a.only_missing.length) L.push(`No runs in the window for ${a.only_missing.join(", ")}: check the workflow's name as GitHub shows it (its \`name:\` line), not its file name.`, "");
+  if (a.only && a.only.length) L.push(`Only the workflows named with \`--only\` were timed: ${a.only.map(md).join(", ")}. Repository-wide findings look at those alone.`, "");
+  if (a.only_missing && a.only_missing.length) L.push(`No runs in the window for ${a.only_missing.map(md).join(", ")}: check the workflow's name as GitHub shows it (its \`name:\` line), not its file name.`, "");
   if (a.window_truncated) L.push(`The ${a.runs_total}-run cap was reached, so the window covers ${a.covered_days} days rather than the days asked for; weekly figures are scaled from that shorter window and are noisier.`, "");
   if (a.findings.length) {
     L.push("## What to fix first", "");
     a.findings.slice(0, maxFindings).forEach((f, i) => {
-      L.push(`### ${i + 1}. ${f.what}`, "");
-      L.push(`**Where:** ${f.workflow}  `);
-      L.push(`**Saves** ${savingText(f)} · **Confidence** ${CONF[f.confidence] || f.confidence}  `);
-      L.push(`**Why:** ${f.evidence}.  `);
-      L.push(`**Fix:** ${f.fix}.${f.tradeoff ? "  " : ""}`);
-      if (f.tradeoff) L.push(`**Trade-off:** ${f.tradeoff}.`);
-      if (f.example) L.push("", "```yaml", f.example, "```");
+      L.push(`### ${i + 1}. ${md(f.what)}`, "");
+      L.push(`**Where:** ${md(f.workflow)}  `);
+      L.push(`**Saves** ${savingText(f)} · **Confidence** ${md(CONF[f.confidence] || f.confidence)}  `);
+      L.push(`**Why:** ${md(f.evidence)}.  `);
+      L.push(`**Fix:** ${md(f.fix)}.${f.tradeoff ? "  " : ""}`);
+      if (f.tradeoff) L.push(`**Trade-off:** ${md(f.tradeoff)}.`);
+      if (f.example) L.push("", ...fence(f.example));
       L.push("");
     });
     if (a.findings.length > maxFindings) L.push(`${plural(a.findings.length - maxFindings, "smaller finding")} not shown; the JSON report (\`--json\`) lists all of them.`, "");
@@ -9422,10 +9469,10 @@ function report(a, { maxFindings = 8 } = {}) {
   L.push("");
   const stepLines = [];
   for (const w of a.workflows.slice(0, 4)) {
-    const steps = (w.top_steps || []).filter((t) => t.median_s >= 1).map((t) => `${stepLabel(t.step)} ${fmtS(t.median_s)}`);
+    const steps = (w.top_steps || []).filter((t) => t.median_s >= 1).map((t) => `${md(stepLabel(t.step))} ${fmtS(t.median_s)}`);
     if (!steps.length) continue;
     const facts = [w.has_cache ? "caches dependencies" : "no dependency cache", w.cancels ? "cancels outdated runs" : "no cancel-in-progress"];
-    stepLines.push(`- *${w.workflow}* (\`${w.path}\`): ${steps.join("; ")}. The workflow file: ${facts.join(", ")}.`);
+    stepLines.push(`- *${md(w.workflow)}* (${md(`\`${w.path}\``)}): ${steps.join("; ")}. The workflow file: ${facts.join(", ")}.`);
   }
   if (stepLines.length) L.push("### The longest steps (median)", "", ...stepLines, "");
   if (a.findings.length) {
@@ -9443,7 +9490,7 @@ function report(a, { maxFindings = 8 } = {}) {
   }
   L.push("- Job time = completed minus started; queue wait = started minus created; developer wait = a successful run's wall time. All from the Actions API, in whole seconds.");
   const estimated = a.workflows.filter((w) => Object.values(w.cost_by_outcome || {}).some((c) => c.estimated && c.runs_week > 0)).map((w) => w.workflow);
-  L.push(`- Weekly cost is a count times a mean, per outcome: successes from the sampled successful runs, and failed, cancelled and timed-out runs from up to two sampled runs of each (\`cost_by_outcome\` in the JSON).${estimated.length ? ` Where an outcome had no sampled run, it is costed like a success: ${estimated.slice(0, 5).join(", ")}${estimated.length > 5 ? " and more" : ""}.` : ""} Runs that ran no job (skipped, waiting for approval, failed to start) cost nothing.`);
+  L.push(`- Weekly cost is a count times a mean, per outcome: successes from the sampled successful runs, and failed, cancelled and timed-out runs from up to two sampled runs of each (\`cost_by_outcome\` in the JSON).${estimated.length ? ` Where an outcome had no sampled run, it is costed like a success: ${estimated.slice(0, 5).map(md).join(", ")}${estimated.length > 5 ? " and more" : ""}.` : ""} Runs that ran no job (skipped, waiting for approval, failed to start) cost nothing.`);
   L.push("- Per-run figures are medians over the sampled successful runs of each workflow; queue and wait percentiles are over the sampled jobs and runs, so a p90 over a handful of them is close to the slowest one.");
   L.push('- Billed minutes round each GitHub-hosted job up to a whole minute, as GitHub bills it; a job counts as GitHub-hosted when its runner group is "GitHub Actions".');
   L.push("- Steps grouped into the categories above by the command the workflow file gives each step (its run or uses line) and otherwise by its name.");
@@ -9451,13 +9498,13 @@ function report(a, { maxFindings = 8 } = {}) {
   if (a.scanned && (a.scanned.read || a.scanned.unreadable && a.scanned.unreadable.length)) {
     const sc = a.scanned;
     const coverage = sc.of === null || sc.of === void 0 ? `${sc.read} workflow file${sc.read === 1 ? "" : "s"} (the sampled ones; the workflow directory could not be listed, so the total is unknown)` : sc.read === sc.of ? `all ${sc.of} workflow files` : `${sc.read} of the ${sc.of} workflow files`;
-    const missed = sc.unreadable && sc.unreadable.length ? `; ${sc.unreadable.length} could not be read (${sc.unreadable.slice(0, 3).join(", ")}${sc.unreadable.length > 3 ? " and more" : ""})` : "";
+    const missed = sc.unreadable && sc.unreadable.length ? `; ${sc.unreadable.length} could not be read (${sc.unreadable.slice(0, 3).map(md).join(", ")}${sc.unreadable.length > 3 ? " and more" : ""})` : "";
     L.push(`- Security scans (actions pinned to a commit, untrusted input in scripts, the job token) read ${coverage}${missed}, not only the sampled workflows'.`);
   }
   L.push("- Cache, checkout and concurrency facts are read from the parsed workflow file (actions/cache, a setup action's cache input, the checkout step's inputs, concurrency and cancel-in-progress), so a commented-out line never counts.");
   L.push("- Estimated savings: dependency cache 60% of install time when no cache runs, 30% when one runs but installs still dominate; checkout and toolchain 50%; duplicates, outdated runs and reruns their full job time; self-hosted tail the excess over 2 s; fixed-cost findings half of the fixed share; short hosted jobs half of the billed minutes above the job-minutes. See docs/rules.md in the ci-wizard repository.");
-  return `${L.join("\n")}
-`;
+  return plain(`${L.join("\n")}
+`);
 }
 
 // src/index.mjs
@@ -9519,14 +9566,14 @@ async function run({ env = process.env, stdout = process.stdout, fetchImpl, now 
     command(stdout, "error", `ci-wizard: ${err.message}. The token needs actions: read and contents: read on ${repo}.`);
     return 1;
   }
-  const md = a ? report(a) : `# CI audit: ${repo}
+  const md2 = a ? report(a) : `# CI audit: ${repo}
 
 No workflow runs in the last ${days} days, so there is nothing to measure yet.
 `;
-  writeFileSync(mdPath, md);
+  writeFileSync(mdPath, md2);
   if (a) writeFileSync(join(dir, "report.json"), `${JSON.stringify(a, null, 1)}
 `);
-  if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, md);
+  if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, md2);
   setOutput(env, "report-path", mdPath);
   setOutput(env, "findings", String(a ? a.findings.length : 0));
   stdout.write(a ? `ci-wizard: ${a.runs_total} runs over ${a.covered_days} d, ${a.findings.length} findings, ${budgetText(a) || `${a.api_calls} API calls`}; report in the job summary and ${mdPath}

@@ -2,7 +2,7 @@
 // (the JSON the CLI writes with --json) and reports, per workflow, the before, the after and the
 // change of each measurement, then the findings that disappeared and the ones that appeared.
 import { fmtS, round } from './util.mjs';
-import { cell, savingText } from './report.mjs';
+import { cell, md, plain, savingText } from './report.mjs';
 
 /** The measurements compared, with how each is shown. Times are seconds; the rest are counts or minutes. */
 export const METRICS = [
@@ -84,7 +84,7 @@ export function compare(before, after) {
     L.push(`Billed minutes on GitHub-hosted runners: ${Math.round(c.billedTotals.before)} a week before, ${Math.round(c.billedTotals.after)} after: ${change(tm, c.billedTotals.before, c.billedTotals.after)}.`, '');
   }
   for (const w of c.both) {
-    L.push(`## ${w.workflow}`, '');
+    L.push(`## ${md(w.workflow)}`, '');
     L.push('| Measure | Before | After | Change |', '| --- | --- | --- | --- |');
     for (const m of w.metrics) L.push(`| ${m.label} | ${show(m, m.before)} | ${show(m, m.after)} | ${change(m, m.before, m.after)} |`);
     L.push('');
@@ -94,8 +94,8 @@ export function compare(before, after) {
   L.push('## Findings', '');
   if (!c.gone.length && !c.appeared.length) L.push('The same findings before and after.');
   // Each finding's saving in its own unit: job-minutes, billed minutes, or developer wait.
-  for (const f of c.gone) L.push(`- Gone: **${f.what}** in *${f.workflow}* (was ${savingText(f)}).`);
-  for (const f of c.appeared) L.push(`- New: **${f.what}** in *${f.workflow}*: ${f.evidence}.`);
+  for (const f of c.gone) L.push(`- Gone: **${md(f.what)}** in *${md(f.workflow)}* (was ${savingText(f)}).`);
+  for (const f of c.appeared) L.push(`- New: **${md(f.what)}** in *${md(f.workflow)}*: ${md(f.evidence)}.`);
   L.push('', 'A finding that is gone is the change working, or the window no longer holding the pattern: check the runs before calling it fixed.');
-  return `${L.join('\n')}\n`;
+  return plain(`${L.join('\n')}\n`);
 }

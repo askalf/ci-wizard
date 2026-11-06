@@ -130,6 +130,16 @@ export function allSteps(doc) {
   return steps;
 }
 
+/**
+ * The body of a value that is one whole `${{ … }}` expression, trimmed, or null. A prefix and
+ * suffix test, not a regex: a pattern like /^\$\{\{\s*(.*?)\s*\}\}$/ backtracks in cubic time
+ * on a long unterminated value, which a hostile workflow file can supply.
+ */
+export function wholeExpression(s) {
+  const t = String(s).trim();
+  return t.length >= 5 && t.startsWith('${{') && t.endsWith('}}') ? t.slice(3, -2).trim() : null;
+}
+
 /** Whether a YAML value turns a feature on: true, "true", or an expression that is not literally false. */
 export function isOn(value) {
   if (value === true) return true;
@@ -137,8 +147,8 @@ export function isOn(value) {
   const s = String(value).trim();
   if (s === '' || s === 'false') return false;
   if (s === 'true') return true;
-  const expr = /^\$\{\{\s*(.*?)\s*\}\}$/.exec(s);
-  if (expr) return expr[1] !== 'false' && expr[1] !== "'false'";
+  const expr = wholeExpression(s);
+  if (expr !== null) return expr !== 'false' && expr !== "'false'";
   return false;
 }
 
@@ -147,8 +157,8 @@ export function cacheInputOn(value) {
   if (value === undefined || value === null || value === false) return false;
   const s = String(value).trim();
   if (s === '' || s === 'false') return false;
-  const expr = /^\$\{\{\s*(.*?)\s*\}\}$/.exec(s);
-  if (expr) return expr[1] !== 'false' && expr[1] !== "''" && expr[1] !== "'false'";
+  const expr = wholeExpression(s);
+  if (expr !== null) return expr !== 'false' && expr !== "''" && expr !== "'false'";
   return true;
 }
 
@@ -388,6 +398,34 @@ export function allJobTimeouts(doc) {
  * text, every literal part kept in place; GitHub adds no matrix suffix to such a name. A name with
  * no literal text matches nothing.
  */
+/**
+ * A matcher for `^L0 … L1 … Ln$` (each … any text), by finding the literals in order: the first as a
+ * prefix, the middle ones leftmost after it, the last as a suffix, or, with `rest`, followed by at
+ * least one more character. Linear in the name's length, where the equivalent regex
+ * (L0[\s\S]*L1[\s\S]*…) backtracks polynomially on a long name that does not match.
+ */
+function inOrder(literals, { rest = false } = {}) {
+  return {
+    test(name) {
+      const s = String(name);
+      const last = literals.length - 1;
+      if (!s.startsWith(literals[0])) return false;
+      let pos = literals[0].length;
+      if (last === 0) return rest ? s.length > pos : s.length === pos;
+      for (let i = 1; i < last; i += 1) {
+        const at = s.indexOf(literals[i], pos);
+        if (at < 0) return false;
+        pos = at + literals[i].length;
+      }
+      if (rest) {
+        const at = s.indexOf(literals[last], pos);
+        return at >= 0 && s.length > at + literals[last].length;
+      }
+      return s.length - literals[last].length >= pos && s.endsWith(literals[last]);
+    },
+  };
+}
+
 export function jobNamePattern(fileJobName, { reusable = false } = {}) {
   const base = String(fileJobName);
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -397,14 +435,18 @@ export function jobNamePattern(fileJobName, { reusable = false } = {}) {
   if (reusable) {
     const literals = base.split(/\$\{\{[\s\S]*?\}\}/);
     if (!literals.join('').trim()) return { rx: /(?!)/, specificity: 0 };
-    const head = base.includes('${{') ? literals.map(esc).join('[\\s\\S]*') : `${esc(base)}( \\(.*\\))?`;
-    return { rx: new RegExp(`^${head} / [\\s\\S]+$`), specificity: Infinity };
+    if (base.includes('${{')) {
+      const parts = [...literals];
+      parts[parts.length - 1] += ' / ';
+      return { rx: inOrder(parts, { rest: true }), specificity: Infinity };
+    }
+    return { rx: new RegExp(`^${esc(base)}( \\(.*\\))? / [\\s\\S]+$`), specificity: Infinity };
   }
   if (base.includes('${{')) {
     const literals = base.split(/\$\{\{[\s\S]*?\}\}/);
     // A name that is all expression has no text to recognise its runs by: it matches nothing.
     if (!literals.join('').trim()) return { rx: /(?!)/, specificity: 0 };
-    return { rx: new RegExp(`^${literals.map(esc).join('[\\s\\S]*')}$`), specificity: literals.join('').length };
+    return { rx: inOrder(literals), specificity: literals.join('').length };
   }
   return { rx: new RegExp(`^${esc(base)}( \\(.*\\))?$`), specificity: base.length + 1 };
 }
