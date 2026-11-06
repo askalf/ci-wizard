@@ -9607,7 +9607,7 @@ var T = THRESHOLDS;
 function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch = null, isPublic = false }) {
   const F = [];
   const thin = w.thin_sample ? ` (timed from only ${w.sampled_runs} successful run${w.sampled_runs === 1 ? "" : "s"})` : "";
-  const add = (saving, what, evidence, fix, { confidence = "measured", tradeoff = "", example = "", unit = "job", parts = null, brief = null } = {}) => F.push({
+  const add = (saving, what, evidence, fix, { confidence = "measured", tradeoff = "", example = "", unit = "job", parts = null, brief = null, size = 0 } = {}) => F.push({
     saving,
     workflow: w.workflow,
     what,
@@ -9619,6 +9619,7 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
     unit,
     parts,
     brief,
+    size,
     thin: w.thin_sample ? w.sampled_runs : null
   });
   const perRun = w.cats_secs_per_run;
@@ -9749,7 +9750,7 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
       "queue wait",
       `p90 wait for a runner ${Math.round(w.wait_p90)} s (over ${w.jobs_sampled} sampled jobs)`,
       "more runner capacity at peak, or fewer jobs per event (merge small jobs, skip work by changed paths)",
-      { tradeoff: "path filters on required checks need care, or a skipped check blocks the merge", unit: "wait", brief: `${Math.round(w.wait_p90)} s over ${w.jobs_sampled} sampled jobs` }
+      { tradeoff: "path filters on required checks need care, or a skipped check blocks the merge", unit: "wait", brief: `${Math.round(w.wait_p90)} s over ${w.jobs_sampled} sampled jobs`, size: w.wait_p90 }
     );
   }
   if (w.jobs_per_run >= T.shortJobsCount && w.job_minutes_per_run / w.jobs_per_run < 1) {
@@ -9973,10 +9974,10 @@ function groupFindings(F) {
   }
   const out = [];
   for (const g of grouped.values()) {
-    const ms = g.members;
+    const ms = [...g.members].sort((a, b) => b.saving - a.saving || b.size - a.size);
     const wfs = ms.map((m) => m.workflow);
     const where2 = wfs.length === 1 ? wfs[0] : `${wfs.length} workflows: ${wfs.slice(0, 5).join(", ")}${wfs.length > 5 ? " and more" : ""}`;
-    out.push({ ...g, workflow: where2, evidence: ms.length === 1 ? g.evidence : groupedEvidence(g.what, ms, g.evidence), members: void 0, brief: void 0, thin: void 0 });
+    out.push({ ...g, workflow: where2, evidence: ms.length === 1 ? g.evidence : groupedEvidence(g.what, ms, g.evidence), members: void 0, brief: void 0, size: void 0, thin: void 0 });
   }
   const risk = (f) => f.unit === "risk" ? 1 : 0;
   return out.sort((a, b) => risk(b) - risk(a) || b.saving - a.saving);

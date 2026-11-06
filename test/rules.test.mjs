@@ -234,6 +234,11 @@ test('grouping: one finding per repeated kind, workflows listed, savings summed'
   const [h] = find(audit([small('a'), small('b')]), 'self-hosted wrap-up tail');
   assert.ok(h, 'two members of 0.6 job-min/week each make a 1.2 job-min/week finding');
   assert.equal(h.evidence, 'median time after the last step before a job reports done (GitHub-hosted is about 2 s), by workflow: a 8 s, under 1 job-min/week; b 8 s, under 1 job-min/week');
+  // Queue wait saves no minutes: its members are ordered by the wait, not by job minutes.
+  const queued = (name, wait, seconds) => ({ name, path: `.github/workflows/${name}.yml`, runs: runs(50), jobsPerRun: Array.from({ length: 3 }, () => [job({ wait, steps: [['Run make', seconds]] })]) });
+  const [q] = find(audit([queued('busy', 30, 600), queued('starved', 120, 60)]), 'queue wait');
+  assert.match(q.workflow, /^2 workflows: starved, busy$/);
+  assert.match(q.evidence, /^p90 wait for a runner, by workflow: starved 120 s over 3 sampled jobs; busy 30 s over 3 sampled jobs$/);
 });
 
 test('findings are ranked by estimated saving, largest first', () => {
