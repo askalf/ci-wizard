@@ -225,7 +225,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   (20)"); a name with expressions matches on all of its literal text, a run two jobs match equally
   is given to neither, and a name that is all expression matches nothing. A timeout set by an expression, and a job that
   calls a reusable workflow, are left alone: the file does not say the limit.
-- **Confidence** measured. Reported as a guard against hung jobs, not a saving. One finding for
+- **Confidence** measured. Reported as a guard against hung jobs, not a saving. The evidence says a
+  hung run bills every minute only where it would: on GitHub-hosted runners, and not on a public
+  repository, whose standard hosted runners are free. One finding for
   the repository. The evidence names up to five jobs (six across workflows, each with its
   workflow) and counts the rest, and says which workflows were timed from only a few successful
   runs. The example sets up to three jobs, each workflow's in its own YAML document headed by its

@@ -32,6 +32,9 @@ and every untrusted expression found in a script was one the scan reports):
   wait or short-hosted-jobs finding found in several workflows gave the largest workflow's figure
   and "the same holds in the others". The evidence now gives each workflow's own figure and
   saving, largest first, and marks a workflow timed from only a few successful runs.
+- **No billing claim on a free runner:** the timeout finding said a hung run bills every minute
+  on a public repository too, whose standard hosted runners are free; it now says so only where
+  the minutes are billed.
 - **One timeout finding:** jobs without a working timeout in several workflows are one finding,
   naming each job with its workflow, with an example block for each workflow file, instead of one
   finding per workflow.

@@ -146,7 +146,7 @@ as the markdown report in the job summary, and `--html` renders it as a page.
 
 | Finding | What it means |
 | --- | --- |
-| jobs without a working timeout | a hung job holds its runner (and bills) for up to 6 hours |
+| jobs without a working timeout | a hung job holds its runner for up to 6 hours, billing every minute on a private repository's hosted runner |
 | pull request checks merges do not wait for | a test, build, analysis or fuzzing check pull requests get that the default branch doesn't require, judged by its name |
 
 **Then the savings.** Each is estimated from measured timings. The cause is confirmed against the

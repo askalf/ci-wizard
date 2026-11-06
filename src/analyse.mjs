@@ -453,7 +453,9 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
   if (loose.length) {
     // The parts are kept so groupFindings can merge this finding across workflows into one.
     // thin: how many successful runs timed a thinly sampled workflow, so a merged finding can say so.
-    const part = { workflow: w.workflow, path: w.path, hosted: w.hosted_share >= 0.5, thin: w.thin_sample ? w.sampled_runs : null, loose };
+    // hosted: a hung run would bill. A public repository's standard hosted runners are free, so
+    // there it holds a runner but bills nothing.
+    const part = { workflow: w.workflow, path: w.path, hosted: w.hosted_share >= 0.5 && isPublic !== true, thin: w.thin_sample ? w.sampled_runs : null, loose };
     const { evidence, example } = timeoutText([part]);
     add(0, 'jobs without a working timeout', evidence, TIMEOUT_FIX,
       { tradeoff: TIMEOUT_TRADEOFF, example, unit: 'guard', parts: [part] });

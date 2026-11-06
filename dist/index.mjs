@@ -9771,7 +9771,7 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
     if (t.isDefault || t.minutes > T.timeoutLoose * Math.max(maxS / 60, 1)) loose.push({ ...t, maxS, sampled, suggest });
   }
   if (loose.length) {
-    const part = { workflow: w.workflow, path: w.path, hosted: w.hosted_share >= 0.5, thin: w.thin_sample ? w.sampled_runs : null, loose };
+    const part = { workflow: w.workflow, path: w.path, hosted: w.hosted_share >= 0.5 && isPublic !== true, thin: w.thin_sample ? w.sampled_runs : null, loose };
     const { evidence, example } = timeoutText([part]);
     add(
       0,

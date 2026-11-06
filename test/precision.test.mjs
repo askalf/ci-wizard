@@ -106,6 +106,11 @@ test('jobs without a working timeout: a limit from the job\'s longest sampled ru
   assert.equal(f.unit, 'guard');
   assert.match(f.evidence, /job test \(no timeout-minutes, so GitHub's 360; longest of 2 sampled runs 4\.0 min\)/);
   assert.match(f.evidence, /billing every minute/);
+  // On a public repository the standard hosted runners are free: a hung run holds one, bills nothing.
+  const pub = analyse('o/r', { ...data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[timed(240, 'test (20)')], [timed(120, 'test (22)')]], file: timeoutFile(undefined) }] }), visibility: 'public' });
+  const [free] = find(pub, 'jobs without a working timeout');
+  assert.match(free.evidence, /: a hung run holds its runner for up to 360 minutes before GitHub stops it/);
+  assert.doesNotMatch(free.evidence, /bill/);
   const y = parse(f.example);
   assert.equal(y.jobs.test['timeout-minutes'], 15); // 3 x 4 min = 12, up to 15
   assert.equal(savingText(f), 'a guard against hung jobs, not minutes');
