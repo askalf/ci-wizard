@@ -322,19 +322,28 @@ test('unpinned references are told apart by who can move them: a third party, th
     '      - uses: actions/checkout@v4',
     '      - uses: someone/tool@v1',
     '      - uses: acme/shared-actions/setup@main',
+    '      - uses: acme/app/.github/actions/build@main',
     '  call:',
   ].join('\n') + '\n') + `  reuse:\n    uses: acme/app/.github/workflows/build.yml@main\n`;
   const [f] = scanFindings(new Map([['.github/workflows/ci.yml', file]]), { repo: 'acme/app' });
   assert.match(f.evidence, /third-party: someone\/tool@v1/);
   assert.match(f.evidence, /owned by acme: acme\/shared-actions\/setup@main/);
   assert.match(f.evidence, /GitHub's own: actions\/checkout@v4/);
-  assert.match(f.evidence, /this repository's own, at a branch or tag \(a local \.\/ reference needs no pin\): acme\/app\/\.github\/workflows\/build\.yml@main/);
+  // The repository's own step action runs from whatever the job checked out, so it is pinned like
+  // the owner's other actions; only its reusable workflow is called locally.
+  assert.match(f.evidence, /owned by acme: acme\/shared-actions\/setup@main, acme\/app\/\.github\/actions\/build@main/);
+  assert.match(f.evidence, /this repository's own reusable workflow, at a branch or tag \(called locally, \.\/\.github\/workflows\/\.\.\., it runs from the caller's commit and needs no pin\): acme\/app\/\.github\/workflows\/build\.yml@main/);
   assert.match(f.example, /^- uses: someone\/tool@<full 40-character commit SHA> {2}# v1$/); // the riskiest first
   // Only the repository's own reusable workflow: the example is the local reference.
   const own = `on: [push]\npermissions: {}\njobs:\n  reuse:\n    uses: acme/app/.github/workflows/build.yml@main\n`;
   const [g] = scanFindings(new Map([['.github/workflows/ci.yml', own]]), { repo: 'Acme/App' });
-  assert.equal(g.example, '- uses: ./.github/workflows/build.yml   # the same commit as the caller, nothing to pin');
-  assert.match(g.fix, /reference this repository's own reusable workflows and actions locally/);
+  assert.equal(g.example, "uses: ./.github/workflows/build.yml   # runs from the caller's commit, nothing to pin");
+  assert.match(g.fix, /call this repository's own reusable workflows locally/);
+  // Only the repository's own step action: a pin, not a local path (which needs a checkout).
+  const ownAction = `on: [push]\npermissions: {}\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: acme/app/.github/actions/build@main\n`;
+  const [k] = scanFindings(new Map([['.github/workflows/ci.yml', ownAction]]), { repo: 'acme/app' });
+  assert.equal(k.example, '- uses: acme/app/.github/actions/build@<full 40-character commit SHA>  # main');
+  assert.doesNotMatch(k.fix, /locally/);
   // Without the repository named, the owner cannot be told apart: third-party, as before.
   const [h] = scanFindings(new Map([['.github/workflows/ci.yml', own]]));
   assert.match(h.evidence, /third-party: acme\/app\/\.github\/workflows\/build\.yml@main/);

@@ -8401,7 +8401,7 @@ function shellCommands(script) {
       const m = /^<<-?[ \t]*(['"]?)([A-Za-z0-9_]+)\1/.exec(s.slice(i, i + 80));
       if (m) {
         endWord();
-        heredocs.push(m[2]);
+        heredocs.push({ delim: m[2], tabs: m[0].startsWith("<<-") });
         i += m[0].length - 1;
       } else {
         word += c;
@@ -8411,13 +8411,13 @@ function shellCommands(script) {
       endCommand();
       let j = i + 1;
       while (heredocs.length) {
-        const delim = heredocs.shift();
+        const { delim, tabs } = heredocs.shift();
         while (j < s.length) {
           const nl = s.indexOf("\n", j);
           const end = nl === -1 ? s.length : nl;
           const line = s.slice(j, end);
           j = end + 1;
-          if (line.replace(/^\t+/, "").trimEnd() === delim) break;
+          if ((tabs ? line.replace(/^\t+/, "") : line) === delim) break;
         }
       }
       i = Math.min(j, s.length) - 1;
@@ -8434,8 +8434,10 @@ function shellCommands(script) {
   return commands;
 }
 var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "env", "time", "exec", "command", "nice", "npx", "pnpx", "bunx", "uvx"]);
+var OPENERS = /* @__PURE__ */ new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{"]);
 function programWords(words) {
   let k = 0;
+  while (k < words.length && OPENERS.has(words[k])) k += 1;
   let wrapped = false;
   while (k < words.length) {
     const w = words[k];
@@ -8919,19 +8921,20 @@ function scanFindings(files, { repo = null } = {}) {
     const [owner, name] = String(repo || "").toLowerCase().split("/");
     const whose = (u) => {
       const [o, r] = u.uses.toLowerCase().split("@")[0].split("/");
-      if (owner && o === owner && r === name) return "self";
+      if (owner && o === owner && r === name && u.step === void 0) return "self";
       if (owner && o === owner) return "owner";
       return u.firstParty ? "github" : "third";
     };
     const by = { third: [], github: [], owner: [], self: [] };
     for (const u of unpinned) by[whose(u)].push(u);
     const unique = (xs) => [...new Set(xs.map((u) => u.uses))];
+    const refs = (xs, n = 5) => list(unique(xs), n).split("; ").join(", ");
     const paths = [...new Set(unpinned.map((u) => u.path))];
     const parts = [];
-    if (by.third.length) parts.push(`third-party: ${list(unique(by.third))}`);
-    if (by.owner.length) parts.push(`owned by ${owner}: ${list(unique(by.owner), 3)}`);
-    if (by.github.length) parts.push(`GitHub's own: ${list(unique(by.github), 3)}`);
-    if (by.self.length) parts.push(`this repository's own, at a branch or tag (a local ./ reference needs no pin): ${list(unique(by.self), 3)}`);
+    if (by.third.length) parts.push(`third-party: ${refs(by.third)}`);
+    if (by.owner.length) parts.push(`owned by ${owner}: ${refs(by.owner, 3)}`);
+    if (by.github.length) parts.push(`GitHub's own: ${refs(by.github, 3)}`);
+    if (by.self.length) parts.push(`this repository's own reusable workflow${by.self.length === 1 ? "" : "s"}, at a branch or tag (called locally, ./.github/workflows/..., it runs from the caller's commit and needs no pin): ${refs(by.self, 3)}`);
     const first = by.third[0] || by.owner[0] || by.github[0] || by.self[0];
     const [ref, tag] = first.uses.split("@");
     const localPath = whose(first) === "self" ? ref.split("/").slice(2).join("/") : null;
@@ -8942,9 +8945,10 @@ function scanFindings(files, { repo = null } = {}) {
       what: "actions not pinned to a commit",
       workflow: where(paths),
       evidence: `${unpinned.length} action reference${unpinned.length === 1 ? "" : "s"} ${unpinned.length === 1 ? "is" : "are"} pinned to a tag or branch, which can be moved to other code by whoever controls that repository; ${parts.join("; ")}`,
-      fix: "pin each to the full 40-character commit SHA of the release it means, with the tag in a comment, and let Dependabot or Renovate propose new pins as releases come" + (by.self.length ? "; reference this repository's own reusable workflows and actions locally (./.github/...), which runs the same commit as the caller" : ""),
+      fix: "pin each to the full 40-character commit SHA of the release it means, with the tag in a comment, and let Dependabot or Renovate propose new pins as releases come" + (by.self.length ? "; call this repository's own reusable workflows locally (uses: ./.github/workflows/...), which GitHub runs from the caller's commit" : ""),
       tradeoff: "a new release becomes a pull request to review instead of arriving silently with a moved tag",
-      example: localPath ? `- uses: ./${localPath}   # the same commit as the caller, nothing to pin` : `- uses: ${ref}@<full 40-character commit SHA>  # ${tag}`
+      // A reusable workflow is called by a job (`uses:` under the job), not by a step.
+      example: localPath ? `uses: ./${localPath}   # runs from the caller's commit, nothing to pin` : `- uses: ${ref}@<full 40-character commit SHA>  # ${tag}`
     });
   }
   const injections = scans.flatMap((s) => s.injections.map((x) => ({ ...x, path: s.path })));

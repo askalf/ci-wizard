@@ -307,23 +307,28 @@ export function scanFindings(files, { repo = null } = {}) {
   const unpinned = scans.flatMap((s) => s.unpinned.map((u) => ({ ...u, path: s.path })));
   if (unpinned.length) {
     // Who can move each reference: a third party, GitHub (actions/, github/), the repository's own
-    // owner, or the repository itself. The last is better referenced locally than pinned.
+    // owner, or the repository itself. The repository's own reusable workflow is better called
+    // locally: GitHub runs a local reusable workflow from the caller's commit. Its own step action
+    // is not: a local action runs from whatever the job checked out, so it is the owner's, pinned.
     const [owner, name] = String(repo || '').toLowerCase().split('/');
     const whose = (u) => {
       const [o, r] = u.uses.toLowerCase().split('@')[0].split('/');
-      if (owner && o === owner && r === name) return 'self';
+      if (owner && o === owner && r === name && u.step === undefined) return 'self';
       if (owner && o === owner) return 'owner';
       return u.firstParty ? 'github' : 'third';
     };
     const by = { third: [], github: [], owner: [], self: [] };
     for (const u of unpinned) by[whose(u)].push(u);
+    // References within a group are joined by commas, so the semicolons between groups stay
+    // readable (a reference has no comma in it).
     const unique = (xs) => [...new Set(xs.map((u) => u.uses))];
+    const refs = (xs, n = 5) => list(unique(xs), n).split('; ').join(', ');
     const paths = [...new Set(unpinned.map((u) => u.path))];
     const parts = [];
-    if (by.third.length) parts.push(`third-party: ${list(unique(by.third))}`);
-    if (by.owner.length) parts.push(`owned by ${owner}: ${list(unique(by.owner), 3)}`);
-    if (by.github.length) parts.push(`GitHub's own: ${list(unique(by.github), 3)}`);
-    if (by.self.length) parts.push(`this repository's own, at a branch or tag (a local ./ reference needs no pin): ${list(unique(by.self), 3)}`);
+    if (by.third.length) parts.push(`third-party: ${refs(by.third)}`);
+    if (by.owner.length) parts.push(`owned by ${owner}: ${refs(by.owner, 3)}`);
+    if (by.github.length) parts.push(`GitHub's own: ${refs(by.github, 3)}`);
+    if (by.self.length) parts.push(`this repository's own reusable workflow${by.self.length === 1 ? '' : 's'}, at a branch or tag (called locally, ./.github/workflows/..., it runs from the caller's commit and needs no pin): ${refs(by.self, 3)}`);
     // The example fixes the riskiest kind: a third party's action first, a local reference for the
     // repository's own reusable workflow.
     const first = by.third[0] || by.owner[0] || by.github[0] || by.self[0];
@@ -334,9 +339,10 @@ export function scanFindings(files, { repo = null } = {}) {
       workflow: where(paths),
       evidence: `${unpinned.length} action reference${unpinned.length === 1 ? '' : 's'} ${unpinned.length === 1 ? 'is' : 'are'} pinned to a tag or branch, which can be moved to other code by whoever controls that repository; ${parts.join('; ')}`,
       fix: 'pin each to the full 40-character commit SHA of the release it means, with the tag in a comment, and let Dependabot or Renovate propose new pins as releases come'
-        + (by.self.length ? '; reference this repository\'s own reusable workflows and actions locally (./.github/...), which runs the same commit as the caller' : ''),
+        + (by.self.length ? '; call this repository\'s own reusable workflows locally (uses: ./.github/workflows/...), which GitHub runs from the caller\'s commit' : ''),
       tradeoff: 'a new release becomes a pull request to review instead of arriving silently with a moved tag',
-      example: localPath ? `- uses: ./${localPath}   # the same commit as the caller, nothing to pin` : `- uses: ${ref}@<full 40-character commit SHA>  # ${tag}`,
+      // A reusable workflow is called by a job (`uses:` under the job), not by a step.
+      example: localPath ? `uses: ./${localPath}   # runs from the caller's commit, nothing to pin` : `- uses: ${ref}@<full 40-character commit SHA>  # ${tag}`,
     });
   }
 

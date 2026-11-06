@@ -243,7 +243,7 @@ export function shellCommands(script) {
       const m = /^<<-?[ \t]*(['"]?)([A-Za-z0-9_]+)\1/.exec(s.slice(i, i + 80));
       if (m) {
         endWord();
-        heredocs.push(m[2]);
+        heredocs.push({ delim: m[2], tabs: m[0].startsWith('<<-') });
         i += m[0].length - 1;
       } else {
         word += c;
@@ -253,13 +253,14 @@ export function shellCommands(script) {
       endCommand();
       let j = i + 1;
       while (heredocs.length) {
-        const delim = heredocs.shift();
+        // The delimiter line matches exactly; <<- strips leading tabs first, nothing else.
+        const { delim, tabs } = heredocs.shift();
         while (j < s.length) {
           const nl = s.indexOf('\n', j);
           const end = nl === -1 ? s.length : nl;
           const line = s.slice(j, end);
           j = end + 1;
-          if (line.replace(/^\t+/, '').trimEnd() === delim) break;
+          if ((tabs ? line.replace(/^\t+/, '') : line) === delim) break;
         }
       }
       i = Math.min(j, s.length) - 1;
@@ -277,11 +278,17 @@ export function shellCommands(script) {
 }
 
 // Words that run the command after them: an assignment (FOO=1), a wrapper, or a wrapper's option.
+// Reserved words that open a compound command come before a command too: `then semgrep ci`.
 const WRAPPERS = new Set(['sudo', 'env', 'time', 'exec', 'command', 'nice', 'npx', 'pnpx', 'bunx', 'uvx']);
+const OPENERS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', '{']);
 
-/** A command's words from the program it runs, past assignments and wrappers, with the program's directory dropped. */
+/**
+ * A command's words from the program it runs, past reserved words that open a compound command,
+ * assignments and wrappers, with the program's directory dropped.
+ */
 export function programWords(words) {
   let k = 0;
+  while (k < words.length && OPENERS.has(words[k])) k += 1;
   let wrapped = false;
   while (k < words.length) {
     const w = words[k];

@@ -286,8 +286,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   `github/`).
 - **Confidence** confirmed. A risk, ranked first. The evidence says who can move each reference:
   a third party, the repository's owner, GitHub (`actions/`, `github/`), or the repository itself.
-  The repository's own reusable workflow or action referenced at a branch or tag is better
-  referenced locally (`./.github/...`), which runs the caller's own commit and needs no pin.
+  The repository's own reusable workflow called at a branch or tag is better called locally
+  (`uses: ./.github/workflows/...`): GitHub runs a local reusable workflow from the caller's
+  commit, so it needs no pin. The repository's own step action is counted with the owner's and
+  pinned: a local action runs from whatever the job checked out, and needs a checkout first.
 - **Fix** the full commit SHA of the release, with the tag in a comment, and Dependabot or Renovate
   to propose new pins. *Trade-off:* a new release becomes a pull request to review instead of
   arriving with a moved tag.

@@ -272,6 +272,11 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   assert.ok(counts(job('      - run: SEMGREP_APP_TOKEN=x semgrep ci\n')));
   assert.ok(counts(job('      - run: cd app && npx -y snyk code test\n')));
   assert.ok(counts(job('      - run: ./bin/bearer scan .\n')));
+  // Inside a conditional or a loop.
+  assert.ok(counts(job('      - run: if true; then semgrep ci; fi\n')));
+  assert.ok(counts(job('      - run: if semgrep ci; then echo ok; fi\n')));
+  assert.ok(counts(job('      - run: for d in a b; do (cd $d && snyk code test); done\n')));
+  assert.ok(counts(job('      - run: |\n          while false\n          do\n            bearer scan .\n          done\n')));
   assert.ok(counts(job('      - run: |\n          codeql database create db \\\n            --language=javascript\n')));
   assert.ok(counts(job('      - run: semgrep ci\n', '    container:\n      image: semgrep/semgrep\n')));
   // Bearer by its container (the image alone, and with its scan command), by command, and by action.
@@ -293,6 +298,8 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   assert.ok(!counts(job('      - run: echo "run semgrep ci later"\n')));
   assert.ok(!counts(job("      - run: printf '%s\\n' 'bearer scan' # snyk code test\n")));
   assert.ok(!counts(job('      - run: |\n          cat > NOTES <<EOF\n          semgrep ci\n          EOF\n          make\n')));
+  // A line that only looks like the delimiter (a trailing space) does not end the here-document.
+  assert.ok(!counts(job("      - run: \"cat <<'EOF'\\nEOF \\nsemgrep ci\\nEOF\\n\"\n")));
   // SonarSource's quality gate only waits for an earlier scan's result; a SonarQube server image
   // is not a scan; an image whose name only contains a scanner's is another image.
   assert.ok(!counts(job('      - uses: SonarSource/sonarqube-quality-gate-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));

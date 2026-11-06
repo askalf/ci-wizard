@@ -97,4 +97,12 @@ test('shell commands: split outside quotes, without comments or here-document bo
   assert.deepEqual(programWords(['FOO=1', 'sudo', '-E', '/usr/bin/semgrep', 'ci']), ['semgrep', 'ci']);
   assert.deepEqual(programWords(['make', '-j4']), ['make', '-j4']);
   assert.deepEqual(programWords(['A=1']), []);
+  // Reserved words that open a compound command are not the program.
+  assert.deepEqual(shellCommands('if true; then semgrep ci; fi').map(programWords), [['true'], ['semgrep', 'ci'], ['fi']]);
+  assert.deepEqual(programWords(['!', 'grep', '-q', 'x']), ['grep', '-q', 'x']);
+  // A here-document ends only at its exact delimiter: trailing space does not end it, and only
+  // <<- strips leading tabs.
+  assert.deepEqual(shellCommands("cat <<'EOF'\nEOF \nsemgrep ci\nEOF\nmake"), [['cat'], ['make']]);
+  assert.deepEqual(shellCommands('cat <<EOF\n\tEOF\nsemgrep ci\nEOF\nmake'), [['cat'], ['make']]);
+  assert.deepEqual(shellCommands('cat <<-EOF\n\tEOF\nmake'), [['cat'], ['make']]);
 });
