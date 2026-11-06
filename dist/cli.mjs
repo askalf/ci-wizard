@@ -9428,21 +9428,23 @@ function analyse(repo, data) {
 var CONF = { confirmed: "confirmed by the workflow file", inferred: "cause inferred", measured: "measured" };
 var CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 var plain = (s) => String(s).replace(/\r\n?/g, "\n").replace(CONTROL, "");
-var AUTOLINK = /(?:(?:https?|ftp|mailto|xmpp):|www\.)[^\s`<>|\\]*|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/gi;
+var LINKISH = /(?:https?|ftp|mailto|xmpp):|www\.|@/i;
+var LEAD = `(["'`;
+var TRAIL = `.,;:!?)]"'`;
 function escapeText(t, table) {
   const e = t.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return table ? e.replace(/`/g, "\\`").replace(/\|/g, "\\|") : e;
 }
 function unlink(t, table) {
-  let out = "";
-  let at = 0;
-  for (const m of t.matchAll(AUTOLINK)) {
-    const token = m[0].replace(/[.,;:!?)\]'"]+$/, "");
-    if (!token) continue;
-    out += `${escapeText(t.slice(at, m.index), table)}\`${token}\``;
-    at = m.index + token.length;
-  }
-  return out + escapeText(t.slice(at), table);
+  return t.split(/([\s`<>|\\]+)/).map((word, i) => {
+    if (i % 2 === 1 || !word || !LINKISH.test(word)) return escapeText(word, table);
+    let a = 0;
+    let b = word.length;
+    while (a < b && LEAD.includes(word[a])) a += 1;
+    while (b > a && TRAIL.includes(word[b - 1])) b -= 1;
+    if (a === b) return escapeText(word, table);
+    return `${escapeText(word.slice(0, a), table)}\`${word.slice(a, b)}\`${escapeText(word.slice(b), table)}`;
+  }).join("");
 }
 function md(s, { table = false } = {}) {
   const flat = String(s ?? "").replace(/\r?\n|\r/g, " ").replace(CONTROL, "");

@@ -23,10 +23,14 @@ export const plain = (s) => String(s).replace(/\r\n?/g, '\n').replace(CONTROL, '
  * markdown displays literally; backtick runs are cut to one, and an unpaired backtick is escaped,
  * so no span is left open to swallow what follows.
  */
-// What GitHub turns into a link by itself (GFM autolinks): a URL with a scheme, www., or an email
-// address. Such a token is shown as a code span, which markdown displays literally and never links;
-// the characters it may hold leave no way out of the span or the table cell.
-const AUTOLINK = /(?:(?:https?|ftp|mailto|xmpp):|www\.)[^\s`<>|\\]*|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/gi;
+// What GitHub turns into a link by itself (GFM autolinks): a URL with a scheme, www., an email
+// address; an @mention too. A word that holds one is shown as a code span, which markdown displays
+// literally and never links. Found by splitting on whitespace and the characters a span cannot hold
+// (one character class, so the scan is linear) and testing each word for a fixed string: a pattern
+// that searched for the parts of an address backtracked quadratically on a long word without them.
+const LINKISH = /(?:https?|ftp|mailto|xmpp):|www\.|@/i;
+const LEAD = '(["\'';
+const TRAIL = '.,;:!?)]"\'';
 
 /** Text with markdown's characters escaped (and, in a table, its pipes and backticks): see md. */
 function escapeText(t, table) {
@@ -34,18 +38,17 @@ function escapeText(t, table) {
   return table ? e.replace(/`/g, '\\`').replace(/\|/g, '\\|') : e;
 }
 
-/** Plain text with each autolink-able token turned into a code span (see AUTOLINK). */
+/** Plain text with each word that GitHub could link turned into a code span (see LINKISH). */
 function unlink(t, table) {
-  let out = '';
-  let at = 0;
-  for (const m of t.matchAll(AUTOLINK)) {
-    // Trailing punctuation stays outside, as GitHub leaves it out of the link: "see https://x.io." ends with a period.
-    const token = m[0].replace(/[.,;:!?)\]'"]+$/, '');
-    if (!token) continue;
-    out += `${escapeText(t.slice(at, m.index), table)}\`${token}\``;
-    at = m.index + token.length;
-  }
-  return out + escapeText(t.slice(at), table);
+  return t.split(/([\s`<>|\\]+)/).map((word, i) => {
+    if (i % 2 === 1 || !word || !LINKISH.test(word)) return escapeText(word, table);
+    let a = 0;
+    let b = word.length;
+    while (a < b && LEAD.includes(word[a])) a += 1;
+    while (b > a && TRAIL.includes(word[b - 1])) b -= 1;
+    if (a === b) return escapeText(word, table);
+    return `${escapeText(word.slice(0, a), table)}\`${word.slice(a, b)}\`${escapeText(word.slice(b), table)}`;
+  }).join('');
 }
 
 export function md(s, { table = false } = {}) {
