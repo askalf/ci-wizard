@@ -8484,14 +8484,19 @@ var WRAPPERS = new Map([
   ["uvx", ["-p", "--python", "--from", "--with", "--with-editable", "--with-requirements", "-c", "--constraints", "--index", "--default-index", "--index-url", "--extra-index-url", "-f", "--find-links", "--directory", "--project", "--config-file", "--cache-dir"]]
 ].map(([name, valued]) => [name, new Set(valued)]));
 var OPENERS = /* @__PURE__ */ new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{"]);
+var LOOKUPS = /* @__PURE__ */ new Map([["command", /* @__PURE__ */ new Set(["-v", "-V"])]]);
 function programWords(words) {
   let k = 0;
   while (k < words.length && OPENERS.has(words[k])) k += 1;
   let wrapper = null;
+  let lookups = null;
   while (k < words.length) {
     const w = words[k];
     if (WRAPPERS.has(w)) {
       wrapper = WRAPPERS.get(w);
+      lookups = LOOKUPS.get(w) || null;
+    } else if (lookups && lookups.has(w)) {
+      return [];
     } else if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) {
     } else if (wrapper && w === "--") {
       k += 1;
@@ -9079,14 +9084,14 @@ function runTargets(program, args) {
   const target = operandAt(args, at + 1, runner.valued);
   if (target === -1) return [];
   if (!runner.container) return [args[target]];
-  const entrypoint = [];
+  let entrypoint = null;
   for (let i = at + 1; i < target; i++) {
-    if (args[i] === "--entrypoint") entrypoint.push(args[i + 1]);
-    else if (args[i].startsWith("--entrypoint=")) entrypoint.push(args[i].slice("--entrypoint=".length));
+    if (args[i] === "--entrypoint") entrypoint = args[i + 1] ?? "";
+    else if (args[i].startsWith("--entrypoint=")) entrypoint = args[i].slice("--entrypoint=".length);
   }
-  const replaced = entrypoint.filter((e) => e);
-  if (replaced.length) return replaced;
   const next = args[target + 1];
+  if (entrypoint === "") return next === void 0 ? [] : [next];
+  if (entrypoint !== null) return [entrypoint];
   return [args[target], ...next !== void 0 && !next.startsWith("-") ? [next] : []];
 }
 var GATE_LIKE = /\b(test|tests|lint|build|check|checks|verify|analy[sz]e|codeql|typecheck|types|dist|unit|e2e|ci|fuzz|fuzzing)\b/i;

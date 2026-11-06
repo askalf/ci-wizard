@@ -422,7 +422,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   others) with their options and option values. For `go run`, `pipx run` and `docker run` (or
   `podman run`), what runs is the program, package or image past the runner's options. For a
   container, an `--entrypoint` replaces the image's own (the words after the image are then its
-  arguments); without one, the word right after the image is its command unless it is an option.
+  arguments), and an empty one clears it (the first word after the image runs); without one, the
+  word right after the image is its command unless it is an option. `command -v` and
+  `command -V` only look a name up, and run nothing.
   So `echo "run semgrep ci later"`, `docker run --name actionlint aquasec/trivy`,
   `go install …/actionlint` and `docker pull rhysd/actionlint` run neither a scanner nor a
   linter, and `sudo -u ci semgrep ci` runs a scanner.

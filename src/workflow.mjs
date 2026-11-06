@@ -337,6 +337,8 @@ const WRAPPERS = new Map([
   ['uvx', ['-p', '--python', '--from', '--with', '--with-editable', '--with-requirements', '-c', '--constraints', '--index', '--default-index', '--index-url', '--extra-index-url', '-f', '--find-links', '--directory', '--project', '--config-file', '--cache-dir']],
 ].map(([name, valued]) => [name, new Set(valued)]));
 const OPENERS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', '{']);
+// Wrapper options that make it look a name up instead of running it: command -v semgrep runs nothing.
+const LOOKUPS = new Map([['command', new Set(['-v', '-V'])]]);
 
 /**
  * A command's words from the program it runs, past reserved words that open a compound command,
@@ -347,10 +349,14 @@ export function programWords(words) {
   let k = 0;
   while (k < words.length && OPENERS.has(words[k])) k += 1;
   let wrapper = null; // the options of the innermost wrapper seen so far
+  let lookups = null;
   while (k < words.length) {
     const w = words[k];
     if (WRAPPERS.has(w)) {
       wrapper = WRAPPERS.get(w);
+      lookups = LOOKUPS.get(w) || null;
+    } else if (lookups && lookups.has(w)) {
+      return [];
     } else if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) {
       // FOO=1 before a command (or after env) sets a variable for it.
     } else if (wrapper && w === '--') {

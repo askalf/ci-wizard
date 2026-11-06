@@ -72,14 +72,16 @@ function runTargets(program, args) {
   // the image's own, so it alone is what runs, and the words after the image are its arguments.
   // Otherwise the image runs, with the word right after it as its command when that is not an
   // option (an option there, and everything after it, is the image's entrypoint's).
-  const entrypoint = [];
+  // The last --entrypoint given wins; null when none is. An empty one ('') clears the image's
+  // entrypoint, so the first word after the image is the program that runs.
+  let entrypoint = null;
   for (let i = at + 1; i < target; i++) {
-    if (args[i] === '--entrypoint') entrypoint.push(args[i + 1]);
-    else if (args[i].startsWith('--entrypoint=')) entrypoint.push(args[i].slice('--entrypoint='.length));
+    if (args[i] === '--entrypoint') entrypoint = args[i + 1] ?? '';
+    else if (args[i].startsWith('--entrypoint=')) entrypoint = args[i].slice('--entrypoint='.length);
   }
-  const replaced = entrypoint.filter((e) => e);
-  if (replaced.length) return replaced;
   const next = args[target + 1];
+  if (entrypoint === '') return next === undefined ? [] : [next];
+  if (entrypoint !== null) return [entrypoint];
   return [args[target], ...(next !== undefined && !next.startsWith('-') ? [next] : [])];
 }
 

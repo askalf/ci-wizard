@@ -305,6 +305,8 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   // A scanner's command is a run only where a command starts: not in an echoed message, a comment
   // or a here-document's lines.
   assert.ok(!counts(job('      - run: echo "run semgrep ci later"\n')));
+  // Looking a scanner up runs nothing.
+  assert.ok(!counts(job('      - run: command -v semgrep ci\n')));
   assert.ok(!counts(job("      - run: printf '%s\\n' 'bearer scan' # snyk code test\n")));
   assert.ok(!counts(job('      - run: |\n          cat > NOTES <<EOF\n          semgrep ci\n          EOF\n          make\n')));
   // A line that only looks like the delimiter (a trailing space) does not end the here-document.
@@ -333,6 +335,11 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   // A linter's name as an option value, or as the scanner's own argument, is not a linter run.
   assert.ok(counts(job('      - run: docker run --name actionlint aquasec/trivy fs --format sarif . > t.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(counts(job('      - run: docker run -e TOOL=zizmor -v "$PWD:/src" aquasec/trivy fs --skip-dirs actionlint --format sarif /src > t.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  // An empty --entrypoint clears the image's: echo runs, not actionlint.
+  assert.ok(counts(job("      - run: docker run --entrypoint '' rhysd/actionlint:latest echo hello\n      - run: trivy fs --format sarif -o t.sarif .\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")));
+  assert.ok(!counts(job("      - run: docker run --entrypoint= example/tools:1 actionlint -format sarif > a.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")));
+  // Looking a linter up runs nothing.
+  assert.ok(counts(job('      - run: command -v actionlint || echo missing\n      - run: trivy fs --format sarif -o t.sarif .\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   // An --entrypoint replaces the image's own: echo runs on the actionlint image, not actionlint.
   assert.ok(counts(job('      - run: docker run --entrypoint echo rhysd/actionlint:latest hello\n      - run: trivy fs --format sarif -o t.sarif .\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   // Global options before the subcommand, with their values.
