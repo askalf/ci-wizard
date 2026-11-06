@@ -7510,13 +7510,18 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   if (!runs.length) return null;
   const oldest = Math.min(...runs.map((r) => Date.parse(r.created_at)));
   const coveredDays = truncated ? Math.max(0.25, (now.getTime() - oldest) / 864e5) : days;
-  let workflowList = null;
+  const workflowNames = /* @__PURE__ */ new Map();
+  const wantedIds = new Set(runs.map((r) => r.workflow_id).filter((id) => id != null));
   try {
-    workflowList = await client.get(`repos/${repo}/actions/workflows?per_page=100`);
+    for (let page = 1; page <= maxPages; page++) {
+      const listed2 = await client.get(`repos/${repo}/actions/workflows?per_page=100&page=${page}`);
+      const batch = listed2 && Array.isArray(listed2.workflows) ? listed2.workflows : [];
+      for (const w of batch) if (w && w.id != null && typeof w.name === "string") workflowNames.set(w.id, w.name);
+      if (batch.length < 100 || [...wantedIds].every((id) => workflowNames.has(id))) break;
+    }
   } catch (e) {
     if (e instanceof RateLimitError) throw e;
   }
-  const workflowNames = new Map((workflowList && Array.isArray(workflowList.workflows) ? workflowList.workflows : []).filter((w) => w && w.id != null && typeof w.name === "string").map((w) => [w.id, w.name]));
   const byWf = groupRuns(runs, workflowNames);
   const wanted = only.map((n2) => String(n2).trim().toLowerCase()).filter(Boolean);
   const ranked = [...byWf.entries()].sort((a, b) => b[1].length - a[1].length);

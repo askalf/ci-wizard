@@ -350,6 +350,16 @@ test('collect labels a workflow with its own name from the workflows API, not a 
   const now = new Date(Date.parse(t(7 * 86400)));
   const d = await collect(createClient({ fetchImpl: fakeFetch(routes) }), 'o/r', { now });
   assert.deepEqual([...d.byWf.keys()], ['Review']);
+  // The list is paginated: a workflow on page 2 still gets its own name, and page 3 is not read.
+  const asked = [];
+  const firstPage = Array.from({ length: 100 }, (_, i) => ({ id: 1000 + i, name: `W${i}` }));
+  const paged = {
+    ...routes,
+    'repos/o/r/actions/workflows': (path) => (/page=1(&|$)/.test(path) ? { workflows: firstPage } : /page=2(&|$)/.test(path) ? { workflows: Array.from({ length: 100 }, (_, i) => ({ id: i === 50 ? 9 : 2000 + i, name: i === 50 ? 'Review' : `X${i}` })) } : { workflows: [] }),
+  };
+  const p2 = await collect(createClient({ fetchImpl: fakeFetch(paged, { calls: asked }) }), 'o/r', { now });
+  assert.deepEqual([...p2.byWf.keys()], ['Review']);
+  assert.equal(asked.filter((u) => u.includes('actions/workflows')).length, 2);
   // An unreadable workflows answer leaves the run names to label it, and the audit goes on.
   const broken = await collect(createClient({ fetchImpl: fakeFetch({ ...routes, 'repos/o/r/actions/workflows': { __status: 500 } }) }), 'o/r', { now });
   assert.equal(broken.byWf.size, 1);

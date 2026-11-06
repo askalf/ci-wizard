@@ -73,14 +73,20 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
   // Each workflow's own name (one call): a run's name can be its pull request's title. Only labels
   // depend on it, so an answer that cannot be read leaves the run names to label the workflows;
   // the rate-limit reserve still stops the audit.
-  let workflowList = null;
+  // The list is paginated: pages are read until every workflow the runs name has its name, or
+  // the list ends (a short page), or after maxPages pages.
+  const workflowNames = new Map();
+  const wantedIds = new Set(runs.map((r) => r.workflow_id).filter((id) => id != null));
   try {
-    workflowList = await client.get(`repos/${repo}/actions/workflows?per_page=100`);
+    for (let page = 1; page <= maxPages; page++) {
+      const listed = await client.get(`repos/${repo}/actions/workflows?per_page=100&page=${page}`);
+      const batch = listed && Array.isArray(listed.workflows) ? listed.workflows : [];
+      for (const w of batch) if (w && w.id != null && typeof w.name === 'string') workflowNames.set(w.id, w.name);
+      if (batch.length < 100 || [...wantedIds].every((id) => workflowNames.has(id))) break;
+    }
   } catch (e) {
     if (e instanceof RateLimitError) throw e;
   }
-  const workflowNames = new Map((workflowList && Array.isArray(workflowList.workflows) ? workflowList.workflows : [])
-    .filter((w) => w && w.id != null && typeof w.name === 'string').map((w) => [w.id, w.name]));
   const byWf = groupRuns(runs, workflowNames);
   // The busiest workflows, sampled from their newest successful completed runs.
   // With `only`, the named workflows (matched by name, ignoring case) instead of the busiest.
