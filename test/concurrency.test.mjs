@@ -9,6 +9,11 @@ import { fakeFetch, job, runs, t } from './helpers.mjs';
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 const answer = (body, headers = {}) => new Response(JSON.stringify(body), { status: 200, headers });
 
+test('concurrency must be a whole number of 1 or more', () => {
+  for (const bad of [0, -1, 1.5, NaN, Infinity, '6']) assert.throws(() => createClient({ concurrency: bad }), /concurrency must be a whole number/, String(bad));
+  assert.doesNotThrow(() => createClient({ concurrency: 1 }));
+});
+
 test('the client keeps at most `concurrency` requests in flight', async () => {
   let now = 0;
   let peak = 0;
@@ -41,19 +46,32 @@ test('requests in flight count against the reserve, so concurrency never spends 
 });
 
 test('an answer that arrives late with an older, higher count does not raise it; a new hour does', async () => {
-  const queue = [
-    { left: '100', reset: '2000000000', wait: 20 }, // sent first, answered last
-    { left: '90', reset: '2000000000', wait: 1 },
-  ];
-  const client = createClient({ fetchImpl: async () => {
-    const a = queue.shift();
-    await delay(a.wait);
-    return answer({}, { 'x-ratelimit-remaining': a.left, 'x-ratelimit-reset': a.reset });
-  } });
-  await Promise.all([client.get('a'), client.get('b')]);
+  // Each response is held until the test releases it, so the order of answers is exact.
+  const gates = [];
+  const client = createClient({ fetchImpl: (url) => new Promise((resolve) => {
+    gates.push({ url, open: (left, reset = '2000000000') => resolve(answer({}, { 'x-ratelimit-remaining': left, 'x-ratelimit-reset': reset })) });
+  }) });
+  const until = async (n) => { while (gates.length < n) await delay(1); };
+  // The probe: the budget becomes known (200), and requests may go out together.
+  const probe = client.get('probe');
+  await until(1);
+  gates[0].open('200');
+  await probe;
+  // Two requests in the same hour: the one sent first (100) is answered after the one sent second (90).
+  const a = client.get('a');
+  const b = client.get('b');
+  await until(3);
+  gates[2].open('90');
+  await b;
   assert.equal(client.remaining, 90);
-  queue.push({ left: '4999', reset: '2000003600', wait: 0 });
-  await client.get('c');
+  gates[1].open('100');
+  await a;
+  assert.equal(client.remaining, 90, 'the late, higher count does not raise it');
+  // A new hour raises it.
+  const c = client.get('c');
+  await until(4);
+  gates[3].open('4999', '2000003600');
+  await c;
   assert.equal(client.remaining, 4999);
 });
 

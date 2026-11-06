@@ -97,6 +97,8 @@ export function apiBase(env = {}) {
 
 export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'https://api.github.com', minRemaining = 25, backoffMs = [1000, 3000], timeoutMs = 30000, maxBytes = 20 * 1048576, concurrency = 6 } = {}) {
   if (!/^https:\/\/[^/?#@\s]+(\/[^?#\s]*)?$/.test(String(baseUrl))) throw new Error(`the API base must be an https URL: ${baseUrl}`);
+  // Anything else would leave queued requests waiting forever (0 slots, or NaN that no count passes).
+  if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error(`concurrency must be a whole number of 1 or more: ${concurrency}`);
   let calls = 0;
   let remaining = null;
   // When the count's hour resets (x-ratelimit-reset): answers can arrive out of order, so within

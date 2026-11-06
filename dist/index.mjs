@@ -7422,6 +7422,7 @@ async function readCapped(res, max, path) {
 }
 function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://api.github.com", minRemaining = 25, backoffMs = [1e3, 3e3], timeoutMs = 3e4, maxBytes = 20 * 1048576, concurrency = 6 } = {}) {
   if (!/^https:\/\/[^/?#@\s]+(\/[^?#\s]*)?$/.test(String(baseUrl))) throw new Error(`the API base must be an https URL: ${baseUrl}`);
+  if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error(`concurrency must be a whole number of 1 or more: ${concurrency}`);
   let calls = 0;
   let remaining = null;
   let hourResetsAt = null;
