@@ -3,12 +3,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { proxyPlan, rerunWithEnvProxy, supportsEnvProxy } from '../src/proxy.mjs';
 
-test('supportsEnvProxy: Node 22.21 and later, 23, and 24 onwards', () => {
+test('supportsEnvProxy: Node 22.21 and later 22s, and 24 onwards; not 23', () => {
   assert.equal(supportsEnvProxy('20.19.0'), false);
   assert.equal(supportsEnvProxy('22.20.0'), false);
   assert.equal(supportsEnvProxy('22.21.0'), true);
   assert.equal(supportsEnvProxy('22.23.4'), true);
   assert.equal(supportsEnvProxy('24.1.0'), true);
+  assert.equal(supportsEnvProxy('23.11.0'), false);
+  assert.equal(supportsEnvProxy('24.0.0'), true);
 });
 
 test('proxyPlan: nothing without a proxy or once Node uses it; a rerun where it can; a warning where it cannot', () => {

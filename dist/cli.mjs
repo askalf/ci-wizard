@@ -9724,7 +9724,7 @@ async function audit({ repo, token, fetchImpl, days = 7, workflows = 8, perWorkf
 import { spawnSync } from "node:child_process";
 function supportsEnvProxy(version = process.versions.node) {
   const [major, minor] = String(version).split(".").map(Number);
-  return major >= 24 || major === 22 && minor >= 21 || major === 23;
+  return major >= 24 || major === 22 && minor >= 21;
 }
 function proxyPlan(env = process.env, version = process.versions.node) {
   const proxy = env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy;

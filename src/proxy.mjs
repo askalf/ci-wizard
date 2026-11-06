@@ -4,10 +4,10 @@
 // set; when the runtime cannot, it says so instead of failing later with a network error.
 import { spawnSync } from 'node:child_process';
 
-/** Whether this Node's fetch honours NODE_USE_ENV_PROXY: 22.21 and later 22s, and 24 onwards. */
+/** Whether this Node's fetch honours NODE_USE_ENV_PROXY: 22.21 and later 22s, and 24 onwards (not 23). */
 export function supportsEnvProxy(version = process.versions.node) {
   const [major, minor] = String(version).split('.').map(Number);
-  return major >= 24 || (major === 22 && minor >= 21) || major === 23;
+  return major >= 24 || (major === 22 && minor >= 21);
 }
 
 /**
