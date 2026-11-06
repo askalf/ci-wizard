@@ -7512,11 +7512,13 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   const workflowNames = /* @__PURE__ */ new Map();
   const wantedIds = new Set(runs.map((r) => r.workflow_id).filter((id) => id != null));
   try {
-    for (let page = 1; page <= maxPages; page++) {
+    for (let page = 1, seen = 0; ; page++) {
       const listed2 = await client.get(`repos/${repo}/actions/workflows?per_page=100&page=${page}`);
       const batch = listed2 && Array.isArray(listed2.workflows) ? listed2.workflows : [];
+      seen += batch.length;
       for (const w of batch) if (w && w.id != null && typeof w.name === "string") workflowNames.set(w.id, w.name);
-      if (batch.length < 100 || [...wantedIds].every((id) => workflowNames.has(id))) break;
+      const total = listed2 && Number.isFinite(listed2.total_count) ? listed2.total_count : Infinity;
+      if (batch.length < 100 || seen >= total || [...wantedIds].every((id) => workflowNames.has(id))) break;
     }
   } catch (e) {
     if (e instanceof RateLimitError) throw e;

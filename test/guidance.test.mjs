@@ -360,6 +360,20 @@ test('collect labels a workflow with its own name from the workflows API, not a 
   const p2 = await collect(createClient({ fetchImpl: fakeFetch(paged, { calls: asked }) }), 'o/r', { now });
   assert.deepEqual([...p2.byWf.keys()], ['Review']);
   assert.equal(asked.filter((u) => u.includes('actions/workflows')).length, 2);
+  // No page cap: a workflow on page 7 (past the run list's own five-page cap) is still found.
+  const deep = { ...routes, 'repos/o/r/actions/workflows': (path) => {
+    const page = Number(/[?&]page=(\d+)/.exec(path)[1]);
+    return { total_count: 700, workflows: Array.from({ length: 100 }, (_, i) => ({ id: page === 7 && i === 3 ? 9 : page * 1000 + i, name: page === 7 && i === 3 ? 'Review' : `P${page}-${i}` })) };
+  } };
+  const asked7 = [];
+  const p7 = await collect(createClient({ fetchImpl: fakeFetch(deep, { calls: asked7 }) }), 'o/r', { now });
+  assert.deepEqual([...p7.byWf.keys()], ['Review']);
+  assert.equal(asked7.filter((u) => u.includes('actions/workflows')).length, 7);
+  // A list that keeps answering full pages stops at its total_count.
+  const endless = { ...routes, 'repos/o/r/actions/workflows': (path) => ({ total_count: 200, workflows: Array.from({ length: 100 }, (_, i) => ({ id: Number(/[?&]page=(\d+)/.exec(path)[1]) * 1000 + i, name: 'x' })) }) };
+  const askedE = [];
+  await collect(createClient({ fetchImpl: fakeFetch(endless, { calls: askedE }) }), 'o/r', { now });
+  assert.equal(askedE.filter((u) => u.includes('actions/workflows')).length, 2);
   // An unreadable workflows answer leaves the run names to label it, and the audit goes on.
   const broken = await collect(createClient({ fetchImpl: fakeFetch({ ...routes, 'repos/o/r/actions/workflows': { __status: 500 } }) }), 'o/r', { now });
   assert.equal(broken.byWf.size, 1);

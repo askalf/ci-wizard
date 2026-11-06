@@ -4,7 +4,8 @@
 
 Found by auditing real repositories:
 
-- A workflow is labelled with its own name from the workflows API (one call). A workflow with
+- A workflow is labelled with its own name from the workflows API. The list is read page by page
+  until every workflow the runs name is found; that is usually one call. A workflow with
   `run-name:` names each run after its pull request, so the most common run name could be a pull
   request's title. If the workflows answer can't be read, the run names still label it.
 - The repository root is listed as `contents`, not `contents/`. The trailing slash is not the

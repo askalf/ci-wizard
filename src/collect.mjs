@@ -73,16 +73,19 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
   // Each workflow's own name (one call): a run's name can be its pull request's title. Only labels
   // depend on it, so an answer that cannot be read leaves the run names to label the workflows;
   // the rate-limit reserve still stops the audit.
-  // The list is paginated: pages are read until every workflow the runs name has its name, or
-  // the list ends (a short page), or after maxPages pages.
+  // The list is paginated: pages are read until every workflow the runs name has its name, or the
+  // list ends (a short page, or as many records as its total_count). Usually that is one call; the
+  // rate-limit reserve bounds the rest.
   const workflowNames = new Map();
   const wantedIds = new Set(runs.map((r) => r.workflow_id).filter((id) => id != null));
   try {
-    for (let page = 1; page <= maxPages; page++) {
+    for (let page = 1, seen = 0; ; page++) {
       const listed = await client.get(`repos/${repo}/actions/workflows?per_page=100&page=${page}`);
       const batch = listed && Array.isArray(listed.workflows) ? listed.workflows : [];
+      seen += batch.length;
       for (const w of batch) if (w && w.id != null && typeof w.name === 'string') workflowNames.set(w.id, w.name);
-      if (batch.length < 100 || [...wantedIds].every((id) => workflowNames.has(id))) break;
+      const total = listed && Number.isFinite(listed.total_count) ? listed.total_count : Infinity;
+      if (batch.length < 100 || seen >= total || [...wantedIds].every((id) => workflowNames.has(id))) break;
     }
   } catch (e) {
     if (e instanceof RateLimitError) throw e;
