@@ -66,16 +66,18 @@ function runTargets(program, args) {
   const target = operandAt(args, at + 1, runner.valued);
   if (target === -1) return [];
   if (!runner.container) return [args[target]];
-  // A container runs its entrypoint (--entrypoint when given) with the words after the image. The
-  // word right after the image is a command only when it is not an option: an option there, and
-  // everything after it, is the entrypoint's.
+  // A container runs its entrypoint (--entrypoint when given) with the words after the image. With
+  // --entrypoint given, they are all its arguments. Otherwise the word right after the image is a
+  // command only when it is not an option: an option there, and everything after it, is the
+  // image's entrypoint's.
   const entrypoint = [];
   for (let i = at + 1; i < target; i++) {
     if (args[i] === '--entrypoint') entrypoint.push(args[i + 1]);
     else if (args[i].startsWith('--entrypoint=')) entrypoint.push(args[i].slice('--entrypoint='.length));
   }
   const next = args[target + 1];
-  return [args[target], ...entrypoint, ...(next !== undefined && !next.startsWith('-') ? [next] : [])];
+  const command = !entrypoint.length && next !== undefined && !next.startsWith('-') ? [next] : [];
+  return [args[target], ...entrypoint, ...command];
 }
 
 // Checks that test, build or analyse the change: the ones a merge should wait for. Matched on the

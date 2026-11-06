@@ -9086,7 +9086,8 @@ function runTargets(program, args) {
     else if (args[i].startsWith("--entrypoint=")) entrypoint.push(args[i].slice("--entrypoint=".length));
   }
   const next = args[target + 1];
-  return [args[target], ...entrypoint, ...next !== void 0 && !next.startsWith("-") ? [next] : []];
+  const command = !entrypoint.length && next !== void 0 && !next.startsWith("-") ? [next] : [];
+  return [args[target], ...entrypoint, ...command];
 }
 var GATE_LIKE = /\b(test|tests|lint|build|check|checks|verify|analy[sz]e|codeql|typecheck|types|dist|unit|e2e|ci|fuzz|fuzzing)\b/i;
 var list2 = (xs, n = 6) => `${xs.slice(0, n).join(", ")}${xs.length > n ? ` and ${xs.length - n} more` : ""}`;

@@ -333,6 +333,8 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   // A linter's name as an option value, or as the scanner's own argument, is not a linter run.
   assert.ok(counts(job('      - run: docker run --name actionlint aquasec/trivy fs --format sarif . > t.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(counts(job('      - run: docker run -e TOOL=zizmor -v "$PWD:/src" aquasec/trivy fs --skip-dirs actionlint --format sarif /src > t.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  // With --entrypoint given, the words after the image are its arguments: echo runs, not actionlint.
+  assert.ok(counts(job('      - run: docker run --entrypoint echo node:22 actionlint\n      - run: trivy fs --format sarif -o t.sarif .\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   // Words after the image that start with an option are the image's entrypoint's arguments.
   assert.ok(counts(job('      - run: docker run aquasec/trivy --cache-dir actionlint fs --format sarif . > t.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(counts(job('      - run: go run -tags actionlint ./cmd/scan --sarif > s.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
