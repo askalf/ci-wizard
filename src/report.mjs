@@ -18,22 +18,48 @@ export const plain = (s) => String(s).replace(/\r\n?/g, '\n').replace(CONTROL, '
  * repository (workflow, job and step names, file names, expressions), written by whoever can push
  * or open a pull request, so it must never become markup: newlines become spaces (no new heading
  * or block), and outside code spans `<` `>` become entities (no HTML, no comment that hides the
- * rest) and `[` `]` `\` are escaped (no link or tracking image). Code spans stay code spans, which
+ * rest) and `[` `]` `\` are escaped (no link or tracking image), and a bare URL or email address,
+ * which GitHub would link by itself, becomes a code span. Code spans stay code spans, which
  * markdown displays literally; backtick runs are cut to one, and an unpaired backtick is escaped,
  * so no span is left open to swallow what follows.
  */
+// What GitHub turns into a link by itself (GFM autolinks): a URL with a scheme, www., or an email
+// address. Such a token is shown as a code span, which markdown displays literally and never links;
+// the characters it may hold leave no way out of the span or the table cell.
+const AUTOLINK = /(?:(?:https?|ftp|mailto|xmpp):|www\.)[^\s`<>|\\]*|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/gi;
+
+/** Text with markdown's characters escaped (and, in a table, its pipes and backticks): see md. */
+function escapeText(t, table) {
+  const e = t.replace(/\\/g, '\\\\').replace(/\[/g, '\\[').replace(/\]/g, '\\]').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return table ? e.replace(/`/g, '\\`').replace(/\|/g, '\\|') : e;
+}
+
+/** Plain text with each autolink-able token turned into a code span (see AUTOLINK). */
+function unlink(t, table) {
+  let out = '';
+  let at = 0;
+  for (const m of t.matchAll(AUTOLINK)) {
+    // Trailing punctuation stays outside, as GitHub leaves it out of the link: "see https://x.io." ends with a period.
+    const token = m[0].replace(/[.,;:!?)\]'"]+$/, '');
+    if (!token) continue;
+    out += `${escapeText(t.slice(at, m.index), table)}\`${token}\``;
+    at = m.index + token.length;
+  }
+  return out + escapeText(t.slice(at), table);
+}
+
 export function md(s, { table = false } = {}) {
   const flat = String(s ?? '').replace(/\r?\n|\r/g, ' ').replace(CONTROL, '');
-  // A table cell keeps no code span: every backtick and pipe is escaped along with the rest, in
-  // one pass after the backslash, so nothing in the cell can end it or add a column.
-  if (table) return flat.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\|/g, '\\|').replace(/\[/g, '\\[').replace(/\]/g, '\\]').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // A table cell keeps no code span of the text's own: every backtick and pipe is escaped with the
+  // rest, after the backslash, so nothing in the cell can end it or add a column.
+  if (table) return unlink(flat, true);
   const text = flat.replace(/`{2,}/g, '`');
   const parts = text.split('`');
   // An even number of parts means an odd number of backticks: the last one pairs with nothing.
   const unpaired = parts.length % 2 === 0;
   return parts.map((part, i) => {
     const code = i % 2 === 1 && !(unpaired && i === parts.length - 1);
-    const out = code ? part : part.replace(/\\/g, '\\\\').replace(/\[/g, '\\[').replace(/\]/g, '\\]').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const out = code ? part : unlink(part, false);
     // The backtick before each part is a delimiter, except the last one when it pairs with nothing.
     return i === 0 ? out : `${unpaired && i === parts.length - 1 ? '\\`' : '`'}${out}`;
   }).join('');
@@ -45,7 +71,9 @@ export const cell = (s) => md(s, { table: true });
 /** A fenced block for an example: its fence is longer than any backtick run inside it, so the example cannot close it. */
 export function fence(body, lang = 'yaml') {
   const text = plain(body);
-  const longest = Math.max(0, ...(text.match(/`+/g) || []).map((r) => r.length));
+  // A loop, not Math.max(...runs): a hostile example can hold more backtick runs than a call takes arguments.
+  let longest = 0;
+  for (const run of text.matchAll(/`+/g)) if (run[0].length > longest) longest = run[0].length;
   const f = '`'.repeat(Math.max(3, longest + 1));
   return [`${f}${lang}`, text, f];
 }

@@ -9,11 +9,13 @@ Security review (hostile input from the audited repository):
   and in-order literal search).
 - Report text stays text. Every workflow, job, step and file name in the markdown report and in
   `compare` displays as written: no new heading, no HTML or hidden comment, no link or tracking
-  image, no terminal control codes. Example blocks can't close their own fence.
+  image, no terminal control codes. A bare URL or email address, which GitHub would link by itself,
+  is shown as code. Example blocks can't close their own fence.
 - The token goes to `GITHUB_API_URL` (https only). On GitHub Enterprise Server or GHE.com it no
   longer goes to api.github.com.
 - Requests are bounded. File paths are percent-encoded, `.` and `..` aren't accepted as an owner
-  or repository name, each request has a 30 s deadline, and an answer over 20 MB is an error.
+  or repository name, each request has a 30 s deadline, and an answer over 20 MB is an error (an
+  error answer is read only up to 64 KB).
 - The injection scan reads more fields: a `workflow_run`'s display title and its pull requests'
   head refs, committer names and emails, and head repository descriptions. It also follows
   untrusted text through `env:`, so `${{ env.TITLE }}` counts when `TITLE` holds one of these.

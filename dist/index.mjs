@@ -7465,7 +7465,7 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
       if (!res.ok) {
         let msg = "";
         try {
-          msg = (await res.json()).message || "";
+          msg = String(JSON.parse(await readCapped(res, Math.min(maxBytes, 65536), path)).message || "").slice(0, 300);
         } catch {
         }
         throw new GitHubError(res.status, path, msg);
@@ -9411,22 +9411,39 @@ function analyse(repo, data) {
 var CONF = { confirmed: "confirmed by the workflow file", inferred: "cause inferred", measured: "measured" };
 var CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 var plain = (s) => String(s).replace(/\r\n?/g, "\n").replace(CONTROL, "");
+var AUTOLINK = /(?:(?:https?|ftp|mailto|xmpp):|www\.)[^\s`<>|\\]*|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/gi;
+function escapeText(t, table) {
+  const e = t.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return table ? e.replace(/`/g, "\\`").replace(/\|/g, "\\|") : e;
+}
+function unlink(t, table) {
+  let out = "";
+  let at = 0;
+  for (const m of t.matchAll(AUTOLINK)) {
+    const token = m[0].replace(/[.,;:!?)\]'"]+$/, "");
+    if (!token) continue;
+    out += `${escapeText(t.slice(at, m.index), table)}\`${token}\``;
+    at = m.index + token.length;
+  }
+  return out + escapeText(t.slice(at), table);
+}
 function md(s, { table = false } = {}) {
   const flat = String(s ?? "").replace(/\r?\n|\r/g, " ").replace(CONTROL, "");
-  if (table) return flat.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\|/g, "\\|").replace(/\[/g, "\\[").replace(/\]/g, "\\]").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  if (table) return unlink(flat, true);
   const text = flat.replace(/`{2,}/g, "`");
   const parts = text.split("`");
   const unpaired = parts.length % 2 === 0;
   return parts.map((part, i) => {
     const code = i % 2 === 1 && !(unpaired && i === parts.length - 1);
-    const out = code ? part : part.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const out = code ? part : unlink(part, false);
     return i === 0 ? out : `${unpaired && i === parts.length - 1 ? "\\`" : "`"}${out}`;
   }).join("");
 }
 var cell = (s) => md(s, { table: true });
 function fence(body, lang = "yaml") {
   const text = plain(body);
-  const longest = Math.max(0, ...(text.match(/`+/g) || []).map((r) => r.length));
+  let longest = 0;
+  for (const run of text.matchAll(/`+/g)) if (run[0].length > longest) longest = run[0].length;
   const f = "`".repeat(Math.max(3, longest + 1));
   return [`${f}${lang}`, text, f];
 }

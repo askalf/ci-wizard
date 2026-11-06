@@ -152,9 +152,10 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
       if (!res.ok) {
         let msg = '';
         try {
-          msg = (await res.json()).message || '';
+          // The error body is capped like any answer: a large one adds nothing to the message.
+          msg = String(JSON.parse(await readCapped(res, Math.min(maxBytes, 65536), path)).message || '').slice(0, 300);
         } catch {
-          // a body that is not JSON adds nothing to the error
+          // a body that is not JSON, or too large, adds nothing to the error
         }
         throw new GitHubError(res.status, path, msg);
       }
