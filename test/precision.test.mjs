@@ -111,6 +111,12 @@ test('jobs without a working timeout: a limit from the job\'s longest sampled ru
   const [free] = find(pub, 'jobs without a working timeout');
   assert.match(free.evidence, /: a hung run holds its runner for up to 360 minutes before GitHub stops it/);
   assert.doesNotMatch(free.evidence, /bill/);
+  // Only GitHub's standard runners (runner group "GitHub Actions") count as hosted, so only they are
+  // taken as free: a larger runner reports its own group and is never described as free.
+  const larger = (s) => ({ ...timed(s, 'test (20)'), runner_group_name: 'Default Larger Runners', runner_name: 'ubuntu-16-core', labels: ['ubuntu-latest-16-cores'] });
+  const big = analyse('o/r', { ...data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[larger(240)], [larger(120)]], file: timeoutFile(undefined) }] }), visibility: 'public' });
+  assert.equal(big.workflows[0].hosted_share, 0);
+  assert.doesNotMatch(find(big, 'jobs without a working timeout')[0].evidence, /free/);
   const y = parse(f.example);
   assert.equal(y.jobs.test['timeout-minutes'], 15); // 3 x 4 min = 12, up to 15
   assert.equal(savingText(f), 'a guard against hung jobs, not minutes');

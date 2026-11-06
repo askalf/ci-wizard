@@ -226,8 +226,11 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   is given to neither, and a name that is all expression matches nothing. A timeout set by an expression, and a job that
   calls a reusable workflow, are left alone: the file does not say the limit.
 - **Confidence** measured. Reported as a guard against hung jobs, not a saving. The evidence says a
-  hung run bills every minute only where it would: on GitHub-hosted runners, and not on a public
-  repository, whose standard hosted runners are free. One finding for
+  hung run bills every minute only where it would: on GitHub's standard hosted runners (runner
+  group "GitHub Actions"), and not on a public repository, where they are free. A larger runner
+  reports its own runner group, which the Actions API does not tell apart from a self-hosted
+  one, so it is counted with self-hosted runners and the evidence makes no billing claim for it,
+  public or private. One finding for
   the repository. The evidence names up to five jobs (six across workflows, each with its
   workflow) and counts the rest, and says which workflows were timed from only a few successful
   runs. The example sets up to three jobs, each workflow's in its own YAML document headed by its
