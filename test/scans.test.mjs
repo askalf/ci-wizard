@@ -149,6 +149,12 @@ test('scanWorkflow: script injection in run and github-script, never in env or a
     '      # - run: echo ${{ github.head_ref }}',
   ].join('\n') + '\n'));
   assert.deepEqual(s.injections.map((x) => `${x.step}:${x.field}`), ['Greet:github.event.pull_request.title', `actions/github-script@${SHA}:github.event.comment.body`]);
+  // The action's owner and name in any case are the same action.
+  const mixed = scanWorkflow(wf(`      - uses: Actions/GitHub-Script@${SHA}\n        with:\n          script: console.log("\${{ github.event.issue.title }}")\n`));
+  assert.deepEqual(mixed.injections.map((x) => x.field), ['github.event.issue.title']);
+  assert.equal(mixed.injections[0].lang, 'js');
+  // Another action's script input is not code the scan reads.
+  assert.deepEqual(scanWorkflow(wf(`      - uses: someone/github-script-ish@${SHA}\n        with:\n          script: \${{ github.event.issue.title }}\n`)).injections, []);
 });
 
 test('scanWorkflow: the job token, from write-all, a missing block, or a scoped one', () => {

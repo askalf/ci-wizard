@@ -241,7 +241,10 @@ export function scanWorkflow(text) {
         const shell = st.shell ?? job.defaults?.run?.shell ?? doc.defaults?.run?.shell;
         scripts.push({ script: st.run, lang: shellLang(shell, job['runs-on']) });
       }
-      if (/^actions\/github-script@/.test(String(st.uses || '')) && st.with && typeof st.with === 'object') {
+      // Owner and repository names are case-insensitive: Actions/GitHub-Script is the same action.
+      const action = parseUses(st.uses);
+      const githubScript = action && action.owner.toLowerCase() === 'actions' && action.name.toLowerCase() === 'github-script';
+      if (githubScript && st.with && typeof st.with === 'object') {
         scripts.push({ script: st.with.script, lang: 'js' });
       }
       for (const sc of scripts) {
