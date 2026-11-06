@@ -8356,7 +8356,7 @@ var UNTRUSTED_PATHS = [
 ].map((p) => p.split("."));
 function untrustedPath(path) {
   const segs = path.split(".");
-  return UNTRUSTED_PATHS.some((u) => segs.length <= u.length && segs.every((seg, i) => seg === "*" || seg === u[i]));
+  return UNTRUSTED_PATHS.some((u) => segs.length <= u.length && segs.every((seg, i) => seg === "*" || seg === u[i] || u[i] === "#" && /^\d+$/.test(seg)));
 }
 function pathOf(node) {
   if (node.k === "ctx") return node.path[0];

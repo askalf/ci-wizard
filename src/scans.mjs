@@ -58,12 +58,13 @@ const UNTRUSTED_PATHS = [
  * untrusted field: it is the field, or an object that holds one. Segment by segment, a * in the
  * path matches any name or index (an object filter selects every property; github.event.issue.*
  * holds the title), while a named segment matches only that name, and a collection's index (#)
- * only an index: github.event.*.number reaches no title.
+ * only an index, numeric or a numeric string as GitHub accepts it (commits['0']):
+ * github.event.*.number reaches no title, and issue['0'] is no index.
  */
 function untrustedPath(path) {
   const segs = path.split('.');
   return UNTRUSTED_PATHS.some((u) => segs.length <= u.length
-    && segs.every((seg, i) => seg === '*' || seg === u[i]));
+    && segs.every((seg, i) => seg === '*' || seg === u[i] || (u[i] === '#' && /^\d+$/.test(seg))));
 }
 
 /** The dotted path of a context reference (github.event.commits[0].message), or null for anything else. */

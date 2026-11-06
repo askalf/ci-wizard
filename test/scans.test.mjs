@@ -74,6 +74,11 @@ test('untrustedExpressions: only an expression whose value carries the text; a b
   assert.deepEqual(hits("echo ${{ join(github.event.*.number, ',') }} ${{ join(github.event.*.id, ',') }}"), []);
   assert.deepEqual(hits('echo ${{ toJSON(github.event.issue.user.*) }} ${{ toJSON(github.event.repository.*) }}'), []);
   assert.deepEqual(hits('echo ${{ github.event.issue.title.foo }}'), []); // a property of a string is null
+  // A numeric string is an index, as GitHub reads it; it is no index into an object.
+  assert.deepEqual(hits("echo ${{ github.event.commits['0'].message }}"), ["github.event.commits.0.message"]);
+  assert.deepEqual(hits("echo ${{ github.event.pages['12'].page_name }}"), ["github.event.pages.12.page_name"]);
+  assert.deepEqual(hits("echo ${{ github.event.commits[format('{0}', 1)].author.name }}"), ['github.event.commits.1.author.name']);
+  assert.deepEqual(hits("echo ${{ github.event.commits['0'].id }} ${{ github.event.commits['0'].timestamp }} ${{ github.event.issue['0'] }}"), []);
   // }} inside a quoted string does not end the expression, as GitHub reads it.
   assert.deepEqual(hits("echo \"${{ format('}}{0}', github.event.issue.title) }}\""), ['github.event.issue.title']);
   assert.deepEqual(hits("echo ${{ format('it''s }}{0}', github.event.issue.body) }}"), ['github.event.issue.body']);
