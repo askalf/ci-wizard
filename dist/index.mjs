@@ -9410,7 +9410,8 @@ function timeJobs(sampledRuns, commands) {
     jobCount: 0,
     sawCacheStep: false,
     billedPerRun: [],
-    jobDurations: /* @__PURE__ */ new Map()
+    jobDurations: /* @__PURE__ */ new Map(),
+    jobHosted: /* @__PURE__ */ new Map()
   };
   for (const jobs of sampledRuns) {
     let runSeconds = 0;
@@ -9421,6 +9422,7 @@ function timeJobs(sampledRuns, commands) {
       const jobName = String(job.name || "");
       if (!t.jobDurations.has(jobName)) t.jobDurations.set(jobName, []);
       t.jobDurations.get(jobName).push(length);
+      t.jobHosted.set(jobName, (t.jobHosted.get(jobName) || 0) + (ranOnGitHubHosted(job) ? 1 : 0));
       runSeconds += length;
       t.jobLengths.push(length);
       t.queueWaits.push(secs(job.created_at, job.started_at));
@@ -9547,7 +9549,8 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     billed_minutes_per_run: billedPerRun,
     billed_minutes_week: round(weekFactor * weekBilled, 1),
     cost_by_outcome: costByOutcome,
-    job_durations: Object.fromEntries([...timing.jobDurations].map(([k, v]) => [k, { runs: v.length, max_s: Math.max(...v), median_s: median(v) }])),
+    // hosted_share: the share of the job's sampled runs on GitHub's standard hosted runners.
+    job_durations: Object.fromEntries([...timing.jobDurations].map(([k, v]) => [k, { runs: v.length, max_s: Math.max(...v), median_s: median(v), hosted_share: round((timing.jobHosted.get(k) || 0) / v.length, 2) }])),
     jobs_sampled: timing.jobCount,
     waited_on: waitedOn,
     wait_p50: pct(timing.queueWaits, 0.5),
@@ -9768,10 +9771,12 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
     const sampled = sum(runs.map((n) => durations[n].runs));
     const suggest = Math.max(T.timeoutFloorMin, Math.ceil(T.timeoutFactor * maxS / 60 / 5) * 5);
     if (suggest >= t.minutes) continue;
-    if (t.isDefault || t.minutes > T.timeoutLoose * Math.max(maxS / 60, 1)) loose.push({ ...t, maxS, sampled, suggest });
+    const hostedRuns = sum(runs.map((n) => (durations[n].hosted_share ?? (w.hosted_share >= 0.5 ? 1 : 0)) * durations[n].runs));
+    const billed2 = hostedRuns >= sampled / 2 && isPublic !== true;
+    if (t.isDefault || t.minutes > T.timeoutLoose * Math.max(maxS / 60, 1)) loose.push({ ...t, maxS, sampled, suggest, billed: billed2 });
   }
   if (loose.length) {
-    const part = { workflow: w.workflow, path: w.path, hosted: w.hosted_share >= 0.5 && isPublic !== true, thin: w.thin_sample ? w.sampled_runs : null, loose };
+    const part = { workflow: w.workflow, path: w.path, thin: w.thin_sample ? w.sampled_runs : null, loose };
     const { evidence, example } = timeoutText([part]);
     add(
       0,
@@ -9900,7 +9905,7 @@ function timeoutText(parts) {
   const shown = jobs.slice(0, many ? 6 : 5).map(one).join("; ") + (jobs.length > (many ? 6 : 5) ? `; and ${jobs.length - (many ? 6 : 5)} more` : "");
   const where2 = many ? ` in ${parts.length} workflows` : "";
   const thinNote = many ? parts.filter((p) => p.thin !== null).map((p) => `; ${p.workflow} was timed from only ${p.thin} successful run${p.thin === 1 ? "" : "s"}`).join("") : "";
-  const evidence = `${jobs.length === 1 ? "job" : `${jobs.length} jobs${where2}:`} ${shown}: a hung run holds its runner${parts.every((p) => p.hosted) ? ", billing every minute," : parts.some((p) => p.hosted) ? " (a GitHub-hosted one billing every minute)" : ""} for up to ${Math.max(...jobs.map((t) => t.minutes))} minutes before GitHub stops it${thinNote}`;
+  const evidence = `${jobs.length === 1 ? "job" : `${jobs.length} jobs${where2}:`} ${shown}: a hung run holds its runner${jobs.every((t) => t.billed) ? ", billing every minute," : jobs.some((t) => t.billed) ? " (on the GitHub-hosted ones, billing every minute)" : ""} for up to ${Math.max(...jobs.map((t) => t.minutes))} minutes before GitHub stops it${thinNote}`;
   const block = (ts) => `jobs:
 ${ts.map((t) => `  ${t.id}:
     timeout-minutes: ${t.suggest}   # ${T.timeoutFactor}x its longest sampled run`).join("\n")}`;

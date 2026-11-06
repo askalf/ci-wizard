@@ -117,6 +117,17 @@ test('jobs without a working timeout: a limit from the job\'s longest sampled ru
   const big = analyse('o/r', { ...data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[larger(240)], [larger(120)]], file: timeoutFile(undefined) }] }), visibility: 'public' });
   assert.equal(big.workflows[0].hosted_share, 0);
   assert.doesNotMatch(find(big, 'jobs without a working timeout')[0].evidence, /free/);
+  // Each job's own runner decides, not the workflow's mix: on a private repository, a workflow
+  // with a standard hosted job and a larger-runner job.
+  const twoJobs = (testTimeout) => `on: push\njobs:\n  test:\n${testTimeout ? `    timeout-minutes: ${testTimeout}\n` : ''}    runs-on: ubuntu-latest\n    steps: [{run: make}]\n  big:\n    runs-on: ubuntu-latest-16-cores\n    steps: [{run: make}]\n`;
+  const mixed = (testTimeout) => analyse('o/r', { ...data({ workflows: [{ name: 'CI', runs: runs(10), jobsPerRun: [[timed(240, 'test'), { ...larger(240), name: 'big' }], [timed(120, 'test'), { ...larger(120), name: 'big' }]], file: twoJobs(testTimeout) }] }), visibility: 'private' });
+  // Only the larger-runner job is loose: no billing claim, though half the workflow's jobs are hosted.
+  const [onlyBig] = find(mixed(15), 'jobs without a working timeout');
+  assert.match(onlyBig.evidence, /^job big /);
+  assert.doesNotMatch(onlyBig.evidence, /bill/);
+  // Both loose: the billing claim names the GitHub-hosted ones only.
+  const [both] = find(mixed(undefined), 'jobs without a working timeout');
+  assert.match(both.evidence, /a hung run holds its runner \(on the GitHub-hosted ones, billing every minute\) for up to 360 minutes/);
   const y = parse(f.example);
   assert.equal(y.jobs.test['timeout-minutes'], 15); // 3 x 4 min = 12, up to 15
   assert.equal(savingText(f), 'a guard against hung jobs, not minutes');
