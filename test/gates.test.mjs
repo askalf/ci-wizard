@@ -114,3 +114,70 @@ test('collect reads the rulesets, classic protection, .github and each workflow\
   const blind = await collect(createClient({ fetchImpl: fakeFetch({ ...routes, 'repos/o/r/rules/branches/main': { __status: 404 }, 'repos/o/r/branches/main': { __status: 404 } }) }), 'o/r', { now });
   assert.equal(blind.gates.required, null);
 });
+
+test('one unreadable source of required checks: what was seen stays required, but no absence is claimed', async () => {
+  const now = new Date(Date.parse(t(7 * 86400)));
+  const rs = runs(4).map((r) => ({ ...r, path: '.github/workflows/ci.yml', event: 'pull_request' }));
+  const base = {
+    'repos/o/r/actions/runs?': { workflow_runs: rs },
+    'repos/o/r/actions/runs/': { jobs: [{ ...job(), name: 'test' }, { ...job(), name: 'build' }] },
+    'repos/o/r/contents/.github/workflows': [{ name: 'ci.yml', type: 'file' }],
+    'repos/o/r/contents/.github': [{ name: 'dependabot.yml', type: 'file' }],
+    'repos/o/r/contents/': prFile,
+    'repos/o/r/contents': [],
+    'repos/o/r': { default_branch: 'main', visibility: 'public' },
+  };
+  // Rulesets unreadable; classic protection readable and off.
+  const noRules = await collect(createClient({ fetchImpl: fakeFetch({ ...base, 'repos/o/r/rules/branches/main': { __status: 404 }, 'repos/o/r/branches/main': { name: 'main', protection: { enabled: false, required_status_checks: { enforcement_level: 'off', contexts: [] } } } }) }), 'o/r', { now });
+  assert.equal(noRules.gates.required_complete, false);
+  assert.deepEqual(noRules.gates.required, []);
+  const F1 = gateFindings(noRules.gates, { scanFiles: noRules.scanFiles, scanned: noRules.scanned });
+  assert.ok(!whats(F1).includes('merges do not wait for any check'), 'an unreadable ruleset may require checks');
+  // Rulesets readable and requiring test; the branch summary unreadable: test stays required, but
+  // build is not called unrequired.
+  const noBranch = await collect(createClient({ fetchImpl: fakeFetch({ ...base, 'repos/o/r/rules/branches/main': [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'test' }] } }], 'repos/o/r/branches/main': { __status: 404 } }) }), 'o/r', { now });
+  assert.equal(noBranch.gates.required_complete, false);
+  assert.deepEqual(noBranch.gates.required.map((c) => c.context), ['test']);
+  const F2 = gateFindings(noBranch.gates, { scanFiles: noBranch.scanFiles, scanned: noBranch.scanned });
+  assert.ok(!whats(F2).includes('pull request checks merges do not wait for'));
+});
+
+test('one unreadable pull request run: no required check is called unreported', () => {
+  const g = gates({ required: [{ context: 'test', integrationId: null }], required_complete: true, pr_runs_seen: 2, pr_runs_read: 1, pr_jobs_complete: false, pr_checks: ['lint'] });
+  assert.ok(!whats(gateFindings(g, { scanFiles: files(prFile), scanned: all(1) })).includes('required checks no pull request reports'));
+  // With every run read, the same absence is a finding.
+  const full = { ...g, pr_runs_read: 2, pr_jobs_complete: true };
+  assert.ok(whats(gateFindings(full, { scanFiles: files(prFile), scanned: all(1) })).includes('required checks no pull request reports'));
+});
+
+test('a run with more than 100 jobs is read page by page, so a required check on page 2 is reported', async () => {
+  const now = new Date(Date.parse(t(7 * 86400)));
+  const rs = runs(3).map((r) => ({ ...r, path: '.github/workflows/ci.yml', event: 'pull_request' }));
+  const page = (n) => Array.from({ length: n === 1 ? 100 : 20 }, (_, i) => ({ ...job(), name: n === 2 && i === 19 ? 'all tests pass' : `leg ${n}-${i}` }));
+  const routes = {
+    'repos/o/r/actions/runs?': { workflow_runs: rs },
+    'repos/o/r/actions/runs/': (path) => ({ total_count: 120, jobs: page(Number(/[?&]page=(\d+)/.exec(path)[1])) }),
+    'repos/o/r/rules/branches/main': [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'all tests pass' }] } }],
+    'repos/o/r/branches/main': { name: 'main', protection: { enabled: false } },
+    'repos/o/r/contents/.github/workflows': [{ name: 'ci.yml', type: 'file' }],
+    'repos/o/r/contents/.github': [{ name: 'dependabot.yml', type: 'file' }],
+    'repos/o/r/contents/': prFile,
+    'repos/o/r/contents': [],
+    'repos/o/r': { default_branch: 'main', visibility: 'public' },
+  };
+  const d = await collect(createClient({ fetchImpl: fakeFetch(routes) }), 'o/r', { now });
+  assert.ok(d.gates.pr_checks.includes('all tests pass'));
+  assert.equal(d.gates.pr_jobs_complete, true);
+  assert.ok(!whats(gateFindings(d.gates, { scanFiles: d.scanFiles, scanned: d.scanned })).includes('required checks no pull request reports'));
+  // A list longer than the 10 pages read is marked incomplete, and no absence is claimed from it.
+  const huge = { ...routes, 'repos/o/r/actions/runs/': (path) => ({ total_count: 5000, jobs: page(1) }) };
+  const h = await collect(createClient({ fetchImpl: fakeFetch(huge) }), 'o/r', { now });
+  assert.equal(h.gates.pr_jobs_complete, false);
+});
+
+test('no code scanning: a commented-out CodeQL step or a script that mentions it is not code scanning', () => {
+  const commented = 'on: [pull_request]\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      # - uses: github/codeql-action/init@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n      - run: echo "uses: github/codeql-action/analyze@v3"\n';
+  const g = gates({ code_scanning_runs: false });
+  assert.ok(whats(gateFindings(g, { scanFiles: files(commented), scanned: all(1) })).includes('no code scanning'));
+  assert.ok(!whats(gateFindings(g, { scanFiles: files(codeqlFile), scanned: all(1) })).includes('no code scanning'));
+});

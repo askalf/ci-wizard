@@ -347,7 +347,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   file triggers on `pull_request`). Required checks come from `GET /rules/branches/{branch}`
   (enforced rulesets) and the branch's protection summary (classic protection, when it is on).
 - **Confidence** confirmed. A risk, ranked first.
-- **Not claimed** when either source could not be read: an unknown is not "none".
+- **Not claimed** when either source could not be read: an unknown is not "none". The JSON's
+  `gates.required_complete` says whether both were.
 - **Fix** require the checks that must pass, by the exact names pull requests show. *Trade-off:* a
   required check that does not run on a pull request blocks it, so require only checks that run on
   every pull request.
@@ -362,7 +363,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **Confidence** inferred: a workflow that ran on no pull request in the window, or one with a path
   filter that the sampled pull requests did not touch, also leaves the name unreported.
 - **Not judged:** a required check from another app (a coverage service, a review bot), which the
-  runs do not show. With no pull request run in the window, nothing is claimed.
+  runs do not show. Nothing is claimed unless every sampled pull request run's jobs were read in
+  full (`gates.pr_jobs_complete`): a run with more than 100 jobs is read page by page, up to 10
+  pages, and a list cut short, or a run whose jobs could not be read, leaves the absence unknown.
 - **Fix** require the name pull requests show, or run the workflow on every pull request and skip
   inside the job. *Trade-off:* a check that runs only for some paths cannot be required as it is.
 
@@ -371,7 +374,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **Fires when** a check pull requests get is not required, and its name looks like a test, build,
   lint, analysis or fuzzing job (`test`, `build`, `lint`, `check`, `verify`, `analyze`, `codeql`,
   `typecheck`, `dist`, `e2e`, `fuzz`...). Other unrequired checks are counted, not listed.
-- **Confidence** inferred, from the name. A guard: it saves no minutes.
+- **Confidence** inferred, from the name. A guard: it saves no minutes. Only claimed when both
+  sources of required checks were read.
 - **Fix** require the ones that must pass. *Trade-off:* a slow or flaky required check holds every
   merge.
 
@@ -384,7 +388,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 
 ## no code scanning
 
-- **Fires when** every workflow file was read, none uses `github/codeql-action`, and no code
+- **Fires when** every workflow file was read, no step's `uses:` is `github/codeql-action/init` or
+  `/analyze` (a commented-out step or a script that mentions it does not count), and no code
   scanning default-setup run (`dynamic/github-code-scanning`) is in the window. On a private
   repository the evidence notes that code scanning needs GitHub Advanced Security.
 - **Confidence** inferred: default setup that has not run in the window, or another scanner, is not

@@ -7655,7 +7655,21 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   const outcomeSamples = /* @__PURE__ */ new Map();
   const rawJobs = /* @__PURE__ */ new Map();
   const jobsRaw = (r) => {
-    if (!rawJobs.has(r.id)) rawJobs.set(r.id, client.get(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`));
+    if (!rawJobs.has(r.id)) {
+      rawJobs.set(r.id, (async () => {
+        const url = (page) => `repos/${repo}/actions/runs/${r.id}/jobs?per_page=100&page=${page}`;
+        const first2 = await client.get(url(1));
+        if (!first2) return null;
+        const jobs = [...first2.jobs || []];
+        const total2 = Number.isFinite(first2.total_count) ? first2.total_count : jobs.length;
+        const pages = Math.min(10, Math.ceil(total2 / 100));
+        if (pages > 1) {
+          const rest = await Promise.all(Array.from({ length: pages - 1 }, (_, i) => client.get(url(i + 2))));
+          for (const d of rest) if (d) jobs.push(...d.jobs || []);
+        }
+        return { ...first2, jobs, complete: jobs.length >= total2 };
+      })());
+    }
     return rawJobs.get(r.id);
   };
   const jobsOf2 = async (r) => {
@@ -7767,12 +7781,17 @@ async function collectGates(client, repo, { runs, byWf, defaultBranch, rootNames
     }
     required = [...seen.values()];
   }
+  const requiredComplete = rulesRead && classicRead;
   const prChecks = /* @__PURE__ */ new Set();
   let prJobsRead = 0;
+  let prJobsComplete = prRuns.length > 0;
   prJobLists.forEach((r) => {
     if (r.ok && r.value && Array.isArray(r.value.jobs)) {
       prJobsRead += 1;
+      if (r.value.complete === false) prJobsComplete = false;
       for (const j of r.value.jobs) if (j && typeof j.name === "string") prChecks.add(j.name);
+    } else {
+      prJobsComplete = false;
     }
   });
   const codeScanningRuns = runs.some((r) => String(r.path || "").startsWith("dynamic/github-code-scanning"));
@@ -7783,8 +7802,10 @@ async function collectGates(client, repo, { runs, byWf, defaultBranch, rootNames
   return {
     branch: defaultBranch,
     required,
+    required_complete: requiredComplete,
     pr_runs_seen: prRuns.length,
     pr_runs_read: prJobsRead,
+    pr_jobs_complete: prJobsComplete,
     pr_checks: [...prChecks].sort(),
     code_scanning_runs: codeScanningRuns,
     dependency_updates: dependabotRuns || dependabotFile || renovateFile ? true : dependabotFile === null || renovateFile === null ? null : false
@@ -8850,7 +8871,7 @@ function fileFacts(scanFiles) {
     const doc = parseWorkflow(text);
     if (!Object.keys(doc).length) continue;
     if (triggersOf(doc).some((t) => PR_TRIGGERS.has(t))) onPr.push(path);
-    if (/uses:\s*['"]?github\/codeql-action\/(init|analyze)@/i.test(text)) codeql = true;
+    if (allSteps(doc).some((st) => /^github\/codeql-action\/(init|analyze)@/i.test(String(st.uses || "").trim()))) codeql = true;
   }
   return { onPr, codeql };
 }
@@ -8877,9 +8898,11 @@ function gateFindings(gates, { scanFiles = /* @__PURE__ */ new Map(), scanned = 
   }
   if (Array.isArray(gates.required)) {
     const required = gates.required;
+    const requiredComplete = gates.required_complete !== false;
+    const jobsComplete = gates.pr_jobs_complete !== false;
     const actionsRequired = required.filter(isActionsCheck);
     const requiredNames = new Set(required.map((c) => c.context));
-    if (!required.length && (prSeen || files.onPr.length)) {
+    if (requiredComplete && !required.length && (prSeen || files.onPr.length)) {
       F.push({
         saving: 0,
         unit: "risk",
@@ -8893,7 +8916,7 @@ function gateFindings(gates, { scanFiles = /* @__PURE__ */ new Map(), scanned = 
       });
     }
     if (required.length && prSeen) {
-      const missing = actionsRequired.filter((c) => !prChecks.includes(c.context)).map((c) => c.context);
+      const missing = jobsComplete ? actionsRequired.filter((c) => !prChecks.includes(c.context)).map((c) => c.context) : [];
       if (missing.length) {
         F.push({
           saving: 0,
@@ -8908,7 +8931,7 @@ function gateFindings(gates, { scanFiles = /* @__PURE__ */ new Map(), scanned = 
         });
       }
       const notRequired = prChecks.filter((n) => !requiredNames.has(n));
-      const gateLike = notRequired.filter((n) => GATE_LIKE.test(n));
+      const gateLike = requiredComplete ? notRequired.filter((n) => GATE_LIKE.test(n)) : [];
       if (gateLike.length) {
         F.push({
           saving: 0,
@@ -9679,7 +9702,7 @@ function analyse(repo, data) {
     // listing (a caller's own data) runs no scans and says so by reporting none read.
     scanned: data.scanned || { read: (data.scanFiles || /* @__PURE__ */ new Map()).size, of: null, unreadable: [] },
     // What guards a merge into the default branch, as read (null where it could not be read).
-    gates: data.gates ? { branch: data.gates.branch, required: data.gates.required, pr_checks: data.gates.pr_checks, pr_runs_read: data.gates.pr_runs_read } : null,
+    gates: data.gates ? { branch: data.gates.branch, required: data.gates.required, required_complete: data.gates.required_complete, pr_checks: data.gates.pr_checks, pr_runs_read: data.gates.pr_runs_read, pr_jobs_complete: data.gates.pr_jobs_complete } : null,
     only: data.only || [],
     only_missing: data.onlyMissing || [],
     runs_total: data.runs.length,

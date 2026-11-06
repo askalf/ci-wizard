@@ -619,7 +619,7 @@ export function analyse(repo, data) {
     // listing (a caller's own data) runs no scans and says so by reporting none read.
     scanned: data.scanned || { read: (data.scanFiles || new Map()).size, of: null, unreadable: [] },
     // What guards a merge into the default branch, as read (null where it could not be read).
-    gates: data.gates ? { branch: data.gates.branch, required: data.gates.required, pr_checks: data.gates.pr_checks, pr_runs_read: data.gates.pr_runs_read } : null,
+    gates: data.gates ? { branch: data.gates.branch, required: data.gates.required, required_complete: data.gates.required_complete, pr_checks: data.gates.pr_checks, pr_runs_read: data.gates.pr_runs_read, pr_jobs_complete: data.gates.pr_jobs_complete } : null,
     only: data.only || [],
     only_missing: data.onlyMissing || [],
     runs_total: data.runs.length,

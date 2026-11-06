@@ -149,9 +149,25 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
   // counts every outcome at its own measured cost (OUTCOMES in analyse.mjs).
   const outcomeSamples = new Map();
   // Each run's jobs are read once: the timing samples and the merge-gate check share them.
+  // A run with more than 100 jobs (a large matrix) is read page by page, up to 10 pages; `complete`
+  // says whether every job was read, so an absent name is only a conclusion when it was.
   const rawJobs = new Map();
   const jobsRaw = (r) => {
-    if (!rawJobs.has(r.id)) rawJobs.set(r.id, client.get(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`));
+    if (!rawJobs.has(r.id)) {
+      rawJobs.set(r.id, (async () => {
+        const url = (page) => `repos/${repo}/actions/runs/${r.id}/jobs?per_page=100&page=${page}`;
+        const first = await client.get(url(1));
+        if (!first) return null;
+        const jobs = [...(first.jobs || [])];
+        const total = Number.isFinite(first.total_count) ? first.total_count : jobs.length;
+        const pages = Math.min(10, Math.ceil(total / 100));
+        if (pages > 1) {
+          const rest = await Promise.all(Array.from({ length: pages - 1 }, (_, i) => client.get(url(i + 2))));
+          for (const d of rest) if (d) jobs.push(...(d.jobs || []));
+        }
+        return { ...first, jobs, complete: jobs.length >= total };
+      })());
+    }
     return rawJobs.get(r.id);
   };
   const jobsOf = async (r) => {
@@ -293,12 +309,19 @@ async function collectGates(client, repo, { runs, byWf, defaultBranch, rootNames
     }
     required = [...seen.values()];
   }
+  // A claim that a check is not required (or that none is) needs both sources read: a check
+  // required by a source that could not be read would otherwise look unrequired.
+  const requiredComplete = rulesRead && classicRead;
   const prChecks = new Set();
   let prJobsRead = 0;
+  let prJobsComplete = prRuns.length > 0;
   prJobLists.forEach((r) => {
     if (r.ok && r.value && Array.isArray(r.value.jobs)) {
       prJobsRead += 1;
+      if (r.value.complete === false) prJobsComplete = false;
       for (const j of r.value.jobs) if (j && typeof j.name === 'string') prChecks.add(j.name);
+    } else {
+      prJobsComplete = false;
     }
   });
   // Code scanning: default setup runs as a dynamic workflow; advanced setup is a workflow file
@@ -311,8 +334,10 @@ async function collectGates(client, repo, { runs, byWf, defaultBranch, rootNames
   return {
     branch: defaultBranch,
     required,
+    required_complete: requiredComplete,
     pr_runs_seen: prRuns.length,
     pr_runs_read: prJobsRead,
+    pr_jobs_complete: prJobsComplete,
     pr_checks: [...prChecks].sort(),
     code_scanning_runs: codeScanningRuns,
     dependency_updates: dependabotRuns || dependabotFile || renovateFile ? true : dependabotFile === null || renovateFile === null ? null : false,

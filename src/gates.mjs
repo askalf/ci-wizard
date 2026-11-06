@@ -2,7 +2,7 @@
 // whether pull requests are checked at all, and the two workflows a supply-chain review expects
 // (code scanning, dependency updates). Every finding comes from what the API showed; whatever it
 // could not read (a ruleset, a listing) yields no finding rather than a guess.
-import { parseWorkflow, triggersOf } from './workflow.mjs';
+import { allSteps, parseWorkflow, triggersOf } from './workflow.mjs';
 
 // GitHub Actions' app id. A required check with this integration, or none, is one a workflow job
 // reports; one from another app (a coverage service, a review bot) cannot be read from the runs.
@@ -25,7 +25,9 @@ function fileFacts(scanFiles) {
     const doc = parseWorkflow(text);
     if (!Object.keys(doc).length) continue;
     if (triggersOf(doc).some((t) => PR_TRIGGERS.has(t))) onPr.push(path);
-    if (/uses:\s*['"]?github\/codeql-action\/(init|analyze)@/i.test(text)) codeql = true;
+    // A step that runs CodeQL, read from the parsed steps: a commented-out line or a script that
+    // mentions it is not one.
+    if (allSteps(doc).some((st) => /^github\/codeql-action\/(init|analyze)@/i.test(String(st.uses || '').trim()))) codeql = true;
   }
   return { onPr, codeql };
 }
@@ -56,9 +58,12 @@ export function gateFindings(gates, { scanFiles = new Map(), scanned = null, vis
 
   if (Array.isArray(gates.required)) {
     const required = gates.required;
+    // Older saved reports carry no completeness flags: they are read as complete, as they were made.
+    const requiredComplete = gates.required_complete !== false;
+    const jobsComplete = gates.pr_jobs_complete !== false;
     const actionsRequired = required.filter(isActionsCheck);
     const requiredNames = new Set(required.map((c) => c.context));
-    if (!required.length && (prSeen || files.onPr.length)) {
+    if (requiredComplete && !required.length && (prSeen || files.onPr.length)) {
       // Pull requests get checks, but the branch requires none: a red pull request can be merged.
       F.push({
         saving: 0, unit: 'risk', confidence: 'confirmed', what: 'merges do not wait for any check', workflow: branch,
@@ -69,9 +74,10 @@ export function gateFindings(gates, { scanFiles = new Map(), scanned = null, vis
       });
     }
     if (required.length && prSeen) {
+      // Absence needs every sampled pull request run's jobs read; presence needs any.
       // A required check no pull request reported: renamed, path-filtered, or removed. GitHub waits
       // for it forever, so merges block or the rule is bypassed.
-      const missing = actionsRequired.filter((c) => !prChecks.includes(c.context)).map((c) => c.context);
+      const missing = jobsComplete ? actionsRequired.filter((c) => !prChecks.includes(c.context)).map((c) => c.context) : [];
       if (missing.length) {
         F.push({
           saving: 0, unit: 'risk', confidence: 'inferred', what: 'required checks no pull request reports', workflow: branch,
@@ -83,7 +89,7 @@ export function gateFindings(gates, { scanFiles = new Map(), scanned = null, vis
       }
       // Checks pull requests get that a merge does not wait for, and that look like tests or builds.
       const notRequired = prChecks.filter((n) => !requiredNames.has(n));
-      const gateLike = notRequired.filter((n) => GATE_LIKE.test(n));
+      const gateLike = requiredComplete ? notRequired.filter((n) => GATE_LIKE.test(n)) : [];
       if (gateLike.length) {
         F.push({
           saving: 0, unit: 'guard', confidence: 'inferred', what: 'pull request checks merges do not wait for', workflow: branch,
