@@ -9062,8 +9062,14 @@ function runTargets(program, args) {
   if (at === -1 || args[at] !== "run") return [];
   const target = operandAt(args, at + 1, runner.valued);
   if (target === -1) return [];
-  const command = runner.container ? operandAt(args, target + 1, /* @__PURE__ */ new Set()) : -1;
-  return [args[target], ...command === -1 ? [] : [args[command]]];
+  if (!runner.container) return [args[target]];
+  const entrypoint = [];
+  for (let i = at + 1; i < target; i++) {
+    if (args[i] === "--entrypoint") entrypoint.push(args[i + 1]);
+    else if (args[i].startsWith("--entrypoint=")) entrypoint.push(args[i].slice("--entrypoint=".length));
+  }
+  const next = args[target + 1];
+  return [args[target], ...entrypoint, ...next !== void 0 && !next.startsWith("-") ? [next] : []];
 }
 var GATE_LIKE = /\b(test|tests|lint|build|check|checks|verify|analy[sz]e|codeql|typecheck|types|dist|unit|e2e|ci|fuzz|fuzzing)\b/i;
 var list2 = (xs, n = 6) => `${xs.slice(0, n).join(", ")}${xs.length > n ? ` and ${xs.length - n} more` : ""}`;

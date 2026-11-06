@@ -34,8 +34,8 @@ const NOT_CODE_TOOLS = new Set(['scorecard', 'scorecard-action', 'zizmor', 'acti
 // Runners that fetch and run another program, each with its options that take a value. What runs
 // is the operand of the run subcommand (go run, pipx run, docker or podman run, docker container
 // run), found past the options: `docker run --name actionlint aquasec/trivy` runs Trivy. For a
-// container, the image and the command given after it both say what runs. go install, docker pull
-// and the like run nothing.
+// container, the image, its --entrypoint and a command given right after the image say what runs.
+// go install, docker pull and the like run nothing.
 const CONTAINER_VALUED = ['-e', '--env', '--env-file', '-v', '--volume', '--mount', '-w', '--workdir', '--name', '-u', '--user', '-p', '--publish', '--network', '--net', '--entrypoint', '-l', '--label', '--platform', '--pull', '-h', '--hostname', '--add-host', '--device', '--cap-add', '--cap-drop', '--security-opt', '--tmpfs', '--ulimit', '--restart', '--log-driver', '--log-opt', '--gpus', '--ipc', '--pid', '--runtime', '--shm-size', '--stop-signal', '--cpus', '-m', '--memory', '--group-add', '--cidfile', '--dns', '--expose', '--link', '--userns', '--uts', '--volumes-from'];
 const RUNNERS = new Map([
   ['go', { valued: new Set(['-C', '-o', '-p', '-tags', '-ldflags', '-gcflags', '-asmflags', '-mod', '-modfile', '-overlay', '-pkgdir', '-toolexec', '-exec']), container: false }],
@@ -65,8 +65,17 @@ function runTargets(program, args) {
   if (at === -1 || args[at] !== 'run') return [];
   const target = operandAt(args, at + 1, runner.valued);
   if (target === -1) return [];
-  const command = runner.container ? operandAt(args, target + 1, new Set()) : -1;
-  return [args[target], ...(command === -1 ? [] : [args[command]])];
+  if (!runner.container) return [args[target]];
+  // A container runs its entrypoint (--entrypoint when given) with the words after the image. The
+  // word right after the image is a command only when it is not an option: an option there, and
+  // everything after it, is the entrypoint's.
+  const entrypoint = [];
+  for (let i = at + 1; i < target; i++) {
+    if (args[i] === '--entrypoint') entrypoint.push(args[i + 1]);
+    else if (args[i].startsWith('--entrypoint=')) entrypoint.push(args[i].slice('--entrypoint='.length));
+  }
+  const next = args[target + 1];
+  return [args[target], ...entrypoint, ...(next !== undefined && !next.startsWith('-') ? [next] : [])];
 }
 
 // Checks that test, build or analyse the change: the ones a merge should wait for. Matched on the
