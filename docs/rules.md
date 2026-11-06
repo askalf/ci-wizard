@@ -312,9 +312,13 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   expression gets no example. No example is offered that still interpolates untrusted text. Where the rewrite cannot be
   certain (a cmd or python shell, a heredoc, a runner OS from a matrix) there is no example rather
   than one that changes the step. A shell step gets the rewrite only when every command in its
-  script is one known to take its arguments as data (echo, printf, gh, git, curl, test, file
-  utilities and the like): a command by any other name, a path to one, a pipe into a shell, a
-  command held in a variable, or a substitution inside a string gives no example. Nor is there one
+  script is one known to take its arguments as data, with no option that runs or loads a program or
+  evaluates an argument: echo, printf, test, file and text utilities, git with checkout, switch,
+  commit, tag, branch, add, status or rev-parse, and gh with its pr, issue, release, label and run
+  subcommands. A command by any other name, a path to any command (a file the script wrote can carry
+  an allowed name), sudo, a pipe into a shell, a command held in a variable, a substitution inside a
+  string, or a write to `$GITHUB_ENV`, `$GITHUB_PATH` or `$GITHUB_OUTPUT` (a newline in the value
+  sets another variable; the fix says to use a random multiline delimiter) gives no example. Nor is there one
   where the expression goes to a second parser
   (`bash -c`, `eval`, `ssh`, `awk`, `sed`, `jq`, `python -c`, a github-script `exec`), anywhere in
   the same command, a quoted string across lines and a backslash continuation included: the outer

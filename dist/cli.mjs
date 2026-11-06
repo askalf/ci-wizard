@@ -8499,7 +8499,8 @@ function shellLang(shell, runsOn) {
 var NESTED = {
   posix: [
     /\b(ba|z|da|k|fi|c|tc)?sh\s+(-[A-Za-z]+\s+)*-[A-Za-z]*c\b/,
-    /(^|[\s;&|(`'"\\/])(eval|source|exec|ssh|su|xargs|awk|gawk|mawk|nawk|sed|jq|yq|envsubst|osascript)\b/,
+    /(^|[\s;&|(`'"\\/=])(eval|source|exec|ssh|su|xargs|awk|gawk|mawk|nawk|sed|jq|yq|envsubst|osascript)\b/,
+    /--(checkpoint-action|to-command|use-compress-program|compress-program|upload-pack|receive-pack|use-askpass|split-string)\b/,
     /(^|[\s;&|(`])\.\s/,
     /\|\s*(\S*\/)?(ba|z|da|k|fi|c|tc)?sh\b/,
     /\b(python[0-9.]*|node|nodejs|deno|bun|perl|ruby|php|pwsh|powershell|Rscript|lua)\b[^\n]*\s-(c|e|E|r|Command|eval|exec)\b/,
@@ -8566,38 +8567,33 @@ function nestedInterpreter(script, offset, lang) {
   return (NESTED[lang] || []).some((re) => re.test(text));
 }
 var DATA_COMMANDS = {
+  // Each checked for options that run or load a program (tar --checkpoint-action, sort
+  // --compress-program, wget --use-askpass, curl --engine) or evaluate an argument (declare, read,
+  // unset and [[ evaluate an array subscript such as a[$(cmd)]); those are left out. chmod is left
+  // out so a file the script writes cannot be made executable.
   posix: /* @__PURE__ */ new Set([
     "echo",
     "printf",
-    "gh",
-    "git",
-    "curl",
-    "wget",
     "test",
     "[",
-    "[[",
     "cd",
-    "pushd",
-    "popd",
     "mkdir",
-    "cp",
-    "mv",
+    "touch",
     "rm",
     "rmdir",
-    "ln",
-    "touch",
+    "cp",
+    "mv",
     "cat",
     "tee",
-    "grep",
-    "egrep",
-    "fgrep",
     "head",
     "tail",
     "wc",
-    "sort",
-    "uniq",
     "cut",
     "tr",
+    "grep",
+    "egrep",
+    "fgrep",
+    "uniq",
     "ls",
     "basename",
     "dirname",
@@ -8610,30 +8606,15 @@ var DATA_COMMANDS = {
     ":",
     "exit",
     "return",
-    "export",
-    "local",
-    "declare",
-    "readonly",
-    "typeset",
-    "set",
-    "unset",
-    "shift",
-    "read",
-    "base64",
     "sha256sum",
     "sha1sum",
     "md5sum",
-    "tar",
-    "zip",
-    "unzip",
-    "gzip",
-    "gunzip",
-    "chmod",
-    "chown",
+    "base64",
+    "printenv",
     "mktemp",
-    "diff",
     "cmp",
-    "printenv"
+    "gh",
+    "git"
   ]),
   pwsh: /* @__PURE__ */ new Set([
     "write-host",
@@ -8657,11 +8638,28 @@ var DATA_COMMANDS = {
     "exit"
   ])
 };
+var GIT_SUBCOMMANDS = /* @__PURE__ */ new Set(["checkout", "switch", "commit", "tag", "branch", "add", "status", "rev-parse"]);
+var GH_SUBCOMMANDS = {
+  pr: /* @__PURE__ */ new Set(["comment", "edit", "create", "view", "close", "reopen", "review", "list", "ready", "lock", "unlock", "status", "merge"]),
+  issue: /* @__PURE__ */ new Set(["comment", "edit", "create", "view", "close", "reopen", "list", "lock", "unlock", "status"]),
+  release: /* @__PURE__ */ new Set(["create", "view", "list", "edit", "upload", "download"]),
+  label: /* @__PURE__ */ new Set(["create", "edit", "list"]),
+  run: /* @__PURE__ */ new Set(["view", "list"])
+};
+function argumentsAreData(name, args) {
+  const bare = args.map((w) => w.replace(/^(['"])(.*)\1$/, "$2"));
+  if (name === "git") return GIT_SUBCOMMANDS.has(bare[0]) && !bare.some((w) => /^(-[cuxO]|--(exec|upload-pack|receive-pack|config|template|run))/.test(w));
+  if (name === "gh") return Boolean(GH_SUBCOMMANDS[bare[0]] && GH_SUBCOMMANDS[bare[0]].has(bare[1]));
+  if (name === "printf" || name === "test" || name === "[") return !bare.some((w) => w === "-v" || w === "-R");
+  return true;
+}
 var SHELL_KEYWORDS = /* @__PURE__ */ new Set(["if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "{", "}", "time", "esac", "elseif", "try", "catch", "finally"]);
 var SKIP_SEGMENT = /* @__PURE__ */ new Set(["for", "case", "select", "function", "foreach", "switch"]);
+var ENV_FILE = /GITHUB_(ENV|PATH|OUTPUT|STATE)\b/;
 function onlyDataCommands(script, lang) {
   const safe = DATA_COMMANDS[lang];
   if (!safe) return false;
+  if (ENV_FILE.test(script)) return false;
   const text = lang === "pwsh" ? script.replace(/`\r?\n/g, " ") : script.replace(/\\\r?\n/g, "");
   const ends = new Map([...text.matchAll(/\$\{\{[\s\S]*?\}\}/g)].map((m) => [m.index, m.index + m[0].length]));
   const segments = [[]];
@@ -8745,7 +8743,7 @@ function onlyDataCommands(script, lang) {
   }
   if (quote) return false;
   endWord();
-  const PREFIX = /* @__PURE__ */ new Set(["sudo", "env", "nohup", "nice", "timeout", "stdbuf", "command", "builtin"]);
+  const PREFIX = /* @__PURE__ */ new Set(["env", "nohup", "nice", "timeout", "stdbuf", "command", "builtin"]);
   for (const seg of segments) {
     let k = 0;
     if (lang === "pwsh" && /^\$[\w:]+$/.test(seg[0] || "") && seg[1] === "=") k = 2;
@@ -8754,15 +8752,17 @@ function onlyDataCommands(script, lang) {
       if (k >= seg.length) break;
       if (SKIP_SEGMENT.has(seg[k].toLowerCase())) break;
       let name = seg[k].replace(/^(['"])(.*)\1$/, "$2");
-      if (/[$`*?'"&]/.test(name) || name === ".") return false;
-      name = name.split("/").pop();
+      if (/[$`*?'"&/\\]/.test(name) || name === ".") return false;
       if (lang === "pwsh") name = name.toLowerCase();
       if (lang === "posix" && PREFIX.has(name)) {
         k += 1;
-        while (k < seg.length && /^(-|\d+[smhd]?$|[A-Za-z_]\w*=)/.test(seg[k])) k += 1;
+        while (k < seg.length && /^(-|\d+[smhd]?$|[A-Za-z_]\w*=)/.test(seg[k])) {
+          if (name === "env" && /^(-S|--split-string)/.test(seg[k])) return false;
+          k += 1;
+        }
         continue;
       }
-      if (!safe.has(name)) return false;
+      if (!safe.has(name) || !argumentsAreData(name, seg.slice(k + 1))) return false;
       break;
     }
   }
@@ -8966,7 +8966,8 @@ function scanWorkflow(text) {
         const hits = untrustedExpressions(sc.script);
         if (!hits.length) continue;
         const example = rewriteStep(st, sc);
-        for (const hit of hits) injections.push({ job: id, step, ...hit, example, nested: Boolean(sc.lang && typeof sc.script === "string" && nestedInterpreter(sc.script, hit.index, sc.lang)) });
+        const envFile = typeof sc.script === "string" && ENV_FILE.test(sc.script);
+        for (const hit of hits) injections.push({ job: id, step, ...hit, example, envFile, nested: Boolean(sc.lang && typeof sc.script === "string" && nestedInterpreter(sc.script, hit.index, sc.lang)) });
       }
     });
   }
@@ -9007,7 +9008,7 @@ function scanFindings(files) {
       what: "untrusted input in a script",
       workflow: where([...new Set(injections.map((x) => x.path))]),
       evidence: `${list(injections.map((x) => `${x.path} job ${x.job}, ${x.step}: ${x.expression}`), 4)}; the expression is pasted into the script before it runs, so a title, branch name or comment written as shell code runs as shell code`,
-      fix: "pass the value through an environment variable and quote it in the script, so it is read as data and never parsed as code" + (injections.some((x) => x.nested) ? `. ${injections.filter((x) => x.nested).length === injections.length ? "Here the" : "Where the"} script hands the value to a second parser (bash -c, eval, ssh, awk, sed, jq, a github-script exec), the variable must reach that parser as data too: let the inner program read it from the environment itself (bash -c 'echo "$TITLE"', in single quotes) or pass it as a separate argument (jq --arg), never expand it into the command or program text` : ""),
+      fix: "pass the value through an environment variable and quote it in the script, so it is read as data and never parsed as code" + (injections.some((x) => x.nested) ? `. ${injections.filter((x) => x.nested).length === injections.length ? "Here the" : "Where the"} script hands the value to a second parser (bash -c, eval, ssh, awk, sed, jq, a github-script exec), the variable must reach that parser as data too: let the inner program read it from the environment itself (bash -c 'echo "$TITLE"', in single quotes) or pass it as a separate argument (jq --arg), never expand it into the command or program text` : "") + (injections.some((x) => x.envFile) ? ". Writing the value to $GITHUB_ENV, $GITHUB_PATH or $GITHUB_OUTPUT is an injection of its own, since a newline in it sets another variable for every later step: write it with a random multiline delimiter (NAME<<DELIM … DELIM), or not at all" : ""),
       tradeoff: "none to speak of: the step reads the same value, and only the shell no longer executes it",
       // The first step that can be rewritten with certainty, as it stands with only its expressions
       // moved to env; none when no step can (a cmd or python shell, a heredoc, a matrix OS).

@@ -164,14 +164,14 @@ test('the injection example is the step itself, command and settings kept, read 
     "        if: github.event.action == 'opened'",
     '        env:',
     '          GH_TOKEN: ${{ github.token }}',
-    "        run: gh pr edit --add-label ${{ github.head_ref }} && git push origin '${{ github.head_ref }}'",
+    "        run: gh pr edit --add-label ${{ github.head_ref }} && git checkout '${{ github.head_ref }}'",
     '        working-directory: app',
   ].join('\n') + '\n'))[0];
   assert.equal(label.name, 'Label');
   assert.equal(label.if, "github.event.action == 'opened'");
   assert.equal(label['working-directory'], 'app');
   assert.deepEqual(label.env, { GH_TOKEN: '${{ github.token }}', HEAD_REF: '${{ github.head_ref }}' });
-  assert.equal(label.run, 'gh pr edit --add-label "$HEAD_REF" && git push origin "$HEAD_REF"');
+  assert.equal(label.run, 'gh pr edit --add-label "$HEAD_REF" && git checkout "$HEAD_REF"');
 
   // github-script: the script reads process.env, in a plain string and in a template literal; the
   // step's other inputs stay.
@@ -241,8 +241,27 @@ test('the injection example is left out where the rewrite cannot be certain', ()
   assert.equal(injectionExample('      - run: make VERSION=${{ github.head_ref }}\n'), ''); // make expands it into a recipe
   assert.equal(injectionExample('      - run: echo "today $(date) ${{ github.head_ref }}"\n'), '');
   // Data commands, through sudo, env or an assignment, and keywords, still get the rewrite.
-  assert.equal(parse(injectionExample('      - run: |\n          if [ -n "${{ github.head_ref }}" ]; then\n            sudo -E git checkout ${{ github.head_ref }}\n          fi\n          REF=x env -i gh pr view\n'))[0].run,
-    'if [ -n "${HEAD_REF}" ]; then\n  sudo -E git checkout "$HEAD_REF"\nfi\nREF=x env -i gh pr view\n');
+  assert.equal(parse(injectionExample('      - run: |\n          if [ -n "${{ github.head_ref }}" ]; then\n            timeout 60 git checkout ${{ github.head_ref }}\n          fi\n          REF=x env -i gh pr view\n'))[0].run,
+    'if [ -n "${HEAD_REF}" ]; then\n  timeout 60 git checkout "$HEAD_REF"\nfi\nREF=x env -i gh pr view\n');
+  // Options that run a program, and commands that have them, give no example.
+  assert.equal(injectionExample('      - run: tar -cf out.tar --checkpoint=1 --checkpoint-action=exec="${{ github.event.issue.title }}" file\n'), '');
+  assert.equal(injectionExample('      - run: git fetch origin ${{ github.head_ref }}\n'), ''); // fetch takes --upload-pack
+  assert.equal(injectionExample('      - run: git -c core.pager=less status ${{ github.head_ref }}\n'), '');
+  assert.equal(injectionExample('      - run: gh api ${{ github.event.issue.title }}\n'), '');
+  assert.equal(injectionExample('      - run: env -S "echo ${{ github.head_ref }}"\n'), '');
+  assert.equal(injectionExample('      - run: echo "${{ github.head_ref }}" | sudo tee /usr/local/bin/gh\n'), '');
+  assert.equal(injectionExample('      - run: declare "${{ github.head_ref }}"\n'), '');
+  // A file the script writes and runs, even under an allowed name: a path is never classified.
+  assert.equal(injectionExample('      - run: |\n          echo "${{ github.event.issue.body }}" > git\n          chmod +x git\n          ./git\n'), '');
+  assert.equal(injectionExample('      - run: |\n          echo "${{ github.event.issue.body }}" > git\n          ./git status\n'), '');
+  assert.equal(injectionExample('      - run: /usr/bin/git status ${{ github.head_ref }}\n'), '');
+  // An environment or output file: a newline in the value sets another variable.
+  assert.equal(injectionExample('      - run: echo "TITLE=${{ github.event.issue.title }}" >> "$GITHUB_ENV"\n'), '');
+  const envf = scanFindings(new Map([['.github/workflows/ci.yml', 'on: [pull_request]\npermissions: {}\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo "TITLE=${{ github.event.issue.title }}" >> "$GITHUB_ENV"\n']])).find((x) => x.what === 'untrusted input in a script');
+  assert.match(envf.fix, /\$GITHUB_ENV.*random multiline delimiter/);
+  const tarf = scanFindings(new Map([['.github/workflows/ci.yml', 'on: [pull_request]\npermissions: {}\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: tar -cf o.tar --checkpoint-action=exec="${{ github.event.issue.title }}" f\n']])).find((x) => x.what === 'untrusted input in a script');
+  assert.equal(tarf.example, '');
+  assert.match(tarf.fix, /second parser/);
   // The second-parser warning names the absolute-path case too.
   const ssh = scanFindings(new Map([['.github/workflows/ci.yml', 'on: [pull_request]\npermissions: {}\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: /usr/bin/ssh host "echo ${{ github.event.issue.title }}"\n']])).find((x) => x.what === 'untrusted input in a script');
   assert.equal(ssh.example, '');
