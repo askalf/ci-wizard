@@ -8423,9 +8423,10 @@ function untrustedExpressions(script) {
   return out;
 }
 function envNameFor(field) {
-  const parts = String(field).replace(/\[[^\]]*\]|\.\*/g, "").split(".");
+  const parts = String(field).replace(/\[[^\]]*\]/g, "").split(".").filter((p) => p && p !== "*" && !/^\d+$/.test(p));
   const last = parts.slice(-2).join("_").replace(/^pull_request_/, "PR_").replace(/^github_/, "");
-  return last.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase();
+  const name = last.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").toUpperCase();
+  return /^[A-Z_]/.test(name) ? name : `VALUE${name ? `_${name}` : ""}`;
 }
 function shellLang(shell, runsOn) {
   if (shell !== void 0 && shell !== null) {

@@ -160,9 +160,12 @@ export function untrustedExpressions(script) {
 
 /** A shell-safe variable name for a field: github.event.pull_request.title becomes PR_TITLE. */
 export function envNameFor(field) {
-  const parts = String(field).replace(/\[[^\]]*\]|\.\*/g, '').split('.');
+  // Index and filter segments (commits[0], commits['0'], commits.*) name nothing: dropped.
+  const parts = String(field).replace(/\[[^\]]*\]/g, '').split('.').filter((p) => p && p !== '*' && !/^\d+$/.test(p));
   const last = parts.slice(-2).join('_').replace(/^pull_request_/, 'PR_').replace(/^github_/, '');
-  return last.replace(/[^A-Za-z0-9]+/g, '_').toUpperCase();
+  const name = last.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase();
+  // A shell variable starts with a letter or an underscore.
+  return /^[A-Z_]/.test(name) ? name : `VALUE${name ? `_${name}` : ''}`;
 }
 
 /** The script language of a run step: posix for bash and sh, pwsh for PowerShell, else null. */

@@ -124,6 +124,13 @@ test('envNameFor: a short, shell-safe name for the field', () => {
   assert.equal(envNameFor('github.head_ref'), 'HEAD_REF');
   assert.equal(envNameFor('github.event.comment.body'), 'COMMENT_BODY');
   assert.equal(envNameFor('github.event.commits[0].message'), 'COMMITS_MESSAGE');
+  assert.equal(envNameFor('github.event.commits.0.message'), 'COMMITS_MESSAGE'); // commits['0']
+  assert.equal(envNameFor('github.event.pages.12.page_name'), 'PAGES_PAGE_NAME');
+  assert.equal(envNameFor('github.event.*.title'), 'EVENT_TITLE');
+  assert.equal(envNameFor('github.event.commits.*.author.*'), 'COMMITS_AUTHOR');
+  for (const f of ['github.event.commits.0.message', 'github.event.issue.*', 'github', 'github.event.pages.12.page_name', '0.1']) {
+    assert.match(envNameFor(f), /^[A-Z_][A-Z0-9_]*$/, f);
+  }
 });
 
 const wf = (steps, top = '', jobExtra = '') => `on: [pull_request]\n${top}jobs:\n  build:\n${jobExtra}    runs-on: ubuntu-latest\n    steps:\n${steps}`;
@@ -219,6 +226,10 @@ test('the injection example is the pattern, in the step\'s language, never a rew
   // An expression with a colon and a space is quoted as a YAML value and kept whole.
   const colon = parse(injectionExample("      - run: |\n          echo \"${{ format('Title: {0}', github.event.issue.title) }}\"\n").example)[0];
   assert.equal(colon.env.ISSUE_TITLE, "${{ format('Title: {0}', github.event.issue.title) }}");
+  // A numeric-string index names a valid variable, read the same way.
+  const idx = parse(injectionExample("      - run: echo \"${{ github.event.commits['0'].message }}\"\n").example)[0];
+  assert.deepEqual(Object.keys(idx.env), ['COMMITS_MESSAGE']);
+  assert.match(idx.run, /"\$COMMITS_MESSAGE"/);
   // A step name YAML would misread (a colon, a #) is quoted, so the example still parses.
   assert.equal(parse(injectionExample('      - name: "Greet: #1"\n        run: echo ${{ github.head_ref }}\n').example)[0].name, 'Greet: #1');
   // An unknown shell (a matrix OS) gets the forms for the shells it could be, said as such.
