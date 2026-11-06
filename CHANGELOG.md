@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Found by auditing real repositories:
+
+- A workflow is labelled with its own name from the workflows API (one call). A workflow with
+  `run-name:` names each run after its pull request, so the most common run name could be a pull
+  request's title. If the workflows answer can't be read, the run names still label it.
+- The repository root is listed as `contents`, not `contents/`. The trailing slash is not the
+  documented form, and a proxy in front of the API refused it.
+
 Security scans of every workflow file (up to 30, not only the sampled workflows'):
 
 - **actions not pinned to a commit**: a step or reusable-workflow `uses:` on a tag or branch, which
