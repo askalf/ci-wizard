@@ -295,7 +295,7 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   outside contributor writes, per GitHub's security-hardening guide: an issue, pull request or
   discussion title or body; a comment or review body; a commit message or author; a head branch name
   or label (`github.head_ref`, `pull_request.head.ref`); a page name. The expression has to carry
-  the text into the script: the field itself, an object that holds it (`toJSON(github.event)`), or
+  the text into the script: the field itself, an object that holds it (`toJSON(github.event)`, `toJSON(github.event.commits[0])`), or
   `format`, `join`, `||` and the right side of `&&` passing it on. A boolean result (`contains(...)`,
   a comparison, a negation), a field that only picks a branch (`title && 'yes' || 'no'`) and a field
   name inside a quoted literal are not text from outside. Property names match in any case, as
@@ -308,7 +308,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   `${env:VAR}` for PowerShell, `process.env.VAR` for github-script. Where the rewrite cannot be
   certain (a cmd or python shell, a heredoc, a runner OS from a matrix) there is no example rather
   than one that changes the step. Nor is there one where the expression goes to a second parser
-  (`bash -c`, `eval`, `ssh`, `awk`, `sed`, `jq`, `python -c`, a github-script `exec`): the outer
+  (`bash -c`, `eval`, `ssh`, `awk`, `sed`, `jq`, `python -c`, a github-script `exec`), anywhere in
+  the same command, a quoted string across lines included: the outer
   shell would expand the variable into the inner program's text, so the fix says the value must
   reach that program as data as well. *Trade-off:* none to speak of: the step reads the same value, and
   only the shell no longer runs it.

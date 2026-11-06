@@ -8321,7 +8321,12 @@ var CONTAINERS = /* @__PURE__ */ new Set([
   "github.event.head_commit.author",
   "github.event.workflow_run",
   "github.event.workflow_run.head_commit",
-  "github.event.workflow_run.head_commit.author"
+  "github.event.workflow_run.head_commit.author",
+  // An element of a collection (commits[0], commits.*, pages[0]) holds its message, author or page
+  // name just as the collection does.
+  "github.event.commits.*",
+  "github.event.commits.*.author",
+  "github.event.pages.*"
 ]);
 function pathOf(node) {
   if (node.k === "ctx") return node.path[0];
@@ -8347,7 +8352,7 @@ function flowingFields(node) {
       const path = spelled.toLowerCase();
       const norm = path.replace(/\[[^\]]*\]/g, ".*").replace(/\.\*\.\*/g, ".*");
       if (UNTRUSTED_FULL.test(path) || UNTRUSTED_FULL.test(norm)) return [path];
-      if (CONTAINERS.has(path)) return [path];
+      if (CONTAINERS.has(path) || CONTAINERS.has(norm)) return [path];
       return [];
     }
     // a || b gives a when a is truthy, else b: either can be the result. a && b gives a only when a
@@ -8518,15 +8523,54 @@ var NESTED = {
   pwsh: [/\b(Invoke-Expression|iex|Invoke-Command|Start-Process|cmd(\.exe)?|bash|sh|wsl|pwsh|powershell|python[0-9.]*|node)\b/i, /\s-(Command|c|e|EncodedCommand)\b/i],
   js: [/\b(eval|Function|exec|execSync|execFile|execFileSync|spawn|spawnSync|execa|execaCommand|runInNewContext|runInThisContext)\s*\(/, /\$`/, /child_process/]
 };
-function commandLine(script, offset) {
-  let start = script.lastIndexOf("\n", offset - 1) + 1;
-  while (start > 1 && script[start - 2] === "\\") start = script.lastIndexOf("\n", start - 2) + 1;
-  let end = script.indexOf("\n", offset);
-  while (end > 0 && script[end - 1] === "\\") end = script.indexOf("\n", end + 1);
-  return script.slice(start, end < 0 ? script.length : end);
+function commandAt(script, offset, lang) {
+  const spans = [...script.matchAll(/\$\{\{[\s\S]*?\}\}/g)].map((m) => [m.index, m.index + m[0].length]);
+  const spanAt = new Map(spans);
+  let start = 0;
+  let quote = null;
+  let depth = 0;
+  for (let i = 0; i < script.length; i += 1) {
+    if (spanAt.has(i)) {
+      i = spanAt.get(i) - 1;
+      continue;
+    }
+    const c = script[i];
+    if (quote === "'") {
+      if (c === "'") {
+        if (lang === "pwsh" && script[i + 1] === "'") {
+          i += 1;
+          continue;
+        }
+        quote = null;
+      }
+      continue;
+    }
+    if (c === (lang === "pwsh" ? "`" : "\\")) {
+      i += 1;
+      continue;
+    }
+    if (quote === '"') {
+      if (c === '"') quote = null;
+      else if (c === "$" && script[i + 1] === "(") {
+        depth += 1;
+        i += 1;
+      }
+      continue;
+    }
+    if (c === "'" || c === '"') quote = c;
+    else if (c === "$" && script[i + 1] === "(") {
+      depth += 1;
+      i += 1;
+    } else if (c === ")" && depth > 0) depth -= 1;
+    else if (c === "\n" && depth === 0) {
+      if (offset >= start && offset < i) return script.slice(start, i);
+      start = i + 1;
+    }
+  }
+  return quote || depth ? script : script.slice(start);
 }
 function nestedInterpreter(script, offset, lang) {
-  const text = lang === "js" ? script : commandLine(script, offset);
+  const text = lang === "js" ? script : commandAt(script, offset, lang);
   return (NESTED[lang] || []).some((re) => re.test(text));
 }
 function reference(lang, ctx, name) {

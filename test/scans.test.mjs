@@ -61,6 +61,13 @@ test('untrustedExpressions: only an expression whose value carries the text; a b
   assert.deepEqual(hits('echo "${{ GitHub.Event.Pull_Request.Head.Ref }}"'), ['github.event.pull_request.head.ref']);
   assert.deepEqual(hits("echo ${{ github.event['Issue']['Body'] }}"), ['github.event.issue.body']);
   assert.deepEqual(hits('echo ${{ toJSON(GITHUB.EVENT) }}'), ['github.event']);
+  // An element of a collection carries its message, author or page name; its other leaves do not.
+  assert.deepEqual(hits("echo '${{ toJSON(github.event.commits[0]) }}'"), ['github.event.commits[0]']);
+  assert.deepEqual(hits("echo '${{ toJSON(github.event.commits.*) }}'"), ['github.event.commits.*']);
+  assert.deepEqual(hits("echo '${{ toJSON(github.event.commits[0].author) }}'"), ['github.event.commits[0].author']);
+  assert.deepEqual(hits("echo '${{ toJSON(github.event.pages[0]) }}'"), ['github.event.pages[0]']);
+  assert.deepEqual(hits('echo ${{ github.event.commits[0].id }} ${{ github.event.commits[0].url }} ${{ github.event.pages[0].sha }}'), []);
+  assert.deepEqual(hits('echo ${{ toJSON(github.event.commits[0].id) }}'), []);
   // An expression that does not parse falls back to the name, also in any case.
   assert.deepEqual(hits('echo ${{ github.event.issue.TITLE ) }}'), ['github.event.issue.title']);
 });
@@ -195,6 +202,10 @@ test('the injection example is left out where the rewrite cannot be certain', ()
   assert.equal(injectionExample('      - run: ssh host "deploy ${{ github.head_ref }}"\n'), '');
   assert.equal(injectionExample("      - run: jq '.x == \"${{ github.head_ref }}\"' f.json\n"), '');
   assert.equal(injectionExample('      - run: |\n          docker run img \\\n            sh -c "echo ${{ github.head_ref }}"\n'), '');
+  // A quoted command string across lines is one command: bash -c on the first, the expression on the next.
+  assert.equal(injectionExample('      - run: |\n          bash -c "echo\n          ${{ github.event.issue.title }}"\n'), '');
+  assert.equal(injectionExample("      - run: |\n          sh -c '\n            echo ${{ github.head_ref }}\n          '\n"), '');
+  assert.equal(injectionExample('      - run: |\n          out=$(bash -c "\n            echo ${{ github.head_ref }}")\n'), '');
   assert.equal(injectionExample('      - run: python -c "print(\'${{ github.head_ref }}\')"\n'), '');
   assert.equal(injectionExample('      - run: Invoke-Expression "echo ${{ github.head_ref }}"\n', 'windows-latest'), '');
   assert.equal(injectionExample(`      - uses: actions/github-script@${SHA}\n        with:\n          script: await exec.exec(\`git tag \${{ github.head_ref }}\`)\n`), '');
