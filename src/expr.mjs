@@ -319,6 +319,31 @@ export function evaluate(node, ctx) {
 }
 
 /**
+ * Each `${{ … }}` in a text, its end found the way GitHub finds it: a `}}` inside a single-quoted
+ * string (with '' as an escaped quote) does not close the expression. An unterminated one ends the
+ * search.
+ */
+export function expressionSpans(text) {
+  const s = String(text ?? '');
+  const out = [];
+  let i = s.indexOf('${{');
+  while (i >= 0) {
+    let j = i + 3;
+    let quoted = false;
+    for (; j < s.length; j += 1) {
+      if (quoted) {
+        if (s[j] === "'") { if (s[j + 1] === "'") j += 1; else quoted = false; }
+      } else if (s[j] === "'") quoted = true;
+      else if (s[j] === '}' && s[j + 1] === '}') break;
+    }
+    if (j >= s.length) break;
+    out.push({ index: i, end: j + 2, expression: s.slice(i, j + 2), body: s.slice(i + 3, j) });
+    i = s.indexOf('${{', j + 2);
+  }
+  return out;
+}
+
+/**
  * The value of a workflow field for a context: a plain value as it is (arrays element by element),
  * a `${{ }}` string evaluated, an `if` (which may omit the braces) evaluated as an expression.
  * UNKNOWN when it cannot be parsed or resolved.
@@ -328,10 +353,11 @@ export function valueOf(field, ctx, { isIf = false } = {}) {
   if (Array.isArray(field)) return field.map((f) => valueOf(f, ctx));
   if (field && typeof field === 'object') return Object.fromEntries(Object.entries(field).map(([k, v]) => [k, valueOf(v, ctx)]));
   if (typeof field !== 'string') return field;
-  const whole = /^\s*\$\{\{([\s\S]*)\}\}\s*$/.exec(field);
+  const spans = expressionSpans(field);
+  const whole = spans.length === 1 && field.slice(0, spans[0].index).trim() === '' && field.slice(spans[0].end).trim() === '' ? spans[0] : null;
   if (whole || isIf) {
     try {
-      return evaluate(parseExpr(whole ? whole[1] : field), ctx);
+      return evaluate(parseExpr(whole ? whole.body : field), ctx);
     } catch {
       return UNKNOWN;
     }
@@ -339,16 +365,20 @@ export function valueOf(field, ctx, { isIf = false } = {}) {
   // A string with expressions inside other text is an interpolation; any part we cannot resolve
   // leaves the whole unknown.
   if (field.includes('${{')) {
-    let unknown = false;
-    const out = field.replace(/\$\{\{([\s\S]*?)\}\}/g, (_, e) => {
+    // An unterminated expression is not text GitHub would pass through: unknown.
+    if (field.indexOf('${{', spans.length ? spans[spans.length - 1].end : 0) >= 0) return UNKNOWN;
+    let out = '';
+    let at = 0;
+    for (const sp of spans) {
       let v;
-      try { v = evaluate(parseExpr(e), ctx); } catch { v = UNKNOWN; }
+      try { v = evaluate(parseExpr(sp.body), ctx); } catch { v = UNKNOWN; }
       // An opaque value (the fork's name, a commit) has no text of its own, so a string built
       // around one is unknown, never '[object Object]'.
-      if (v === UNKNOWN || isOpaque(v) || (v && typeof v === 'object')) unknown = true;
-      return unknown ? '' : String(v ?? '');
-    });
-    return unknown ? UNKNOWN : out;
+      if (v === UNKNOWN || isOpaque(v) || (v && typeof v === 'object')) return UNKNOWN;
+      out += field.slice(at, sp.index) + String(v ?? '');
+      at = sp.end;
+    }
+    return out + field.slice(at);
   }
   return field;
 }

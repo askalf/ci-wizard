@@ -316,7 +316,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   `os.environ`; a cmd step gets no example, since cmd expands `%VAR%` before it parses the line,
   and the fix says to run it in bash or pwsh; a step whose shell is unknown (a matrix OS) gets the
   bash and PowerShell forms, said as such. An expression is followed through computed values too:
-  `fromJSON(toJSON(github.event)).issue.title` carries the title. *Trade-off:* none to
+  `fromJSON(toJSON(github.event)).issue.title` carries the title. It ends where GitHub ends it (a
+  `}}` inside a quoted string does not), a key built from constants is resolved
+  (`issue[format('tit{0}', 'le')]` is the title), and a key that reads the run
+  (`issue[inputs.field]`) counts wherever the object can hold untrusted text. *Trade-off:* none to
   speak of: the step reads the same value, and only the shell no longer runs it.
 
 ## job token wider than the job

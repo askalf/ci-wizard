@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parse } from 'yaml';
 import { envNameFor, parseUses, scanFindings, scanWorkflow, untrustedExpressions } from '../src/scans.mjs';
+import { expressionSpans, valueOf } from '../src/expr.mjs';
 import { analyse } from '../src/analyse.mjs';
 import { collect } from '../src/collect.mjs';
 import { createClient } from '../src/github.mjs';
@@ -61,6 +62,17 @@ test('untrustedExpressions: only an expression whose value carries the text; a b
   assert.deepEqual(hits('echo "${{ GitHub.Event.Pull_Request.Head.Ref }}"'), ['github.event.pull_request.head.ref']);
   assert.deepEqual(hits("echo ${{ github.event['Issue']['Body'] }}"), ['github.event.issue.body']);
   assert.deepEqual(hits('echo ${{ toJSON(GITHUB.EVENT) }}'), ['github.event']);
+  // }} inside a quoted string does not end the expression, as GitHub reads it.
+  assert.deepEqual(hits("echo \"${{ format('}}{0}', github.event.issue.title) }}\""), ['github.event.issue.title']);
+  assert.deepEqual(hits("echo ${{ format('it''s }}{0}', github.event.issue.body) }}"), ['github.event.issue.body']);
+  assert.deepEqual(hits("echo ${{ format('}}{0}', github.event.issue.number) }}"), []);
+  // A computed key: one built from constants is resolved; one that reads the run counts where the
+  // object can hold untrusted text.
+  assert.deepEqual(hits("echo ${{ github.event.issue[format('tit{0}', 'le')] }}"), ['github.event.issue.title']);
+  assert.deepEqual(hits("echo ${{ github.event.issue[format('num{0}', 'ber')] }}"), []);
+  assert.deepEqual(hits('echo ${{ github.event.issue[inputs.field] }}'), ['github.event.issue']);
+  assert.deepEqual(hits('echo ${{ github.event.commits[inputs.i].message }}'), ['github.event.commits']);
+  assert.deepEqual(hits('echo ${{ github.event.repository[inputs.field] }}'), []); // holds no untrusted text
   // A property of a computed value carries what the value carries.
   assert.deepEqual(hits('echo "${{ fromJSON(toJSON(github.event)).issue.title }}"'), ['github.event']);
   assert.deepEqual(hits("echo ${{ fromJSON(toJSON(github.event))['issue']['body'] }}"), ['github.event']);
@@ -74,6 +86,19 @@ test('untrustedExpressions: only an expression whose value carries the text; a b
   assert.deepEqual(hits('echo ${{ toJSON(github.event.commits[0].id) }}'), []);
   // An expression that does not parse falls back to the name, also in any case.
   assert.deepEqual(hits('echo ${{ github.event.issue.TITLE ) }}'), ['github.event.issue.title']);
+});
+
+test('expressionSpans: }} inside a quoted string, and a doubled quote, do not end an expression', () => {
+  const spans = (x) => expressionSpans(x).map((sp) => sp.body);
+  assert.deepEqual(spans("a ${{ format('}}{0}', x) }} b ${{ y }}"), [" format('}}{0}', x) ", ' y ']);
+  assert.deepEqual(spans("${{ 'it''s }}' }}"), [" 'it''s }}' "]);
+  assert.deepEqual(spans('${{ x }'), []); // unterminated
+});
+
+test('valueOf: an interpolation ends each expression where GitHub does', () => {
+  assert.equal(valueOf("v-${{ format('}}{0}', 'x') }}-w", {}), 'v-}x-w');
+  assert.equal(valueOf("${{ 'a' }} and ${{ 'b' }}", {}), 'a and b'); // two expressions, not one
+  assert.equal(valueOf("  ${{ 'a' }}  ", {}), 'a');
 });
 
 test('envNameFor: a short, shell-safe name for the field', () => {

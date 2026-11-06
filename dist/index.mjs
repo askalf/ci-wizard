@@ -7907,32 +7907,58 @@ function evaluate(node, ctx) {
     }
   }
 }
+function expressionSpans(text) {
+  const s = String(text ?? "");
+  const out = [];
+  let i = s.indexOf("${{");
+  while (i >= 0) {
+    let j = i + 3;
+    let quoted = false;
+    for (; j < s.length; j += 1) {
+      if (quoted) {
+        if (s[j] === "'") {
+          if (s[j + 1] === "'") j += 1;
+          else quoted = false;
+        }
+      } else if (s[j] === "'") quoted = true;
+      else if (s[j] === "}" && s[j + 1] === "}") break;
+    }
+    if (j >= s.length) break;
+    out.push({ index: i, end: j + 2, expression: s.slice(i, j + 2), body: s.slice(i + 3, j) });
+    i = s.indexOf("${{", j + 2);
+  }
+  return out;
+}
 function valueOf(field, ctx, { isIf = false } = {}) {
   if (field === void 0) return void 0;
   if (Array.isArray(field)) return field.map((f) => valueOf(f, ctx));
   if (field && typeof field === "object") return Object.fromEntries(Object.entries(field).map(([k, v]) => [k, valueOf(v, ctx)]));
   if (typeof field !== "string") return field;
-  const whole = /^\s*\$\{\{([\s\S]*)\}\}\s*$/.exec(field);
+  const spans = expressionSpans(field);
+  const whole = spans.length === 1 && field.slice(0, spans[0].index).trim() === "" && field.slice(spans[0].end).trim() === "" ? spans[0] : null;
   if (whole || isIf) {
     try {
-      return evaluate(parseExpr(whole ? whole[1] : field), ctx);
+      return evaluate(parseExpr(whole ? whole.body : field), ctx);
     } catch {
       return UNKNOWN;
     }
   }
   if (field.includes("${{")) {
-    let unknown = false;
-    const out = field.replace(/\$\{\{([\s\S]*?)\}\}/g, (_, e) => {
+    if (field.indexOf("${{", spans.length ? spans[spans.length - 1].end : 0) >= 0) return UNKNOWN;
+    let out = "";
+    let at = 0;
+    for (const sp of spans) {
       let v;
       try {
-        v = evaluate(parseExpr(e), ctx);
+        v = evaluate(parseExpr(sp.body), ctx);
       } catch {
         v = UNKNOWN;
       }
-      if (v === UNKNOWN || isOpaque(v) || v && typeof v === "object") unknown = true;
-      return unknown ? "" : String(v ?? "");
-    });
-    return unknown ? UNKNOWN : out;
+      if (v === UNKNOWN || isOpaque(v) || v && typeof v === "object") return UNKNOWN;
+      out += field.slice(at, sp.index) + String(v ?? "");
+      at = sp.end;
+    }
+    return out + field.slice(at);
   }
   return field;
 }
@@ -8331,9 +8357,22 @@ function pathOf(node) {
   if (node.k === "index") {
     const base = pathOf(node.of);
     if (base === null) return null;
-    return node.key.k === "lit" && typeof node.key.v === "string" ? `${base}.${node.key.v}` : `${base}[${node.key.k === "lit" ? node.key.v : "*"}]`;
+    const key = constantKey(node.key);
+    if (typeof key === "string") return `${base}.${key}`;
+    return typeof key === "number" ? `${base}[${key}]` : `${base}[?]`;
   }
   return null;
+}
+function constantKey(node) {
+  if (node.k === "lit") return node.v;
+  const readsContext = (n) => n.k === "ctx" || n.of && readsContext(n.of) || n.key && typeof n.key === "object" && readsContext(n.key) || n.args && n.args.some(readsContext) || n.a && readsContext(n.a) || n.b && readsContext(n.b);
+  if (readsContext(node)) return void 0;
+  try {
+    const v = evaluate(node, {});
+    return typeof v === "string" || typeof v === "number" ? v : void 0;
+  } catch {
+    return void 0;
+  }
 }
 var PASSES_TEXT = /* @__PURE__ */ new Set(["format", "join", "tojson", "fromjson"]);
 function flowingFields(node) {
@@ -8344,6 +8383,12 @@ function flowingFields(node) {
       const spelled = pathOf(node);
       if (spelled === null) return node.k === "ctx" ? [] : flowingFields(node.of);
       const path = spelled.toLowerCase();
+      if (path.includes("[?]")) {
+        const before = path.slice(0, path.indexOf("[?]"));
+        const beforeNorm = before.replace(/\[[^\]]*\]/g, ".*");
+        const holds = CONTAINERS.has(before) || CONTAINERS.has(beforeNorm) || [...CONTAINERS].some((c) => c.startsWith(`${beforeNorm}.`));
+        return holds ? [before] : [];
+      }
       const norm = path.replace(/\[[^\]]*\]/g, ".*").replace(/\.\*\.\*/g, ".*");
       if (UNTRUSTED_FULL.test(path) || UNTRUSTED_FULL.test(norm)) return [path];
       if (CONTAINERS.has(path) || CONTAINERS.has(norm)) return [path];
@@ -8364,15 +8409,15 @@ function flowingFields(node) {
 }
 function untrustedExpressions(script) {
   const out = [];
-  for (const m of String(script ?? "").matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
+  for (const m of expressionSpans(script)) {
     let fields;
     try {
-      fields = flowingFields(parseExpr(m[1]));
+      fields = flowingFields(parseExpr(m.body));
     } catch {
-      const hit = UNTRUSTED.exec(m[1]);
+      const hit = UNTRUSTED.exec(m.body);
       fields = hit ? [hit[0].toLowerCase()] : [];
     }
-    if (fields.length) out.push({ expression: m[0], field: fields[0], fields, index: m.index });
+    if (fields.length) out.push({ expression: m.expression, field: fields[0], fields, index: m.index });
   }
   return out;
 }

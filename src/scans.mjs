@@ -3,7 +3,7 @@
 // more power than the job needs. Each reads the parsed file, so a commented-out line never counts,
 // and each finding names the file, job and step it found.
 import { parseWorkflow } from './workflow.mjs';
-import { parseExpr } from './expr.mjs';
+import { evaluate, expressionSpans, parseExpr } from './expr.mjs';
 
 /** Owners whose actions GitHub itself publishes. */
 const FIRST_PARTY = new Set(['actions', 'github']);
@@ -63,9 +63,27 @@ function pathOf(node) {
   if (node.k === 'index') {
     const base = pathOf(node.of);
     if (base === null) return null;
-    return node.key.k === 'lit' && typeof node.key.v === 'string' ? `${base}.${node.key.v}` : `${base}[${node.key.k === 'lit' ? node.key.v : '*'}]`;
+    // A key built from constants (format('tit{0}', 'le')) is the key it evaluates to; one that
+    // reads the run (inputs.field, matrix.key) is unknown, marked [?].
+    const key = constantKey(node.key);
+    if (typeof key === 'string') return `${base}.${key}`;
+    return typeof key === 'number' ? `${base}[${key}]` : `${base}[?]`;
   }
   return null;
+}
+
+/** The value of an index key that uses no context, or undefined where it reads one or fails. */
+function constantKey(node) {
+  if (node.k === 'lit') return node.v;
+  const readsContext = (n) => n.k === 'ctx' || (n.of && readsContext(n.of)) || (n.key && typeof n.key === 'object' && readsContext(n.key))
+    || (n.args && n.args.some(readsContext)) || (n.a && readsContext(n.a)) || (n.b && readsContext(n.b));
+  if (readsContext(node)) return undefined;
+  try {
+    const v = evaluate(node, {});
+    return typeof v === 'string' || typeof v === 'number' ? v : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // Functions whose result carries their arguments' text; the rest (contains, startsWith, endsWith,
@@ -86,6 +104,14 @@ function flowingFields(node) {
       // the value holds: it carries whatever its base carries.
       if (spelled === null) return node.k === 'ctx' ? [] : flowingFields(node.of);
       const path = spelled.toLowerCase();
+      // A key the scan cannot resolve could name any property: where the object before it can hold
+      // untrusted text (github.event.issue[inputs.field]), the expression counts.
+      if (path.includes('[?]')) {
+        const before = path.slice(0, path.indexOf('[?]'));
+        const beforeNorm = before.replace(/\[[^\]]*\]/g, '.*');
+        const holds = CONTAINERS.has(before) || CONTAINERS.has(beforeNorm) || [...CONTAINERS].some((c) => c.startsWith(`${beforeNorm}.`));
+        return holds ? [before] : [];
+      }
       const norm = path.replace(/\[[^\]]*\]/g, '.*').replace(/\.\*\.\*/g, '.*');
       if (UNTRUSTED_FULL.test(path) || UNTRUSTED_FULL.test(norm)) return [path];
       if (CONTAINERS.has(path) || CONTAINERS.has(norm)) return [path];
@@ -101,6 +127,7 @@ function flowingFields(node) {
   }
 }
 
+
 /**
  * The untrusted expressions in a script: each `${{ }}` whose value carries text an outside
  * contributor wrote. An expression that does not parse is judged by what it mentions, so an
@@ -108,15 +135,15 @@ function flowingFields(node) {
  */
 export function untrustedExpressions(script) {
   const out = [];
-  for (const m of String(script ?? '').matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
+  for (const m of expressionSpans(script)) {
     let fields;
     try {
-      fields = flowingFields(parseExpr(m[1]));
+      fields = flowingFields(parseExpr(m.body));
     } catch {
-      const hit = UNTRUSTED.exec(m[1]);
+      const hit = UNTRUSTED.exec(m.body);
       fields = hit ? [hit[0].toLowerCase()] : [];
     }
-    if (fields.length) out.push({ expression: m[0], field: fields[0], fields, index: m.index });
+    if (fields.length) out.push({ expression: m.expression, field: fields[0], fields, index: m.index });
   }
   return out;
 }
