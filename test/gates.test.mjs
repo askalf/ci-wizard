@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { gateFindings, isActionsCheck } from '../src/gates.mjs';
+import { savingText, summary } from '../src/report.mjs';
 import { collect } from '../src/collect.mjs';
 import { createClient } from '../src/github.mjs';
 import { fakeFetch, job, runs, t } from './helpers.mjs';
@@ -51,6 +52,13 @@ test('pull request checks merges do not wait for: tests, builds, analysis and fu
   assert.equal(f.confidence, 'inferred');
   assert.match(f.evidence, /pull requests get "Fuzz \(Jazzer\.js\)", "analyze \(actions\)"/);
   assert.match(f.evidence, /\(2 other unrequired checks not listed\)/); // label, review / redline
+  assert.match(f.evidence, /, which look like tests, builds, analysis or fuzzing, but main does not require them/);
+  assert.match(f.fix, /^add the ones that must pass/);
+  // One such check is spoken of as one, and is said to guard merges, not jobs.
+  const [single] = gateFindings(gates({ required: [{ context: 'test', integrationId: null }], pr_checks: ['test', 'Fuzz (Jazzer.js)'] }), { scanFiles: files(prFile, codeqlFile), scanned: all(2) }).filter((x) => x.what === 'pull request checks merges do not wait for');
+  assert.match(single.evidence, /"Fuzz \(Jazzer\.js\)", which looks like a test, build, analysis or fuzzing check, but main does not require it, so a pull request can merge with it failing/);
+  assert.match(single.fix, /^if it must pass, add it to the required status checks on main, by this exact name/);
+  assert.equal(savingText({ ...single, saving_min_week: 0 }), 'a guard against merging a pull request whose checks fail, not minutes');
   // Near miss: everything that looks like a gate is required.
   const none = gateFindings(gates({ required: ['test', 'Fuzz (Jazzer.js)', 'analyze (actions)'].map((context) => ({ context, integrationId: null })), pr_checks: ['test', 'Fuzz (Jazzer.js)', 'analyze (actions)', 'label'] }), { scanFiles: files(prFile, codeqlFile), scanned: all(2) });
   assert.ok(!whats(none).includes('pull request checks merges do not wait for'));
@@ -366,4 +374,15 @@ test('a workflow file is parsed once in an audit: the scans and the gate checks 
   const { parseWorkflow, withParseCache } = await import('../src/workflow.mjs');
   const text = 'on: [push]\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make\n';
   withParseCache(() => assert.equal(parseWorkflow(text), parseWorkflow(text)));
+});
+
+test('the summary says what each kind of guard guards against', () => {
+  const guard = (what) => ({ what, unit: 'guard', saving_min_week: 0, workflow: 'x' });
+  const line = (findings) => summary({ findings, job_minutes_week_sampled: 10, workflows: [] }).join('\n');
+  assert.match(line([guard('jobs without a working timeout')]), /1 finding guards against hung jobs\./);
+  assert.match(line([guard('pull request checks merges do not wait for'), guard('jobs without a working timeout')]),
+    /2 findings guard against merging a pull request whose checks fail and against hung jobs\./);
+  // A guard the report has no wording for is still counted, without a made-up purpose.
+  assert.match(line([guard('some future guard')]), /1 finding is a guard\./);
+  assert.equal(savingText(guard('some future guard')), 'a guard, not minutes');
 });

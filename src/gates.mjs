@@ -203,8 +203,10 @@ export function gateFindings(gates, { scanFiles = new Map(), scanned = null, vis
       if (gateLike.length) {
         F.push({
           saving: 0, unit: 'guard', confidence: 'inferred', what: 'pull request checks merges do not wait for', workflow: branch,
-          evidence: `pull requests get ${list(gateLike.map((n) => `"${n}"`))}, which look like tests, builds, analysis or fuzzing, but ${branch} does not require ${gateLike.length === 1 ? 'it' : 'them'}, so a pull request can merge with ${gateLike.length === 1 ? 'it' : 'them'} failing${notRequired.length > gateLike.length ? ` (${notRequired.length - gateLike.length} other unrequired check${notRequired.length - gateLike.length === 1 ? '' : 's'} not listed)` : ''}`,
-          fix: `add the ones that must pass to the required status checks on ${branch}, by these exact names`,
+          evidence: `pull requests get ${list(gateLike.map((n) => `"${n}"`))}, which ${gateLike.length === 1 ? 'looks like a test, build, analysis or fuzzing check' : 'look like tests, builds, analysis or fuzzing'}, but ${branch} does not require ${gateLike.length === 1 ? 'it' : 'them'}, so a pull request can merge with ${gateLike.length === 1 ? 'it' : 'them'} failing${notRequired.length > gateLike.length ? ` (${notRequired.length - gateLike.length} other unrequired check${notRequired.length - gateLike.length === 1 ? '' : 's'} not listed)` : ''}`,
+          fix: gateLike.length === 1
+            ? `if it must pass, add it to the required status checks on ${branch}, by this exact name`
+            : `add the ones that must pass to the required status checks on ${branch}, by these exact names`,
           tradeoff: 'a required check that is slow or flaky holds every merge; fix or speed it up before requiring it',
           example: '',
         });

@@ -25,6 +25,9 @@ and every untrusted expression found in a script was one the scan reports):
   workflow-linter uploads don't, and neither does SonarSource's quality-gate action.
 - **One parse per file:** within an audit, each distinct workflow file is parsed once and shared
   by the measurements, the scans and the gate checks. The parses are dropped when the audit ends.
+- **Each guard says what it guards against:** the required-checks guard read "a guard against
+  hung jobs", the timeout finding's wording, and the summary counted it among them. Each guard
+  now names its own purpose, and one unrequired check reads in the singular.
 - **One timeout finding:** jobs without a working timeout in several workflows are one finding,
   naming each job with its workflow, with an example block for each workflow file, instead of one
   finding per workflow.
