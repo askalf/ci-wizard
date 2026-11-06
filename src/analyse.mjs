@@ -616,7 +616,7 @@ export function analyse(repo, data) {
     visibility: data.visibility || null,
     // The scans read every workflow file collect listed (scanFiles); an audit built without that
     // listing (a caller's own data) runs no scans and says so by reporting none read.
-    scanned: data.scanned || { read: (data.scanFiles || new Map()).size, of: (data.scanFiles || new Map()).size },
+    scanned: data.scanned || { read: (data.scanFiles || new Map()).size, of: null, unreadable: [] },
     only: data.only || [],
     only_missing: data.onlyMissing || [],
     runs_total: data.runs.length,

@@ -3,6 +3,8 @@
 // more power than the job needs. Each reads the parsed file, so a commented-out line never counts,
 // and each finding names the file, job and step it found.
 import { parseWorkflow } from './workflow.mjs';
+import { parseExpr } from './expr.mjs';
+import { stringify } from 'yaml';
 
 /** Owners whose actions GitHub itself publishes. */
 const FIRST_PARTY = new Set(['actions', 'github']);
@@ -35,12 +37,74 @@ const UNTRUSTED = new RegExp([
   String.raw`github\.head_ref`,
 ].map((p) => `(?:${p})`).join('|'));
 
-/** The untrusted expressions in a script: each `${{ }}` that reads an untrusted field. */
+const UNTRUSTED_FULL = new RegExp(`^(?:${UNTRUSTED.source})$`);
+
+// Objects that hold an untrusted field: toJSON(github.event) or ${{ github.event.pull_request }}
+// carries the title and body into the script as surely as the field itself.
+const CONTAINERS = new Set([
+  'github', 'github.event', 'github.event.issue', 'github.event.pull_request', 'github.event.pull_request.head',
+  'github.event.pull_request.head.repo', 'github.event.discussion', 'github.event.comment', 'github.event.review',
+  'github.event.review_comment', 'github.event.pages', 'github.event.commits', 'github.event.head_commit',
+  'github.event.head_commit.author', 'github.event.workflow_run', 'github.event.workflow_run.head_commit',
+  'github.event.workflow_run.head_commit.author',
+]);
+
+/** The dotted path of a context reference (github.event.commits[0].message), or null for anything else. */
+function pathOf(node) {
+  if (node.k === 'ctx') return node.path[0];
+  if (node.k === 'prop') {
+    const base = pathOf(node.of);
+    return base === null ? null : `${base}.${node.key}`;
+  }
+  if (node.k === 'index') {
+    const base = pathOf(node.of);
+    if (base === null) return null;
+    return node.key.k === 'lit' && typeof node.key.v === 'string' ? `${base}.${node.key.v}` : `${base}[${node.key.k === 'lit' ? node.key.v : '*'}]`;
+  }
+  return null;
+}
+
+// Functions whose result carries their arguments' text; the rest (contains, startsWith, endsWith,
+// hashFiles, the status functions) return a boolean or a hash, never the text itself.
+const PASSES_TEXT = new Set(['format', 'join', 'tojson', 'fromjson']);
+
+/**
+ * The untrusted fields whose value reaches the result of an expression tree: the field itself, or
+ * an object holding one, through ||, && (both return an operand) and the functions that pass text
+ * on. A comparison, a negation, a boolean function or a literal yields no attacker text.
+ */
+function flowingFields(node) {
+  switch (node.k) {
+    case 'ctx': case 'prop': case 'index': {
+      const path = pathOf(node);
+      if (path === null) return [];
+      const norm = path.replace(/\[[^\]]*\]/g, '.*').replace(/\.\*\.\*/g, '.*');
+      if (UNTRUSTED_FULL.test(path) || UNTRUSTED_FULL.test(norm)) return [path];
+      if (CONTAINERS.has(path.toLowerCase())) return [path];
+      return [];
+    }
+    case '||': case '&&': return [...flowingFields(node.a), ...flowingFields(node.b)];
+    case 'call': return PASSES_TEXT.has(node.name) ? node.args.flatMap(flowingFields) : [];
+    default: return [];
+  }
+}
+
+/**
+ * The untrusted expressions in a script: each `${{ }}` whose value carries text an outside
+ * contributor wrote. An expression that does not parse is judged by what it mentions, so an
+ * unreadable one is never passed as safe.
+ */
 export function untrustedExpressions(script) {
   const out = [];
   for (const m of String(script ?? '').matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
-    const hit = UNTRUSTED.exec(m[1]);
-    if (hit) out.push({ expression: m[0], field: hit[0] });
+    let fields;
+    try {
+      fields = flowingFields(parseExpr(m[1]));
+    } catch {
+      const hit = UNTRUSTED.exec(m[1]);
+      fields = hit ? [hit[0]] : [];
+    }
+    if (fields.length) out.push({ expression: m[0], field: fields[0], fields, index: m.index });
   }
   return out;
 }
@@ -50,6 +114,158 @@ export function envNameFor(field) {
   const parts = String(field).replace(/\[[^\]]*\]|\.\*/g, '').split('.');
   const last = parts.slice(-2).join('_').replace(/^pull_request_/, 'PR_').replace(/^github_/, '');
   return last.replace(/[^A-Za-z0-9]+/g, '_').toUpperCase();
+}
+
+/**
+ * The quote context at each expression of a script, for the languages the rewrite handles. Other
+ * expressions are skipped as opaque text (they are what gets replaced). Returns a function from an
+ * expression's offset to 'none' | 'subst' | 'double' | 'single' | 'template', or null where the
+ * script is too intricate to say with certainty (a heredoc, a backtick substitution, arithmetic, a
+ * nested template), so no rewrite is offered rather than one that changes what the script does.
+ */
+function quoteContexts(script, lang, spans) {
+  const at = new Map(spans.map((sp) => [sp.start, sp]));
+  const states = new Map();
+  const stack = ['none'];
+  const top = () => stack[stack.length - 1];
+  let i = 0;
+  while (i < script.length) {
+    const sp = at.get(i);
+    if (sp) {
+      states.set(i, top());
+      i = sp.end;
+      continue;
+    }
+    const c = script[i];
+    const two = script.slice(i, i + 2);
+    const t = top();
+    if (lang === 'posix') {
+      if (t === 'single') { if (c === "'") stack.pop(); i += 1; continue; }
+      if (c === '\\') { i += 2; continue; }
+      if (c === '`' || two === '<<' || script.startsWith('$((', i)) return null;
+      if (t === 'double') {
+        if (c === '"') stack.pop();
+        else if (two === '$(') { stack.push('subst'); i += 2; continue; }
+        i += 1;
+        continue;
+      }
+      // At the top level or inside $( ): a fresh quoting context.
+      if (c === "'") stack.push('single');
+      else if (c === '"') stack.push('double');
+      else if (two === '$(') { stack.push('subst'); i += 2; continue; }
+      else if (c === '(' && t === 'subst') return null; // a subshell or case pattern inside $( )
+      else if (c === ')' && t === 'subst') stack.pop();
+      i += 1;
+      continue;
+    }
+    if (lang === 'pwsh') {
+      if (t === 'single') {
+        if (c === "'") { if (script[i + 1] === "'") { i += 2; continue; } stack.pop(); }
+        i += 1;
+        continue;
+      }
+      if (c === '`') { i += 2; continue; }
+      if (two === '@"' || two === "@'" || two === '$(') return null; // here-strings, subexpressions
+      if (t === 'double') { if (c === '"') stack.pop(); i += 1; continue; }
+      if (c === "'") stack.push('single');
+      else if (c === '"') stack.push('double');
+      i += 1;
+      continue;
+    }
+    // JavaScript (actions/github-script)
+    if (t === 'single' || t === 'double') {
+      if (c === '\\') { i += 2; continue; }
+      if (c === (t === 'single' ? "'" : '"')) stack.pop();
+      i += 1;
+      continue;
+    }
+    if (t === 'template') {
+      if (c === '\\') { i += 2; continue; }
+      if (two === '${') return null;
+      if (c === '`') stack.pop();
+      i += 1;
+      continue;
+    }
+    if (two === '//') { const nl = script.indexOf('\n', i); i = nl < 0 ? script.length : nl; continue; }
+    if (two === '/*') { const e = script.indexOf('*/', i + 2); i = e < 0 ? script.length : e + 2; continue; }
+    if (c === "'") stack.push('single');
+    else if (c === '"') stack.push('double');
+    else if (c === '`') stack.push('template');
+    i += 1;
+  }
+  return (offset) => (states.has(offset) ? states.get(offset) : null);
+}
+
+/** The script language of a run step: posix for bash and sh, pwsh for PowerShell, else null. */
+function shellLang(shell, runsOn) {
+  if (shell !== undefined && shell !== null) {
+    const first = String(shell).trim().split(/\s+/)[0].toLowerCase();
+    if (first === 'bash' || first === 'sh') return 'posix';
+    if (first === 'pwsh' || first === 'powershell') return 'pwsh';
+    return null; // cmd, python, a custom command or an expression: no rewrite
+  }
+  // No shell named: bash on Linux and macOS, pwsh on Windows. Labels that do not say which (an
+  // expression, a matrix value, a bare self-hosted) leave it unknown.
+  const labels = (Array.isArray(runsOn) ? runsOn : typeof runsOn === 'string' ? [runsOn] : [])
+    .filter((l) => typeof l === 'string').map((l) => l.toLowerCase());
+  if (!labels.length || labels.some((l) => l.includes('${{'))) return null;
+  if (labels.some((l) => l.startsWith('windows'))) return 'pwsh';
+  if (labels.some((l) => /^(ubuntu|macos|linux)/.test(l))) return 'posix';
+  return null;
+}
+
+/** How a script reads environment variable `name` in a quote context, or null where it cannot. */
+function reference(lang, ctx, name) {
+  const table = lang === 'posix'
+    ? { none: `"$${name}"`, subst: `"$${name}"`, double: `\${${name}}`, single: `'"$${name}"'` }
+    : lang === 'pwsh'
+      ? { none: `\${env:${name}}`, double: `\${env:${name}}` }
+      : { none: `process.env.${name}`, template: `\${process.env.${name}}`, single: `' + process.env.${name} + '`, double: `" + process.env.${name} + "` };
+  return table[ctx] ?? null;
+}
+
+/**
+ * The step rewritten so each untrusted expression in its script reaches it through an environment
+ * variable: the command, the step's other settings and its existing env stay as they are. Returns
+ * YAML for the step, or '' when no rewrite can be made with certainty.
+ */
+export function rewriteStep(step, { lang, script, field }) {
+  if (!lang || typeof script !== 'string') return '';
+  const all = [...script.matchAll(/\$\{\{[\s\S]*?\}\}/g)].map((m) => ({ start: m.index, end: m.index + m[0].length }));
+  const hits = untrustedExpressions(script);
+  if (!hits.length) return '';
+  const ctxAt = quoteContexts(script, lang, all);
+  if (!ctxAt) return '';
+  const env = { ...(step.env && typeof step.env === 'object' ? step.env : {}) };
+  const nameOf = new Map();
+  for (const h of hits) {
+    if (nameOf.has(h.expression)) continue;
+    const base = envNameFor(h.field);
+    let name = base;
+    for (let n = 2; Object.prototype.hasOwnProperty.call(env, name) && env[name] !== h.expression; n += 1) name = `${base}_${n}`;
+    env[name] = h.expression;
+    nameOf.set(h.expression, name);
+  }
+  let out = script;
+  for (const h of [...hits].sort((a, b) => b.index - a.index)) {
+    const ref = reference(lang, ctxAt(h.index), nameOf.get(h.expression));
+    if (ref === null) return '';
+    out = out.slice(0, h.index) + ref + out.slice(h.index + h.expression.length);
+  }
+  // A JavaScript string that held only the expression reads better as the bare variable.
+  if (lang === 'js') out = out.replace(/(["'])\1 \+ (process\.env\.\w+) \+ \1\1/g, '$2');
+  if (lang === 'posix') out = out.replace(/''("\$\w+")''/g, '$1');
+  const rewritten = {};
+  let placed = false;
+  for (const [k, v] of Object.entries(step)) {
+    if (k === 'env') { rewritten.env = env; placed = true; continue; }
+    if (!placed && (k === 'with' || k === 'run')) { rewritten.env = env; placed = true; }
+    if (k === 'run' && field === 'run') rewritten.run = out;
+    else if (k === 'with' && field === 'script') rewritten.with = { ...v, script: out };
+    else rewritten[k] = v;
+  }
+  if (!placed) rewritten.env = env;
+  return stringify([rewritten], { lineWidth: 0 }).trimEnd();
 }
 
 function jobsOf(doc) {
@@ -77,10 +293,19 @@ export function scanWorkflow(text) {
       if (ref && !ref.pinned) unpinned.push({ job: id, step, uses: String(st.uses), firstParty: ref.firstParty });
       // A run script, and actions/github-script's script input, are code: an expression there is
       // pasted in before the shell or the script engine reads it.
-      const scripts = [st.run];
-      if (/^actions\/github-script@/.test(String(st.uses || '')) && st.with && typeof st.with === 'object') scripts.push(st.with.script);
-      for (const script of scripts) {
-        for (const hit of untrustedExpressions(script)) injections.push({ job: id, step, ...hit });
+      const scripts = [];
+      if (st.run !== undefined) {
+        const shell = st.shell ?? job.defaults?.run?.shell ?? doc.defaults?.run?.shell;
+        scripts.push({ script: st.run, field: 'run', lang: shellLang(shell, job['runs-on']) });
+      }
+      if (/^actions\/github-script@/.test(String(st.uses || '')) && st.with && typeof st.with === 'object') {
+        scripts.push({ script: st.with.script, field: 'script', lang: 'js' });
+      }
+      for (const sc of scripts) {
+        const hits = untrustedExpressions(sc.script);
+        if (!hits.length) continue;
+        const example = rewriteStep(st, sc);
+        for (const hit of hits) injections.push({ job: id, step, ...hit, example });
       }
     });
   }
@@ -88,7 +313,10 @@ export function scanWorkflow(text) {
   // none on a job leaves that job the repository's default, which the audit cannot read (read-only
   // for repositories created since February 2023, write on many older ones).
   const isWriteAll = (p) => typeof p === 'string' && p.trim().toLowerCase() === 'write-all';
-  const jobs = jobsOf(doc).filter(([, j]) => j.uses === undefined || j.permissions !== undefined);
+  // A reusable-workflow call with no permissions of its own passes the caller's token on: the called
+  // workflow can narrow it, but the audit does not read that workflow, so the call counts as
+  // unscoped like any other job.
+  const jobs = jobsOf(doc);
   const writeAll = isWriteAll(doc.permissions) ? ['(workflow)'] : jobs.filter(([, j]) => isWriteAll(j.permissions)).map(([id]) => id);
   const unscoped = doc.permissions === undefined ? jobs.filter(([, j]) => j.permissions === undefined).map(([id]) => id) : [];
   return { unpinned, injections, writeAll, unscoped, parsed: Object.keys(doc).length > 0 };
@@ -121,15 +349,15 @@ export function scanFindings(files) {
 
   const injections = scans.flatMap((s) => s.injections.map((x) => ({ ...x, path: s.path })));
   if (injections.length) {
-    const first = injections[0];
-    const env = envNameFor(first.field);
     F.push({
       saving: 0, unit: 'risk', confidence: 'confirmed', what: 'untrusted input in a script',
       workflow: where([...new Set(injections.map((x) => x.path))]),
       evidence: `${list(injections.map((x) => `${x.path} job ${x.job}, ${x.step}: ${x.expression}`), 4)}; the expression is pasted into the script before it runs, so a title, branch name or comment written as shell code runs as shell code`,
       fix: 'pass the value through an environment variable and quote it in the script, so it is read as data and never parsed as code',
       tradeoff: 'none to speak of: the step reads the same value, and only the shell no longer executes it',
-      example: `- name: ${first.step}\n  env:\n    ${env}: ${first.expression}\n  run: echo "$${env}"   # quoted: the value is data, never code`,
+      // The first step that can be rewritten with certainty, as it stands with only its expressions
+      // moved to env; none when no step can (a cmd or python shell, a heredoc, a matrix OS).
+      example: (injections.find((x) => x.example) || {}).example || '',
     });
   }
 

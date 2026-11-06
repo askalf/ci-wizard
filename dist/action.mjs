@@ -1507,7 +1507,7 @@ var require_stringify = __commonJS({
         props.push(doc.directives.tagString(tag));
       return props.join(" ");
     }
-    function stringify(item, ctx, onComment, onChompKeep) {
+    function stringify2(item, ctx, onComment, onChompKeep) {
       if (identity.isPair(item))
         return item.toString(ctx, onComment, onChompKeep);
       if (identity.isAlias(item)) {
@@ -1536,7 +1536,7 @@ var require_stringify = __commonJS({
 ${ctx.indent}${str}`;
     }
     exports.createStringifyContext = createStringifyContext;
-    exports.stringify = stringify;
+    exports.stringify = stringify2;
   }
 });
 
@@ -1546,7 +1546,7 @@ var require_stringifyPair = __commonJS({
     "use strict";
     var identity = require_identity();
     var Scalar = require_Scalar();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyPair({ key, value }, ctx, onComment, onChompKeep) {
       const { allNullValues, doc, indent, indentStep, options: { commentString, indentSeq, simpleKeys } } = ctx;
@@ -1568,7 +1568,7 @@ var require_stringifyPair = __commonJS({
       });
       let keyCommentDone = false;
       let chompKeep = false;
-      let str = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
+      let str = stringify2.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
       if (!explicitKey && !ctx.inFlow && str.length > 1024) {
         if (simpleKeys)
           throw new Error("With simple keys, single line scalar must not span more than 1024 characters");
@@ -1620,7 +1620,7 @@ ${indent}:`;
         ctx.indent = ctx.indent.substring(2);
       }
       let valueCommentDone = false;
-      const valueStr = stringify.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
+      const valueStr = stringify2.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
       let ws = " ";
       if (keyComment || vsb || vcb) {
         ws = vsb ? "\n" : "";
@@ -1761,7 +1761,7 @@ var require_addPairToJSMap = __commonJS({
     "use strict";
     var log = require_log();
     var merge = require_merge();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var identity = require_identity();
     var toJS = require_toJS();
     function addPairToJSMap(ctx, map, { key, value }) {
@@ -1797,7 +1797,7 @@ var require_addPairToJSMap = __commonJS({
       if (typeof jsKey !== "object")
         return String(jsKey);
       if (identity.isNode(key) && ctx?.doc) {
-        const strCtx = stringify.createStringifyContext(ctx.doc, {});
+        const strCtx = stringify2.createStringifyContext(ctx.doc, {});
         strCtx.anchors = /* @__PURE__ */ new Set();
         for (const node of ctx.anchors.keys())
           strCtx.anchors.add(node.anchor);
@@ -1864,12 +1864,12 @@ var require_stringifyCollection = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
     "use strict";
     var identity = require_identity();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyCollection(collection, ctx, options) {
       const flow = ctx.inFlow ?? collection.flow;
-      const stringify2 = flow ? stringifyFlowCollection : stringifyBlockCollection;
-      return stringify2(collection, ctx, options);
+      const stringify3 = flow ? stringifyFlowCollection : stringifyBlockCollection;
+      return stringify3(collection, ctx, options);
     }
     function stringifyBlockCollection({ comment, items }, ctx, { blockItemPrefix, flowChars, itemIndent, onChompKeep, onComment }) {
       const { indent, options: { commentString } } = ctx;
@@ -1894,7 +1894,7 @@ var require_stringifyCollection = __commonJS({
           }
         }
         chompKeep = false;
-        let str2 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
+        let str2 = stringify2.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
         if (comment2)
           str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
@@ -1961,7 +1961,7 @@ ${indent}${line}` : "\n";
         }
         if (comment)
           reqNewline = true;
-        let str = stringify.stringify(item, itemCtx, () => comment = null);
+        let str = stringify2.stringify(item, itemCtx, () => comment = null);
         reqNewline || (reqNewline = lines.length > linesAtValue || str.includes("\n"));
         if (i < items.length - 1) {
           str += ",";
@@ -3322,7 +3322,7 @@ var require_stringifyDocument = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
     "use strict";
     var identity = require_identity();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyDocument(doc, options) {
       const lines = [];
@@ -3337,7 +3337,7 @@ var require_stringifyDocument = __commonJS({
       }
       if (hasDirectives)
         lines.push("---");
-      const ctx = stringify.createStringifyContext(doc, options);
+      const ctx = stringify2.createStringifyContext(doc, options);
       const { commentString } = ctx.options;
       if (doc.commentBefore) {
         if (lines.length !== 1)
@@ -3359,7 +3359,7 @@ var require_stringifyDocument = __commonJS({
           contentComment = doc.contents.comment;
         }
         const onChompKeep = contentComment ? void 0 : () => chompKeep = true;
-        let body = stringify.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
+        let body = stringify2.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
         if (contentComment)
           body += stringifyComment.lineComment(body, "", commentString(contentComment));
         if ((body[0] === "|" || body[0] === ">") && lines[lines.length - 1] === "---") {
@@ -3367,7 +3367,7 @@ var require_stringifyDocument = __commonJS({
         } else
           lines.push(body);
       } else {
-        lines.push(stringify.stringify(doc.contents, ctx));
+        lines.push(stringify2.stringify(doc.contents, ctx));
       }
       if (doc.directives?.docEnd) {
         if (doc.comment) {
@@ -5503,7 +5503,7 @@ var require_cst_scalar = __commonJS({
 var require_cst_stringify = __commonJS({
   "node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
     "use strict";
-    var stringify = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
+    var stringify2 = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
     function stringifyToken(token) {
       switch (token.type) {
         case "block-scalar": {
@@ -5556,7 +5556,7 @@ var require_cst_stringify = __commonJS({
         res += stringifyToken(value);
       return res;
     }
-    exports.stringify = stringify;
+    exports.stringify = stringify2;
   }
 });
 
@@ -7286,7 +7286,7 @@ var require_public_api = __commonJS({
       }
       return doc.toJS(Object.assign({ reviver: _reviver }, options));
     }
-    function stringify(value, replacer, options) {
+    function stringify2(value, replacer, options) {
       let _replacer = null;
       if (typeof replacer === "function" || Array.isArray(replacer)) {
         _replacer = replacer;
@@ -7311,7 +7311,7 @@ var require_public_api = __commonJS({
     exports.parse = parse2;
     exports.parseAllDocuments = parseAllDocuments;
     exports.parseDocument = parseDocument;
-    exports.stringify = stringify;
+    exports.stringify = stringify2;
   }
 });
 
@@ -7543,21 +7543,30 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   }
   onProgress("reading workflow files");
   const files = /* @__PURE__ */ new Map();
+  const fileReads = /* @__PURE__ */ new Map();
   for (const [, rs] of top) {
     const path = String(rs[0].path || "").split("@")[0];
     if (path.startsWith(".github/workflows/") && !files.has(path)) {
-      files.set(path, await client.getRaw(`repos/${repo}/contents/${path}`) || "");
+      const text = await client.getRaw(`repos/${repo}/contents/${path}`);
+      fileReads.set(path, typeof text === "string" ? text : null);
+      files.set(path, text || "");
     }
   }
   onProgress("scanning workflow files");
   const listing = await client.get(`repos/${repo}/contents/.github/workflows`);
   const workflowPaths = (Array.isArray(listing) ? listing : []).filter((x) => x && x.type === "file" && /\.ya?ml$/i.test(String(x.name || ""))).map((x) => `.github/workflows/${x.name}`).sort();
-  const scanFiles = new Map([...files].filter(([path]) => workflowPaths.includes(path) || !listing));
-  for (const path of workflowPaths) {
-    if (scanFiles.size >= maxScanFiles) break;
-    if (!scanFiles.has(path)) scanFiles.set(path, files.get(path) ?? (await client.getRaw(`repos/${repo}/contents/${path}`) || ""));
+  const listed = Array.isArray(listing);
+  const scanFiles = /* @__PURE__ */ new Map();
+  const unreadable = [];
+  const candidates = listed ? workflowPaths : [...files.keys()];
+  for (const path of candidates) {
+    if (scanFiles.size + unreadable.length >= maxScanFiles) break;
+    const known = fileReads.get(path);
+    const text = known !== void 0 ? known : await client.getRaw(`repos/${repo}/contents/${path}`);
+    if (typeof text === "string") scanFiles.set(path, text);
+    else unreadable.push(path);
   }
-  const scanned = { read: scanFiles.size, of: listing ? workflowPaths.length : scanFiles.size };
+  const scanned = { read: scanFiles.size, of: listed ? workflowPaths.length : null, unreadable };
   const meta = await client.get(`repos/${repo}`);
   const defaultBranch = meta && typeof meta.default_branch === "string" ? meta.default_branch : null;
   const visibility = meta && typeof meta.visibility === "string" ? meta.visibility : meta && typeof meta.private === "boolean" ? meta.private ? "private" : "public" : null;
@@ -8274,6 +8283,7 @@ function countBy(items, key) {
 }
 
 // src/scans.mjs
+var import_yaml2 = __toESM(require_dist(), 1);
 var FIRST_PARTY = /* @__PURE__ */ new Set(["actions", "github"]);
 function parseUses(uses) {
   const s = String(uses ?? "").trim();
@@ -8292,11 +8302,72 @@ var UNTRUSTED = new RegExp([
   String.raw`github\.event\.workflow_run\.(head_branch|head_commit\.(message|author\.(email|name)))`,
   String.raw`github\.head_ref`
 ].map((p) => `(?:${p})`).join("|"));
+var UNTRUSTED_FULL = new RegExp(`^(?:${UNTRUSTED.source})$`);
+var CONTAINERS = /* @__PURE__ */ new Set([
+  "github",
+  "github.event",
+  "github.event.issue",
+  "github.event.pull_request",
+  "github.event.pull_request.head",
+  "github.event.pull_request.head.repo",
+  "github.event.discussion",
+  "github.event.comment",
+  "github.event.review",
+  "github.event.review_comment",
+  "github.event.pages",
+  "github.event.commits",
+  "github.event.head_commit",
+  "github.event.head_commit.author",
+  "github.event.workflow_run",
+  "github.event.workflow_run.head_commit",
+  "github.event.workflow_run.head_commit.author"
+]);
+function pathOf(node) {
+  if (node.k === "ctx") return node.path[0];
+  if (node.k === "prop") {
+    const base = pathOf(node.of);
+    return base === null ? null : `${base}.${node.key}`;
+  }
+  if (node.k === "index") {
+    const base = pathOf(node.of);
+    if (base === null) return null;
+    return node.key.k === "lit" && typeof node.key.v === "string" ? `${base}.${node.key.v}` : `${base}[${node.key.k === "lit" ? node.key.v : "*"}]`;
+  }
+  return null;
+}
+var PASSES_TEXT = /* @__PURE__ */ new Set(["format", "join", "tojson", "fromjson"]);
+function flowingFields(node) {
+  switch (node.k) {
+    case "ctx":
+    case "prop":
+    case "index": {
+      const path = pathOf(node);
+      if (path === null) return [];
+      const norm = path.replace(/\[[^\]]*\]/g, ".*").replace(/\.\*\.\*/g, ".*");
+      if (UNTRUSTED_FULL.test(path) || UNTRUSTED_FULL.test(norm)) return [path];
+      if (CONTAINERS.has(path.toLowerCase())) return [path];
+      return [];
+    }
+    case "||":
+    case "&&":
+      return [...flowingFields(node.a), ...flowingFields(node.b)];
+    case "call":
+      return PASSES_TEXT.has(node.name) ? node.args.flatMap(flowingFields) : [];
+    default:
+      return [];
+  }
+}
 function untrustedExpressions(script) {
   const out = [];
   for (const m of String(script ?? "").matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
-    const hit = UNTRUSTED.exec(m[1]);
-    if (hit) out.push({ expression: m[0], field: hit[0] });
+    let fields;
+    try {
+      fields = flowingFields(parseExpr(m[1]));
+    } catch {
+      const hit = UNTRUSTED.exec(m[1]);
+      fields = hit ? [hit[0]] : [];
+    }
+    if (fields.length) out.push({ expression: m[0], field: fields[0], fields, index: m.index });
   }
   return out;
 }
@@ -8304,6 +8375,178 @@ function envNameFor(field) {
   const parts = String(field).replace(/\[[^\]]*\]|\.\*/g, "").split(".");
   const last = parts.slice(-2).join("_").replace(/^pull_request_/, "PR_").replace(/^github_/, "");
   return last.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase();
+}
+function quoteContexts(script, lang, spans) {
+  const at = new Map(spans.map((sp) => [sp.start, sp]));
+  const states = /* @__PURE__ */ new Map();
+  const stack = ["none"];
+  const top = () => stack[stack.length - 1];
+  let i = 0;
+  while (i < script.length) {
+    const sp = at.get(i);
+    if (sp) {
+      states.set(i, top());
+      i = sp.end;
+      continue;
+    }
+    const c = script[i];
+    const two = script.slice(i, i + 2);
+    const t = top();
+    if (lang === "posix") {
+      if (t === "single") {
+        if (c === "'") stack.pop();
+        i += 1;
+        continue;
+      }
+      if (c === "\\") {
+        i += 2;
+        continue;
+      }
+      if (c === "`" || two === "<<" || script.startsWith("$((", i)) return null;
+      if (t === "double") {
+        if (c === '"') stack.pop();
+        else if (two === "$(") {
+          stack.push("subst");
+          i += 2;
+          continue;
+        }
+        i += 1;
+        continue;
+      }
+      if (c === "'") stack.push("single");
+      else if (c === '"') stack.push("double");
+      else if (two === "$(") {
+        stack.push("subst");
+        i += 2;
+        continue;
+      } else if (c === "(" && t === "subst") return null;
+      else if (c === ")" && t === "subst") stack.pop();
+      i += 1;
+      continue;
+    }
+    if (lang === "pwsh") {
+      if (t === "single") {
+        if (c === "'") {
+          if (script[i + 1] === "'") {
+            i += 2;
+            continue;
+          }
+          stack.pop();
+        }
+        i += 1;
+        continue;
+      }
+      if (c === "`") {
+        i += 2;
+        continue;
+      }
+      if (two === '@"' || two === "@'" || two === "$(") return null;
+      if (t === "double") {
+        if (c === '"') stack.pop();
+        i += 1;
+        continue;
+      }
+      if (c === "'") stack.push("single");
+      else if (c === '"') stack.push("double");
+      i += 1;
+      continue;
+    }
+    if (t === "single" || t === "double") {
+      if (c === "\\") {
+        i += 2;
+        continue;
+      }
+      if (c === (t === "single" ? "'" : '"')) stack.pop();
+      i += 1;
+      continue;
+    }
+    if (t === "template") {
+      if (c === "\\") {
+        i += 2;
+        continue;
+      }
+      if (two === "${") return null;
+      if (c === "`") stack.pop();
+      i += 1;
+      continue;
+    }
+    if (two === "//") {
+      const nl = script.indexOf("\n", i);
+      i = nl < 0 ? script.length : nl;
+      continue;
+    }
+    if (two === "/*") {
+      const e = script.indexOf("*/", i + 2);
+      i = e < 0 ? script.length : e + 2;
+      continue;
+    }
+    if (c === "'") stack.push("single");
+    else if (c === '"') stack.push("double");
+    else if (c === "`") stack.push("template");
+    i += 1;
+  }
+  return (offset) => states.has(offset) ? states.get(offset) : null;
+}
+function shellLang(shell, runsOn) {
+  if (shell !== void 0 && shell !== null) {
+    const first = String(shell).trim().split(/\s+/)[0].toLowerCase();
+    if (first === "bash" || first === "sh") return "posix";
+    if (first === "pwsh" || first === "powershell") return "pwsh";
+    return null;
+  }
+  const labels = (Array.isArray(runsOn) ? runsOn : typeof runsOn === "string" ? [runsOn] : []).filter((l) => typeof l === "string").map((l) => l.toLowerCase());
+  if (!labels.length || labels.some((l) => l.includes("${{"))) return null;
+  if (labels.some((l) => l.startsWith("windows"))) return "pwsh";
+  if (labels.some((l) => /^(ubuntu|macos|linux)/.test(l))) return "posix";
+  return null;
+}
+function reference(lang, ctx, name) {
+  const table = lang === "posix" ? { none: `"$${name}"`, subst: `"$${name}"`, double: `\${${name}}`, single: `'"$${name}"'` } : lang === "pwsh" ? { none: `\${env:${name}}`, double: `\${env:${name}}` } : { none: `process.env.${name}`, template: `\${process.env.${name}}`, single: `' + process.env.${name} + '`, double: `" + process.env.${name} + "` };
+  return table[ctx] ?? null;
+}
+function rewriteStep(step, { lang, script, field }) {
+  if (!lang || typeof script !== "string") return "";
+  const all = [...script.matchAll(/\$\{\{[\s\S]*?\}\}/g)].map((m) => ({ start: m.index, end: m.index + m[0].length }));
+  const hits = untrustedExpressions(script);
+  if (!hits.length) return "";
+  const ctxAt = quoteContexts(script, lang, all);
+  if (!ctxAt) return "";
+  const env = { ...step.env && typeof step.env === "object" ? step.env : {} };
+  const nameOf = /* @__PURE__ */ new Map();
+  for (const h of hits) {
+    if (nameOf.has(h.expression)) continue;
+    const base = envNameFor(h.field);
+    let name = base;
+    for (let n = 2; Object.prototype.hasOwnProperty.call(env, name) && env[name] !== h.expression; n += 1) name = `${base}_${n}`;
+    env[name] = h.expression;
+    nameOf.set(h.expression, name);
+  }
+  let out = script;
+  for (const h of [...hits].sort((a, b) => b.index - a.index)) {
+    const ref = reference(lang, ctxAt(h.index), nameOf.get(h.expression));
+    if (ref === null) return "";
+    out = out.slice(0, h.index) + ref + out.slice(h.index + h.expression.length);
+  }
+  if (lang === "js") out = out.replace(/(["'])\1 \+ (process\.env\.\w+) \+ \1\1/g, "$2");
+  if (lang === "posix") out = out.replace(/''("\$\w+")''/g, "$1");
+  const rewritten = {};
+  let placed = false;
+  for (const [k, v] of Object.entries(step)) {
+    if (k === "env") {
+      rewritten.env = env;
+      placed = true;
+      continue;
+    }
+    if (!placed && (k === "with" || k === "run")) {
+      rewritten.env = env;
+      placed = true;
+    }
+    if (k === "run" && field === "run") rewritten.run = out;
+    else if (k === "with" && field === "script") rewritten.with = { ...v, script: out };
+    else rewritten[k] = v;
+  }
+  if (!placed) rewritten.env = env;
+  return (0, import_yaml2.stringify)([rewritten], { lineWidth: 0 }).trimEnd();
 }
 function jobsOf(doc) {
   return Object.entries(doc.jobs || {}).filter(([, j]) => j && typeof j === "object");
@@ -8322,15 +8565,24 @@ function scanWorkflow(text) {
       const step = st.name ? String(st.name) : st.uses ? String(st.uses) : `step ${i + 1}`;
       const ref = parseUses(st.uses);
       if (ref && !ref.pinned) unpinned.push({ job: id, step, uses: String(st.uses), firstParty: ref.firstParty });
-      const scripts = [st.run];
-      if (/^actions\/github-script@/.test(String(st.uses || "")) && st.with && typeof st.with === "object") scripts.push(st.with.script);
-      for (const script of scripts) {
-        for (const hit of untrustedExpressions(script)) injections.push({ job: id, step, ...hit });
+      const scripts = [];
+      if (st.run !== void 0) {
+        const shell = st.shell ?? job.defaults?.run?.shell ?? doc.defaults?.run?.shell;
+        scripts.push({ script: st.run, field: "run", lang: shellLang(shell, job["runs-on"]) });
+      }
+      if (/^actions\/github-script@/.test(String(st.uses || "")) && st.with && typeof st.with === "object") {
+        scripts.push({ script: st.with.script, field: "script", lang: "js" });
+      }
+      for (const sc of scripts) {
+        const hits = untrustedExpressions(sc.script);
+        if (!hits.length) continue;
+        const example = rewriteStep(st, sc);
+        for (const hit of hits) injections.push({ job: id, step, ...hit, example });
       }
     });
   }
   const isWriteAll = (p) => typeof p === "string" && p.trim().toLowerCase() === "write-all";
-  const jobs = jobsOf(doc).filter(([, j]) => j.uses === void 0 || j.permissions !== void 0);
+  const jobs = jobsOf(doc);
   const writeAll = isWriteAll(doc.permissions) ? ["(workflow)"] : jobs.filter(([, j]) => isWriteAll(j.permissions)).map(([id]) => id);
   const unscoped = doc.permissions === void 0 ? jobs.filter(([, j]) => j.permissions === void 0).map(([id]) => id) : [];
   return { unpinned, injections, writeAll, unscoped, parsed: Object.keys(doc).length > 0 };
@@ -8359,8 +8611,6 @@ function scanFindings(files) {
   }
   const injections = scans.flatMap((s) => s.injections.map((x) => ({ ...x, path: s.path })));
   if (injections.length) {
-    const first = injections[0];
-    const env = envNameFor(first.field);
     F.push({
       saving: 0,
       unit: "risk",
@@ -8370,10 +8620,9 @@ function scanFindings(files) {
       evidence: `${list(injections.map((x) => `${x.path} job ${x.job}, ${x.step}: ${x.expression}`), 4)}; the expression is pasted into the script before it runs, so a title, branch name or comment written as shell code runs as shell code`,
       fix: "pass the value through an environment variable and quote it in the script, so it is read as data and never parsed as code",
       tradeoff: "none to speak of: the step reads the same value, and only the shell no longer executes it",
-      example: `- name: ${first.step}
-  env:
-    ${env}: ${first.expression}
-  run: echo "$${env}"   # quoted: the value is data, never code`
+      // The first step that can be rewritten with certainty, as it stands with only its expressions
+      // moved to env; none when no step can (a cmd or python shell, a heredoc, a matrix OS).
+      example: (injections.find((x) => x.example) || {}).example || ""
     });
   }
   const writeAll = scans.filter((s) => s.writeAll.length);
@@ -9119,7 +9368,7 @@ function analyse(repo, data) {
     visibility: data.visibility || null,
     // The scans read every workflow file collect listed (scanFiles); an audit built without that
     // listing (a caller's own data) runs no scans and says so by reporting none read.
-    scanned: data.scanned || { read: (data.scanFiles || /* @__PURE__ */ new Map()).size, of: (data.scanFiles || /* @__PURE__ */ new Map()).size },
+    scanned: data.scanned || { read: (data.scanFiles || /* @__PURE__ */ new Map()).size, of: null, unreadable: [] },
     only: data.only || [],
     only_missing: data.onlyMissing || [],
     runs_total: data.runs.length,
@@ -9265,8 +9514,11 @@ function report(a, { maxFindings = 8 } = {}) {
   L.push('- Billed minutes round each GitHub-hosted job up to a whole minute, as GitHub bills it; a job counts as GitHub-hosted when its runner group is "GitHub Actions".');
   L.push("- Steps grouped into the categories above by the command the workflow file gives each step (its run or uses line) and otherwise by its name.");
   L.push("- Runs whose jobs were all skipped count as runs but cost no job-minutes. Duplicate runs = commits the workflow ran on both a push and a pull request event. Reruns = runs with a run attempt above 1. Outdated runs = a pull request run still going when a newer commit on the same branch started its run.");
-  if (a.scanned && a.scanned.of) {
-    L.push(`- Security scans (actions pinned to a commit, untrusted input in scripts, the job token) read ${a.scanned.read === a.scanned.of ? `all ${a.scanned.of}` : `${a.scanned.read} of the ${a.scanned.of}`} workflow files, not only the sampled workflows'.`);
+  if (a.scanned && (a.scanned.read || a.scanned.unreadable && a.scanned.unreadable.length)) {
+    const sc = a.scanned;
+    const coverage = sc.of === null || sc.of === void 0 ? `${sc.read} workflow file${sc.read === 1 ? "" : "s"} (the sampled ones; the workflow directory could not be listed, so the total is unknown)` : sc.read === sc.of ? `all ${sc.of} workflow files` : `${sc.read} of the ${sc.of} workflow files`;
+    const missed = sc.unreadable && sc.unreadable.length ? `; ${sc.unreadable.length} could not be read (${sc.unreadable.slice(0, 3).join(", ")}${sc.unreadable.length > 3 ? " and more" : ""})` : "";
+    L.push(`- Security scans (actions pinned to a commit, untrusted input in scripts, the job token) read ${coverage}${missed}, not only the sampled workflows'.`);
   }
   L.push("- Cache, checkout and concurrency facts are read from the parsed workflow file (actions/cache, a setup action's cache input, the checkout step's inputs, concurrency and cancel-in-progress), so a commented-out line never counts.");
   L.push("- Estimated savings: dependency cache 60% of install time when no cache runs, 30% when one runs but installs still dominate; checkout and toolchain 50%; duplicates, outdated runs and reruns their full job time; self-hosted tail the excess over 2 s; fixed-cost findings half of the fixed share; short hosted jobs half of the billed minutes above the job-minutes. See docs/rules.md in the ci-wizard repository.");

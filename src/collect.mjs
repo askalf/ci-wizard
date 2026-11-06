@@ -108,10 +108,15 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
   }
   onProgress('reading workflow files');
   const files = new Map();
+  // What each read returned (null for a file that could not be read), so the scans count a failed
+  // read as unread rather than as an empty file.
+  const fileReads = new Map();
   for (const [, rs] of top) {
     const path = String(rs[0].path || '').split('@')[0];
     if (path.startsWith('.github/workflows/') && !files.has(path)) {
-      files.set(path, (await client.getRaw(`repos/${repo}/contents/${path}`)) || '');
+      const text = await client.getRaw(`repos/${repo}/contents/${path}`);
+      fileReads.set(path, typeof text === 'string' ? text : null);
+      files.set(path, text || '');
     }
   }
   // The workflow scans read every workflow file, not only the sampled workflows': an attack comes in
@@ -123,12 +128,20 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
     .filter((x) => x && x.type === 'file' && /\.ya?ml$/i.test(String(x.name || '')))
     .map((x) => `.github/workflows/${x.name}`)
     .sort();
-  const scanFiles = new Map([...files].filter(([path]) => workflowPaths.includes(path) || !listing));
-  for (const path of workflowPaths) {
-    if (scanFiles.size >= maxScanFiles) break;
-    if (!scanFiles.has(path)) scanFiles.set(path, files.get(path) ?? ((await client.getRaw(`repos/${repo}/contents/${path}`)) || ''));
+  // Only a file that was read counts as scanned: one that came back missing (deleted between the
+  // listing and the read) is counted apart, and without a listing the total is unknown (null).
+  const listed = Array.isArray(listing);
+  const scanFiles = new Map();
+  const unreadable = [];
+  const candidates = listed ? workflowPaths : [...files.keys()];
+  for (const path of candidates) {
+    if (scanFiles.size + unreadable.length >= maxScanFiles) break;
+    const known = fileReads.get(path);
+    const text = known !== undefined ? known : await client.getRaw(`repos/${repo}/contents/${path}`);
+    if (typeof text === 'string') scanFiles.set(path, text);
+    else unreadable.push(path);
   }
-  const scanned = { read: scanFiles.size, of: listing ? workflowPaths.length : scanFiles.size };
+  const scanned = { read: scanFiles.size, of: listed ? workflowPaths.length : null, unreadable };
   // The default branch, for advice that names it (a push trigger limited to it). Unknown when the
   // token cannot read the repository's metadata; the advice then says to fill it in.
   const meta = await client.get(`repos/${repo}`);

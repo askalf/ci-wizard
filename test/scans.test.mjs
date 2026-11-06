@@ -35,6 +35,24 @@ test('untrustedExpressions: titles, bodies, branch names and commit text; not nu
   assert.deepEqual(hits('echo "$PR_TITLE"'), []);
 });
 
+test('untrustedExpressions: only an expression whose value carries the text; a boolean or a literal does not', () => {
+  const hits = (s) => untrustedExpressions(s).map((x) => x.field);
+  // Near misses: a test of the title, a comparison, a negation, a field name in a quoted literal.
+  assert.deepEqual(hits("echo ${{ contains(github.event.pull_request.title, 'release') }}"), []);
+  assert.deepEqual(hits("echo ${{ startsWith(github.head_ref, 'dependabot/') }}"), []);
+  assert.deepEqual(hits("echo ${{ github.event.issue.title == 'bug' }}"), []);
+  assert.deepEqual(hits('echo ${{ !github.event.comment.body }}'), []);
+  assert.deepEqual(hits("echo ${{ 'github.event.pull_request.title' }}"), []);
+  assert.deepEqual(hits("echo ${{ hashFiles('github.event.issue.body') }}"), []);
+  // The text passed on: through ||, &&, format, join, toJSON, or an object that holds it.
+  assert.deepEqual(hits("echo ${{ github.event.pull_request.title || 'untitled' }}"), ['github.event.pull_request.title']);
+  assert.deepEqual(hits("echo ${{ github.event_name == 'pull_request' && github.head_ref }}"), ['github.head_ref']);
+  assert.deepEqual(hits("echo ${{ format('PR: {0}', github.event.pull_request.title) }}"), ['github.event.pull_request.title']);
+  assert.deepEqual(hits('echo ${{ toJSON(github.event) }}'), ['github.event']);
+  assert.deepEqual(hits("echo ${{ github.event['pull_request']['title'] }}"), ['github.event.pull_request.title']);
+  assert.deepEqual(hits('echo ${{ github.event.pull_request.head.label }}'), ['github.event.pull_request.head.label']);
+});
+
 test('envNameFor: a short, shell-safe name for the field', () => {
   assert.equal(envNameFor('github.event.pull_request.title'), 'PR_TITLE');
   assert.equal(envNameFor('github.head_ref'), 'HEAD_REF');
@@ -68,9 +86,12 @@ test('scanWorkflow: the job token, from write-all, a missing block, or a scoped 
   assert.deepEqual(scanWorkflow(wf(steps, 'permissions:\n  contents: read\n')).unscoped, []);
   assert.deepEqual(scanWorkflow(wf(steps, 'permissions: {}\n')).unscoped, []);
   assert.deepEqual(scanWorkflow(wf(steps, '', '    permissions:\n      contents: read\n')).unscoped, []);
-  // A job that calls a reusable workflow takes that workflow's permissions unless it sets its own.
+  // A reusable-workflow call with no permissions hands the caller's default token on: the called
+  // workflow may narrow it, but the audit does not read it, so the call is unscoped.
   const reusable = `on: [push]\njobs:\n  call:\n    uses: owner/repo/.github/workflows/x.yml@${SHA}\n`;
-  assert.deepEqual(scanWorkflow(reusable).unscoped, []);
+  assert.deepEqual(scanWorkflow(reusable).unscoped, ['call']);
+  assert.deepEqual(scanWorkflow(reusable.replace('    uses', '    permissions:\n      contents: read\n    uses')).unscoped, []);
+  assert.deepEqual(scanWorkflow(`permissions: {}\n${reusable}`).unscoped, []);
 });
 
 test('scanFindings: one finding per kind, naming the files, with YAML that parses', () => {
@@ -90,8 +111,9 @@ test('scanFindings: one finding per kind, naming the files, with YAML that parse
   const inj = by['untrusted input in a script'];
   assert.match(inj.evidence, /\.github\/workflows\/ci\.yml job build, Greet: \$\{\{ github\.event\.pull_request\.title \}\}/);
   const step = parse(inj.example)[0];
+  assert.equal(step.name, 'Greet');
   assert.equal(step.env.PR_TITLE, '${{ github.event.pull_request.title }}');
-  assert.match(step.run, /"\$PR_TITLE"/);
+  assert.equal(step.run, 'echo "${PR_TITLE}"'); // the original command, inside its own quotes
 
   const tok = by['job token wider than the job'];
   assert.equal(tok.confidence, 'confirmed'); // write-all is in the file
@@ -109,6 +131,63 @@ test('scanFindings: clean files give nothing, and a missing block alone is infer
   assert.deepEqual(scanFindings(new Map([['.github/workflows/bad.yml', 'on: [push\n  jobs: :']])), []);
 });
 
+const injectionExample = (steps, runsOn = 'ubuntu-latest', top = '') => {
+  const s = scanWorkflow(`on: [pull_request]\n${top}jobs:\n  build:\n    runs-on: ${runsOn}\n    steps:\n${steps}`);
+  assert.ok(s.injections.length, 'an injection is found');
+  return s.injections[0].example;
+};
+
+test('the injection example is the step itself, command and settings kept, read as its shell reads it', () => {
+  // A command other than echo, with if:, working-directory and an env it already had; the head ref
+  // appears bare and in single quotes.
+  const label = parse(injectionExample([
+    '      - name: Label',
+    "        if: github.event.action == 'opened'",
+    '        env:',
+    '          GH_TOKEN: ${{ github.token }}',
+    "        run: gh pr edit --add-label ${{ github.head_ref }} && git push origin '${{ github.head_ref }}'",
+    '        working-directory: app',
+  ].join('\n') + '\n'))[0];
+  assert.equal(label.name, 'Label');
+  assert.equal(label.if, "github.event.action == 'opened'");
+  assert.equal(label['working-directory'], 'app');
+  assert.deepEqual(label.env, { GH_TOKEN: '${{ github.token }}', HEAD_REF: '${{ github.head_ref }}' });
+  assert.equal(label.run, 'gh pr edit --add-label "$HEAD_REF" && git push origin "$HEAD_REF"');
+
+  // github-script: the script reads process.env, in a plain string and in a template literal; the
+  // step's other inputs stay.
+  const gs = parse(injectionExample([
+    `      - uses: actions/github-script@${SHA}`,
+    '        with:',
+    '          github-token: ${{ secrets.BOT }}',
+    '          script: |',
+    '            const body = "${{ github.event.comment.body }}";',
+    '            core.info(`title: ${{ github.event.issue.title }}`);',
+  ].join('\n') + '\n'))[0];
+  assert.equal(gs.uses, `actions/github-script@${SHA}`);
+  assert.equal(gs.with['github-token'], '${{ secrets.BOT }}');
+  assert.equal(gs.env.COMMENT_BODY, '${{ github.event.comment.body }}');
+  assert.equal(gs.with.script, 'const body = process.env.COMMENT_BODY;\ncore.info(`title: ${process.env.ISSUE_TITLE}`);\n');
+
+  // PowerShell on Windows, by the runner or by the shell.
+  assert.equal(parse(injectionExample('      - run: Write-Host "${{ github.head_ref }}"\n', 'windows-latest'))[0].run, 'Write-Host "${env:HEAD_REF}"');
+  assert.equal(parse(injectionExample('      - shell: pwsh\n        run: Write-Host ${{ github.head_ref }}\n'))[0].run, 'Write-Host ${env:HEAD_REF}');
+  assert.equal(parse(injectionExample('      - run: echo ${{ github.head_ref }}\n', 'windows-latest', 'defaults:\n  run:\n    shell: bash\n'))[0].run, 'echo "$HEAD_REF"');
+});
+
+test('the injection example is left out where the rewrite cannot be certain', () => {
+  assert.equal(injectionExample('      - run: echo ${{ github.head_ref }}\n', '${{ matrix.os }}'), ''); // bash or pwsh?
+  assert.equal(injectionExample('      - shell: cmd\n        run: echo ${{ github.head_ref }}\n', 'windows-latest'), '');
+  assert.equal(injectionExample('      - shell: python\n        run: print("${{ github.head_ref }}")\n'), '');
+  assert.equal(injectionExample('      - run: |\n          cat <<EOF\n          ${{ github.head_ref }}\n          EOF\n'), '');
+  assert.equal(injectionExample('      - run: echo `echo ${{ github.head_ref }}`\n'), '');
+  // The finding still fires, with no example rather than a wrong one.
+  const F = scanFindings(new Map([['.github/workflows/ci.yml', `on: [pull_request]\npermissions: {}\njobs:\n  b:\n    runs-on: \${{ matrix.os }}\n    steps:\n      - run: echo \${{ github.head_ref }}\n`]]));
+  const inj = F.find((f) => f.what === 'untrusted input in a script');
+  assert.ok(inj);
+  assert.equal(inj.example, '');
+});
+
 test('collect reads every workflow file for the scans, up to the cap, and says how many', async () => {
   const listing = ['ci.yml', 'release.yml', 'nightly.yaml', 'README.md'].map((name) => ({ name, type: 'file' }));
   const asked = [];
@@ -122,11 +201,35 @@ test('collect reads every workflow file for the scans, up to the cap, and says h
   const now = new Date(Date.parse(t(7 * 86400)));
   const d = await collect(createClient({ fetchImpl: fakeFetch(routes, { calls: asked }) }), 'o/r', { now });
   assert.deepEqual([...d.scanFiles.keys()].sort(), ['.github/workflows/ci.yml', '.github/workflows/nightly.yaml', '.github/workflows/release.yml']);
-  assert.deepEqual(d.scanned, { read: 3, of: 3 });
+  assert.deepEqual(d.scanned, { read: 3, of: 3, unreadable: [] });
   // ci.yml was read once, for the sample, and not again for the scan.
   assert.equal(asked.filter((u) => u.endsWith('contents/.github/workflows/ci.yml')).length, 1);
   const capped = await collect(createClient({ fetchImpl: fakeFetch(routes) }), 'o/r', { now, maxScanFiles: 2 });
-  assert.deepEqual(capped.scanned, { read: 2, of: 3 });
+  assert.deepEqual(capped.scanned, { read: 2, of: 3, unreadable: [] });
+});
+
+test('collect counts only the files it read: a missing listed file is unread, a missing listing leaves the total unknown', async () => {
+  const listing = ['ci.yml', 'gone.yml'].map((name) => ({ name, type: 'file' }));
+  const base = {
+    'repos/o/r/actions/runs?': { workflow_runs: runs(3).map((r) => ({ ...r, path: '.github/workflows/ci.yml' })) },
+    'repos/o/r/actions/runs/': { jobs: [job()] },
+    'repos/o/r/contents/.github/workflows/ci.yml': 'on: push\njobs: {}\n',
+    'repos/o/r/contents/': [],
+  };
+  const now = new Date(Date.parse(t(7 * 86400)));
+  // gone.yml is listed but answers 404 (deleted between the listing and the read).
+  const d = await collect(createClient({ fetchImpl: fakeFetch({ ...base, 'repos/o/r/contents/.github/workflows': (p) => (p.endsWith('workflows') ? listing : { __status: 404 }) }) }), 'o/r', { now });
+  assert.deepEqual(d.scanned, { read: 1, of: 2, unreadable: ['.github/workflows/gone.yml'] });
+  assert.deepEqual([...d.scanFiles.keys()], ['.github/workflows/ci.yml']);
+  const a = analyse('o/r', d);
+  assert.match(report(a), /read 1 of the 2 workflow files; 1 could not be read \(\.github\/workflows\/gone\.yml\)/);
+
+  // No listing (404): only the sampled file is scanned, and the total is not claimed.
+  const n = await collect(createClient({ fetchImpl: fakeFetch({ ...base, 'repos/o/r/contents/.github/workflows': { __status: 404 } }) }), 'o/r', { now });
+  assert.deepEqual(n.scanned, { read: 1, of: null, unreadable: [] });
+  const md = report(analyse('o/r', n));
+  assert.match(md, /read 1 workflow file \(the sampled ones; the workflow directory could not be listed, so the total is unknown\)/);
+  assert.doesNotMatch(md, /read all/);
 });
 
 test('the audit ranks scan risks first and says how many files it scanned', () => {
