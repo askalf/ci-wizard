@@ -181,3 +181,30 @@ test('no code scanning: a commented-out CodeQL step or a script that mentions it
   assert.ok(whats(gateFindings(g, { scanFiles: files(commented), scanned: all(1) })).includes('no code scanning'));
   assert.ok(!whats(gateFindings(g, { scanFiles: files(codeqlFile), scanned: all(1) })).includes('no code scanning'));
 });
+
+test('absence is judged from the newest completed pull request run, not one still creating its jobs', async () => {
+  const now = new Date(Date.parse(t(7 * 86400)));
+  const base = runs(2).map((r) => ({ ...r, path: '.github/workflows/ci.yml', event: 'pull_request' }));
+  const running = { ...base[0], id: 9001, status: 'in_progress', conclusion: null };
+  const done = { ...base[1], id: 9002 };
+  const routes = {
+    'repos/o/r/actions/runs?': { workflow_runs: [running, done] },
+    'repos/o/r/actions/runs/9001/jobs': { total_count: 1, jobs: [{ ...job(), name: 'setup' }] },
+    'repos/o/r/actions/runs/9002/jobs': { total_count: 2, jobs: [{ ...job(), name: 'setup' }, { ...job(), name: 'test (node 22)' }] },
+    'repos/o/r/rules/branches/main': [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'test (node 22)' }] } }],
+    'repos/o/r/branches/main': { name: 'main', protection: { enabled: false } },
+    'repos/o/r/contents/.github/workflows': [{ name: 'ci.yml', type: 'file' }],
+    'repos/o/r/contents/.github': [{ name: 'dependabot.yml', type: 'file' }],
+    'repos/o/r/contents/': prFile,
+    'repos/o/r/contents': [],
+    'repos/o/r': { default_branch: 'main', visibility: 'public' },
+  };
+  const d = await collect(createClient({ fetchImpl: fakeFetch(routes) }), 'o/r', { now });
+  assert.ok(d.gates.pr_checks.includes('test (node 22)'));
+  assert.ok(!whats(gateFindings(d.gates, { scanFiles: d.scanFiles, scanned: d.scanned })).includes('required checks no pull request reports'));
+  // Only the unfinished run in the window: its names count as seen, but no absence is judged.
+  const onlyRunning = await collect(createClient({ fetchImpl: fakeFetch({ ...routes, 'repos/o/r/actions/runs?': { workflow_runs: [running] } }) }), 'o/r', { now });
+  assert.equal(onlyRunning.gates.pr_jobs_complete, false);
+  assert.deepEqual(onlyRunning.gates.pr_checks, ['setup']);
+  assert.ok(!whats(gateFindings(onlyRunning.gates, { scanFiles: onlyRunning.scanFiles, scanned: onlyRunning.scanned })).includes('required checks no pull request reports'));
+});

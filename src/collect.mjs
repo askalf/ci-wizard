@@ -270,11 +270,17 @@ async function collectGates(client, repo, { runs, byWf, defaultBranch, rootNames
     }
   };
   const branch = defaultBranch ? encodeURIComponent(defaultBranch) : null;
-  // The newest pull request run of each workflow that ran on one in the window.
+  // The newest completed pull request run of each workflow that ran on one in the window: a run
+  // still going may not have created all its jobs yet (a matrix computed by a setup job). Where only
+  // an unfinished run is there, its names still count as seen, but no absence is judged from it.
   const prRuns = [];
+  let unfinishedOnly = false;
   for (const rs of byWf.values()) {
-    const pr = rs.find((r) => PR_EVENTS.has(r.event));
-    if (pr) prRuns.push(pr);
+    const done = rs.find((r) => PR_EVENTS.has(r.event) && r.status === 'completed');
+    const any = done || rs.find((r) => PR_EVENTS.has(r.event));
+    if (!any) continue;
+    prRuns.push(any);
+    if (!done) unfinishedOnly = true;
   }
   const [rules, branchInfo, githubDir, ...prJobLists] = await Promise.all([
     branch ? soft(client.get(`repos/${repo}/rules/branches/${branch}?per_page=100`)) : { ok: false, value: null },
@@ -314,7 +320,7 @@ async function collectGates(client, repo, { runs, byWf, defaultBranch, rootNames
   const requiredComplete = rulesRead && classicRead;
   const prChecks = new Set();
   let prJobsRead = 0;
-  let prJobsComplete = prRuns.length > 0;
+  let prJobsComplete = prRuns.length > 0 && !unfinishedOnly;
   prJobLists.forEach((r) => {
     if (r.ok && r.value && Array.isArray(r.value.jobs)) {
       prJobsRead += 1;

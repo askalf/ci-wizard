@@ -7728,9 +7728,13 @@ async function collectGates(client, repo, { runs, byWf, defaultBranch, rootNames
   };
   const branch = defaultBranch ? encodeURIComponent(defaultBranch) : null;
   const prRuns = [];
+  let unfinishedOnly = false;
   for (const rs of byWf.values()) {
-    const pr = rs.find((r) => PR_EVENTS.has(r.event));
-    if (pr) prRuns.push(pr);
+    const done = rs.find((r) => PR_EVENTS.has(r.event) && r.status === "completed");
+    const any = done || rs.find((r) => PR_EVENTS.has(r.event));
+    if (!any) continue;
+    prRuns.push(any);
+    if (!done) unfinishedOnly = true;
   }
   const [rules, branchInfo, githubDir, ...prJobLists] = await Promise.all([
     branch ? soft(client.get(`repos/${repo}/rules/branches/${branch}?per_page=100`)) : { ok: false, value: null },
@@ -7767,7 +7771,7 @@ async function collectGates(client, repo, { runs, byWf, defaultBranch, rootNames
   const requiredComplete = rulesRead && classicRead;
   const prChecks = /* @__PURE__ */ new Set();
   let prJobsRead = 0;
-  let prJobsComplete = prRuns.length > 0;
+  let prJobsComplete = prRuns.length > 0 && !unfinishedOnly;
   prJobLists.forEach((r) => {
     if (r.ok && r.value && Array.isArray(r.value.jobs)) {
       prJobsRead += 1;

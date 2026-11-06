@@ -356,7 +356,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 ## required checks no pull request reports
 
 - **Fires when** a required check from GitHub Actions (integration 15368, or none named) matches no
-  job of the newest pull request run of any workflow in the window. A job's name is the check
+  job of the newest completed pull request run of any workflow in the window (a run still going
+  may not have created all its jobs; a workflow with only an unfinished run leaves the absence
+  unknown). A job's name is the check
   Actions reports: `name (value)` for a matrix leg, `caller / job` for a reusable workflow's job, and
   a skipped job still reports. GitHub waits for a required check until it reports, so a pull
   request without it cannot merge unless the rule is bypassed.
