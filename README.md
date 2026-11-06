@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/askalf/ci-wizard/actions/workflows/ci.yml/badge.svg)](https://github.com/askalf/ci-wizard/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/askalf/ci-wizard/badge)](https://scorecard.dev/viewer/?uri=github.com/askalf/ci-wizard)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16408/badge)](https://www.bestpractices.dev/projects/16408)
 [![npm](https://img.shields.io/npm/v/ci-wizard)](https://www.npmjs.com/package/ci-wizard)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
