@@ -406,7 +406,7 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
     image (`semgrep/semgrep`, `snyk/snyk`, `sonarsource/sonar-scanner-cli`, `bearer/bearer`, as
     the job's container or a `docker://` step), or a `semgrep ci`/`semgrep scan`,
     `snyk code test`, `bearer scan` or `codeql database` command. A command counts where a shell
-    command starts (after an assignment, `sudo`, `npx` and the like), not in text it passes on:
+    command starts (after an assignment, or a wrapper such as `sudo -u root`, `env -u NAME` or `npx` with its options), not in text it passes on:
     an echoed message, a comment or a here-document. SonarSource's quality-gate action only waits
     for a scan's result, and `snyk/actions/setup` only installs the CLI: neither counts (a scan
     command after the setup does);

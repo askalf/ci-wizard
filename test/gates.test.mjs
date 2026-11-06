@@ -276,6 +276,11 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   assert.ok(counts(job('      - run: ./bin/bearer scan .\n')));
   // Inside a conditional or a loop.
   assert.ok(counts(job('      - run: if true; then semgrep ci; fi\n')));
+  // Through a wrapper whose option takes a value.
+  assert.ok(counts(job('      - run: sudo -u root semgrep ci\n')));
+  assert.ok(counts(job('      - run: env -u GITHUB_TOKEN semgrep ci\n')));
+  // A wrapper running another program that only mentions a scanner is not a scan.
+  assert.ok(!counts(job('      - run: sudo -u root echo semgrep ci\n')));
   // After a here-string, a scan command still runs.
   assert.ok(counts(job('      - run: |\n          cat <<< "hello"\n          semgrep ci\n')));
   assert.ok(counts(job('      - run: if semgrep ci; then echo ok; fi\n')));

@@ -96,6 +96,16 @@ test('shell commands: split outside quotes, without comments or here-document bo
   assert.deepEqual(shellCommands('echo "unterminated'), [['echo', 'unterminated']]);
   assert.deepEqual(programWords(['FOO=1', 'sudo', '-E', '/usr/bin/semgrep', 'ci']), ['semgrep', 'ci']);
   assert.deepEqual(programWords(['make', '-j4']), ['make', '-j4']);
+  // A wrapper's option that takes a value takes the next word with it; --opt=value carries its own.
+  assert.deepEqual(programWords(['sudo', '-u', 'root', 'semgrep', 'ci']), ['semgrep', 'ci']);
+  assert.deepEqual(programWords(['sudo', '--user=root', '-E', 'semgrep', 'ci']), ['semgrep', 'ci']);
+  assert.deepEqual(programWords(['env', '-u', 'TOKEN', 'A=1', 'semgrep', 'ci']), ['semgrep', 'ci']);
+  assert.deepEqual(programWords(['sudo', '-u', 'ci', 'env', '-C', 'app', 'snyk', 'code', 'test']), ['snyk', 'code', 'test']);
+  assert.deepEqual(programWords(['nice', '-n', '10', 'time', '-o', 't.txt', 'bearer', 'scan', '.']), ['bearer', 'scan', '.']);
+  assert.deepEqual(programWords(['npx', '--package', 'snyk', '--', 'snyk', 'code', 'test']), ['snyk', 'code', 'test']);
+  assert.deepEqual(programWords(['uvx', '--from', 'semgrep==1.90', 'semgrep', 'ci']), ['semgrep', 'ci']);
+  // An option outside a wrapper is the command's own.
+  assert.deepEqual(programWords(['grep', '-u', 'semgrep', 'ci']), ['grep', '-u', 'semgrep', 'ci']);
   assert.deepEqual(programWords(['A=1']), []);
   // Reserved words that open a compound command are not the program.
   assert.deepEqual(shellCommands('if true; then semgrep ci; fi').map(programWords), [['true'], ['semgrep', 'ci'], ['fi']]);

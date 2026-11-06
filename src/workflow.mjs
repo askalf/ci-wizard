@@ -320,23 +320,47 @@ function heredocWord(s, from) {
   return present ? { word, end: i } : null;
 }
 
-// Words that run the command after them: an assignment (FOO=1), a wrapper, or a wrapper's option.
-// Reserved words that open a compound command come before a command too: `then semgrep ci`.
-const WRAPPERS = new Set(['sudo', 'env', 'time', 'exec', 'command', 'nice', 'npx', 'pnpx', 'bunx', 'uvx']);
+// Programs that run the command after them, each with the options of its that take a value (as
+// the next word, or after = in a long option): `sudo -u root semgrep ci` runs semgrep, not root.
+// After `--`, the next word is the program. Reserved words that open a compound command come
+// before a command too: `then semgrep ci`.
+const WRAPPERS = new Map([
+  ['sudo', ['-u', '-g', '-h', '-p', '-C', '-D', '-r', '-t', '-T', '-U', '--user', '--group', '--host', '--prompt', '--close-from', '--chdir', '--role', '--type', '--command-timeout', '--other-user']],
+  ['env', ['-u', '-C', '--unset', '--chdir']],
+  ['nice', ['-n', '--adjustment']],
+  ['time', ['-f', '-o', '--format', '--output']],
+  ['exec', ['-a']],
+  ['command', []],
+  ['npx', ['-p', '--package']],
+  ['pnpx', []],
+  ['bunx', ['-p', '--package']],
+  ['uvx', ['-p', '--from', '--with', '--python', '--index', '--index-url']],
+].map(([name, valued]) => [name, new Set(valued)]));
 const OPENERS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', '{']);
 
 /**
  * A command's words from the program it runs, past reserved words that open a compound command,
- * assignments and wrappers, with the program's directory dropped.
+ * assignments, and wrappers with their options and option values, with the program's directory
+ * dropped.
  */
 export function programWords(words) {
   let k = 0;
   while (k < words.length && OPENERS.has(words[k])) k += 1;
-  let wrapped = false;
+  let wrapper = null; // the options of the innermost wrapper seen so far
   while (k < words.length) {
     const w = words[k];
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || WRAPPERS.has(w)) wrapped = wrapped || WRAPPERS.has(w);
-    else if (!(wrapped && w.startsWith('-'))) break;
+    if (WRAPPERS.has(w)) {
+      wrapper = WRAPPERS.get(w);
+    } else if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) {
+      // FOO=1 before a command (or after env) sets a variable for it.
+    } else if (wrapper && w === '--') {
+      k += 1;
+      break;
+    } else if (wrapper && w.startsWith('-')) {
+      if (wrapper.has(w)) k += 1; // its value is the next word; --user=root carries its own
+    } else {
+      break;
+    }
     k += 1;
   }
   const rest = words.slice(k);

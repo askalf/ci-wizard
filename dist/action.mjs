@@ -8471,16 +8471,36 @@ function heredocWord(s, from) {
   }
   return present ? { word, end: i } : null;
 }
-var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "env", "time", "exec", "command", "nice", "npx", "pnpx", "bunx", "uvx"]);
+var WRAPPERS = new Map([
+  ["sudo", ["-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-T", "-U", "--user", "--group", "--host", "--prompt", "--close-from", "--chdir", "--role", "--type", "--command-timeout", "--other-user"]],
+  ["env", ["-u", "-C", "--unset", "--chdir"]],
+  ["nice", ["-n", "--adjustment"]],
+  ["time", ["-f", "-o", "--format", "--output"]],
+  ["exec", ["-a"]],
+  ["command", []],
+  ["npx", ["-p", "--package"]],
+  ["pnpx", []],
+  ["bunx", ["-p", "--package"]],
+  ["uvx", ["-p", "--from", "--with", "--python", "--index", "--index-url"]]
+].map(([name, valued]) => [name, new Set(valued)]));
 var OPENERS = /* @__PURE__ */ new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{"]);
 function programWords(words) {
   let k = 0;
   while (k < words.length && OPENERS.has(words[k])) k += 1;
-  let wrapped = false;
+  let wrapper = null;
   while (k < words.length) {
     const w = words[k];
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || WRAPPERS.has(w)) wrapped = wrapped || WRAPPERS.has(w);
-    else if (!(wrapped && w.startsWith("-"))) break;
+    if (WRAPPERS.has(w)) {
+      wrapper = WRAPPERS.get(w);
+    } else if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) {
+    } else if (wrapper && w === "--") {
+      k += 1;
+      break;
+    } else if (wrapper && w.startsWith("-")) {
+      if (wrapper.has(w)) k += 1;
+    } else {
+      break;
+    }
     k += 1;
   }
   const rest = words.slice(k);
