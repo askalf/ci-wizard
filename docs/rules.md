@@ -302,29 +302,17 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   GitHub reads them (`github.event.issue.TITLE` is the title). An expression in
   `env:` or an `if:` is not a script, and passing the value through `env:` is the fix.
 - **Confidence** confirmed. A risk, ranked first. The evidence names the file, job and step.
-- **Fix** an environment variable for the value, quoted in the script. The example is the step
-  itself, its command and settings unchanged, with each expression moved to `env:` and read the way
-  the step's language reads it: `"$VAR"` (or `${VAR}` inside double quotes) for bash and sh,
-  `${env:VAR}` for PowerShell, `process.env.VAR` for github-script. In github-script only an
-  expression inside a string or template literal is rewritten (a string with text around it becomes
-  one template literal, so a method called on it still applies to all of it); one in bare code, a
-  script with a slash in code (a regular expression or a division), or an escape right before the
-  expression gets no example. No example is offered that still interpolates untrusted text. Where the rewrite cannot be
-  certain (a cmd or python shell, a heredoc, a runner OS from a matrix) there is no example rather
-  than one that changes the step. A shell step gets the rewrite only when every command in its
-  script is one known to take its arguments as data, with no option that runs or loads a program or
-  evaluates an argument: echo, printf, test, file and text utilities, git with checkout, switch,
-  commit, tag, branch, add, status or rev-parse, and gh with its pr, issue, release, label and run
-  subcommands. A command by any other name, a path to any command (a file the script wrote can carry
-  an allowed name), sudo, a pipe into a shell, a command held in a variable, a substitution inside a
-  string, or a write to `$GITHUB_ENV`, `$GITHUB_PATH` or `$GITHUB_OUTPUT` (a newline in the value
-  sets another variable; the fix says to use a random multiline delimiter) gives no example. Nor is there one
-  where the expression goes to a second parser
-  (`bash -c`, `eval`, `ssh`, `awk`, `sed`, `jq`, `python -c`, a github-script `exec`), anywhere in
-  the same command, a quoted string across lines and a backslash continuation included: the outer
-  shell would expand the variable into the inner program's text, so the fix says the value must
-  reach that program as data as well. *Trade-off:* none to speak of: the step reads the same value, and
-  only the shell no longer runs it.
+- **Fix** an environment variable for the value, read quoted where the expression was: `"$VAR"`
+  for bash and sh, `$env:VAR` for PowerShell, `process.env.VAR` for github-script. The example is
+  that pattern, labelled as one, on the step it names: the expression in `env:` and the variable in
+  the step's language. It is not a rewrite of the step, since a rewrite that is safe for any script
+  would need a full parser for each language and every command's options. The fix also names what a
+  variable does not fix: a command string or program that parses the value again (`bash -c`,
+  `eval`, `ssh`, a github-script `exec`, `awk`, `sed`, `jq`), an option that runs a program
+  (`tar --checkpoint-action`, `git --upload-pack`), a line written to `$GITHUB_ENV`, `$GITHUB_PATH`
+  or `$GITHUB_OUTPUT` (a newline in it sets another variable; write it with a random multiline
+  delimiter), and an argument that starts with a dash (put `--` before it). *Trade-off:* none to
+  speak of: the step reads the same value, and only the shell no longer runs it.
 
 ## job token wider than the job
 

@@ -132,7 +132,7 @@ test('scanFindings: one finding per kind, naming the files, with YAML that parse
   const step = parse(inj.example)[0];
   assert.equal(step.name, 'Greet');
   assert.equal(step.env.PR_TITLE, '${{ github.event.pull_request.title }}');
-  assert.equal(step.run, 'echo "${PR_TITLE}"'); // the original command, inside its own quotes
+  assert.match(step.run, /"\$PR_TITLE"/);
 
   const tok = by['job token wider than the job'];
   assert.equal(tok.confidence, 'confirmed'); // write-all is in the file
@@ -150,165 +150,40 @@ test('scanFindings: clean files give nothing, and a missing block alone is infer
   assert.deepEqual(scanFindings(new Map([['.github/workflows/bad.yml', 'on: [push\n  jobs: :']])), []);
 });
 
-const injectionExample = (steps, runsOn = 'ubuntu-latest', top = '') => {
-  const s = scanWorkflow(`on: [pull_request]\n${top}jobs:\n  build:\n    runs-on: ${runsOn}\n    steps:\n${steps}`);
-  assert.ok(s.injections.length, 'an injection is found');
-  return s.injections[0].example;
+const injectionExample = (steps, runsOn = 'ubuntu-latest') => {
+  const F = scanFindings(new Map([['.github/workflows/ci.yml', `on: [pull_request]\npermissions: {}\njobs:\n  build:\n    runs-on: ${runsOn}\n    steps:\n${steps}`]]));
+  return F.find((f) => f.what === 'untrusted input in a script');
 };
 
-test('the injection example is the step itself, command and settings kept, read as its shell reads it', () => {
-  // A command other than echo, with if:, working-directory and an env it already had; the head ref
-  // appears bare and in single quotes.
-  const label = parse(injectionExample([
-    '      - name: Label',
-    "        if: github.event.action == 'opened'",
-    '        env:',
-    '          GH_TOKEN: ${{ github.token }}',
-    "        run: gh pr edit --add-label ${{ github.head_ref }} && git checkout '${{ github.head_ref }}'",
-    '        working-directory: app',
-  ].join('\n') + '\n'))[0];
-  assert.equal(label.name, 'Label');
-  assert.equal(label.if, "github.event.action == 'opened'");
-  assert.equal(label['working-directory'], 'app');
-  assert.deepEqual(label.env, { GH_TOKEN: '${{ github.token }}', HEAD_REF: '${{ github.head_ref }}' });
-  assert.equal(label.run, 'gh pr edit --add-label "$HEAD_REF" && git checkout "$HEAD_REF"');
-
-  // github-script: the script reads process.env, in a plain string and in a template literal; the
-  // step's other inputs stay.
-  const gs = parse(injectionExample([
-    `      - uses: actions/github-script@${SHA}`,
-    '        with:',
-    '          github-token: ${{ secrets.BOT }}',
-    '          script: |',
-    '            const body = "${{ github.event.comment.body }}";',
-    '            core.info(`title: ${{ github.event.issue.title }}`);',
-  ].join('\n') + '\n'))[0];
-  assert.equal(gs.uses, `actions/github-script@${SHA}`);
-  assert.equal(gs.with['github-token'], '${{ secrets.BOT }}');
-  assert.equal(gs.env.COMMENT_BODY, '${{ github.event.comment.body }}');
-  assert.equal(gs.with.script, 'const body = process.env.COMMENT_BODY;\ncore.info(`title: ${process.env.ISSUE_TITLE}`);\n');
-
-  // A string with text around the expression becomes one template literal, so a method call on it
-  // still applies to the whole string; a string that was only the expression becomes the variable.
-  const js = (script) => parse(injectionExample(`      - uses: actions/github-script@${SHA}\n        with:\n          script: ${JSON.stringify(script)}\n`))[0].with.script;
-  assert.equal(js('core.info("Title: ${{ github.event.issue.title }}".toUpperCase())'), 'core.info(`Title: ${process.env.ISSUE_TITLE}`.toUpperCase())');
-  assert.equal(js("core.info('${{ github.event.issue.title }}'.trim())"), 'core.info(process.env.ISSUE_TITLE.trim())');
-  assert.equal(js('const s = "cost: ${x} `q` ${{ github.head_ref }}"'), 'const s = `cost: \\${x} \\`q\\` ${process.env.HEAD_REF}`');
-  assert.equal(js('const ok = "a\\"b ${{ github.head_ref }}"'), 'const ok = `a\\"b ${process.env.HEAD_REF}`');
-  // In a comment the expression is still expanded before JavaScript runs, so it is replaced there too.
-  assert.equal(js('// ${{ github.event.issue.body }}\ncore.info("x")'), '// process.env.ISSUE_BODY\ncore.info("x")');
-  assert.equal(js('/* ${{ github.event.issue.body }} */ core.info("x")'), '/* process.env.ISSUE_BODY */ core.info("x")');
-  assert.doesNotMatch(js('// see ${{ github.event.issue.body }}\n/* and ${{ github.event.comment.body }} */'), /\$\{\{/);
-  // Where the template could read differently, no example.
-  const none = (script) => injectionExample(`      - uses: actions/github-script@${SHA}\n        with:\n          script: ${JSON.stringify(script)}\n`);
-  assert.equal(none('core.info("${{ github.sha }}: ${{ github.event.issue.title }}")'), ''); // a trusted expression in the same string
-  assert.equal(none('const o = { "k ${{ github.head_ref }}": 1 }'), ''); // an object key
-  assert.equal(none('core.info(`${a ? "x" : "y"} ${{ github.head_ref }}`)'), ''); // a nested template
-  // An escape right before the expression, in a string or a template: the walker would skip it.
-  assert.equal(none('core.info("\\${{ github.event.issue.title }}")'), '');
-  assert.equal(none('core.info(`\\${{ github.event.issue.title }}`)'), '');
-  // A regular expression: a variable name there is not its value. Any slash in code gives no example.
-  assert.equal(none("const re = /${{ github.event.issue.title }}/; core.info(String(re.test('hello')))"), '');
-  assert.equal(none('const re = /it\'s/; core.info("${{ github.event.issue.title }}")'), '');
-  assert.equal(none('const n = a / b; core.info("${{ github.event.issue.title }}")'), '');
-  // An expression in bare code was code; no variable reproduces that.
-  assert.equal(none('const n = ${{ github.event.issue.title }};'), '');
-  // A slash inside a string or a comment is not code.
-  assert.equal(js('// a/b\ncore.info("x/y ${{ github.head_ref }}")'), '// a/b\ncore.info(`x/y ${process.env.HEAD_REF}`)');
-
-  // PowerShell on Windows, by the runner or by the shell.
-  assert.equal(parse(injectionExample('      - run: Write-Host "${{ github.head_ref }}"\n', 'windows-latest'))[0].run, 'Write-Host "${env:HEAD_REF}"');
-  assert.equal(parse(injectionExample('      - shell: pwsh\n        run: Write-Host ${{ github.head_ref }}\n'))[0].run, 'Write-Host ${env:HEAD_REF}');
-  assert.equal(parse(injectionExample('      - run: echo ${{ github.head_ref }}\n', 'windows-latest', 'defaults:\n  run:\n    shell: bash\n'))[0].run, 'echo "$HEAD_REF"');
+test('the injection example is the pattern, in the step\'s language, never a rewrite that could keep the injection', () => {
+  // bash: env, then the variable read in double quotes; the step's own command is left to the person.
+  const sh = injectionExample('      - name: Label\n        run: bash -c "gh pr edit --add-label ${{ github.head_ref }}"\n');
+  const step = parse(sh.example)[0];
+  assert.equal(step.name, 'Label');
+  assert.deepEqual(step.env, { HEAD_REF: '${{ github.head_ref }}' });
+  assert.match(sh.example, /^# the pattern, not a drop-in edit/);
+  assert.match(step.run, /"\$HEAD_REF"/);
+  assert.doesNotMatch(step.run, /\$\{\{/); // no untrusted expression outside env
+  // PowerShell on a Windows runner, github-script for its script input.
+  assert.match(parse(injectionExample('      - run: Write-Host "${{ github.head_ref }}"\n', 'windows-latest').example)[0].run, /\$env:HEAD_REF/);
+  const gs = parse(injectionExample(`      - uses: actions/github-script@${SHA}\n        with:\n          script: core.info("\${{ github.event.issue.title }}")\n`).example)[0];
+  assert.equal(gs.env.ISSUE_TITLE, '${{ github.event.issue.title }}');
+  assert.match(gs.with.script, /process\.env\.ISSUE_TITLE/);
+  // A step name YAML would misread (a colon, a #) is quoted, so the example still parses.
+  assert.equal(parse(injectionExample('      - name: "Greet: #1"\n        run: echo ${{ github.head_ref }}\n').example)[0].name, 'Greet: #1');
+  // An unknown runner OS gets the bash form, which is GitHub's default shell off Windows.
+  assert.match(injectionExample('      - run: echo ${{ github.head_ref }}\n', '${{ matrix.os }}').example, /"\$HEAD_REF"/);
 });
 
-test('the injection example is left out where the rewrite cannot be certain', () => {
-  // A second parser: the outer shell would expand the variable into the inner program's text.
-  assert.equal(injectionExample('      - run: bash -c "echo ${{ github.event.issue.title }}"\n'), '');
-  assert.equal(injectionExample("      - run: sh -ec 'echo ${{ github.event.issue.title }}'\n"), '');
-  assert.equal(injectionExample('      - run: eval "echo ${{ github.head_ref }}"\n'), '');
-  assert.equal(injectionExample('      - run: ssh host "deploy ${{ github.head_ref }}"\n'), '');
-  assert.equal(injectionExample("      - run: jq '.x == \"${{ github.head_ref }}\"' f.json\n"), '');
-  assert.equal(injectionExample('      - run: |\n          docker run img \\\n            sh -c "echo ${{ github.head_ref }}"\n'), '');
-  // A backslash continuation between the shell and its -c is the same command.
-  assert.equal(injectionExample('      - run: |\n          bash \\\n            -c "echo ${{ github.event.issue.title }}"\n'), '');
-  assert.equal(injectionExample('      - run: |\n          docker run img sh \\\n            -c "echo ${{ github.head_ref }}"\n'), '');
-  // A second parser by its path, through a pipe, or held in a variable.
-  assert.equal(injectionExample('      - run: /usr/bin/ssh host "echo ${{ github.event.issue.title }}"\n'), '');
-  assert.equal(injectionExample("      - run: /usr/local/bin/jq '.x == \"${{ github.head_ref }}\"' f.json\n"), '');
-  assert.equal(injectionExample('      - run: echo "${{ github.head_ref }}" | sh\n'), '');
-  assert.equal(injectionExample('      - run: $RUNNER "${{ github.head_ref }}"\n'), '');
-  assert.equal(injectionExample('      - run: make VERSION=${{ github.head_ref }}\n'), ''); // make expands it into a recipe
-  assert.equal(injectionExample('      - run: echo "today $(date) ${{ github.head_ref }}"\n'), '');
-  // Data commands, through sudo, env or an assignment, and keywords, still get the rewrite.
-  assert.equal(parse(injectionExample('      - run: |\n          if [ -n "${{ github.head_ref }}" ]; then\n            timeout 60 git checkout ${{ github.head_ref }}\n          fi\n          REF=x env -i gh pr view\n'))[0].run,
-    'if [ -n "${HEAD_REF}" ]; then\n  timeout 60 git checkout "$HEAD_REF"\nfi\nREF=x env -i gh pr view\n');
-  // Options that run a program, and commands that have them, give no example.
-  assert.equal(injectionExample('      - run: tar -cf out.tar --checkpoint=1 --checkpoint-action=exec="${{ github.event.issue.title }}" file\n'), '');
-  assert.equal(injectionExample('      - run: git fetch origin ${{ github.head_ref }}\n'), ''); // fetch takes --upload-pack
-  assert.equal(injectionExample('      - run: git -c core.pager=less status ${{ github.head_ref }}\n'), '');
-  assert.equal(injectionExample('      - run: gh api ${{ github.event.issue.title }}\n'), '');
-  assert.equal(injectionExample('      - run: env -S "echo ${{ github.head_ref }}"\n'), '');
-  assert.equal(injectionExample('      - run: echo "${{ github.head_ref }}" | sudo tee /usr/local/bin/gh\n'), '');
-  assert.equal(injectionExample('      - run: declare "${{ github.head_ref }}"\n'), '');
-  // A file the script writes and runs, even under an allowed name: a path is never classified.
-  assert.equal(injectionExample('      - run: |\n          echo "${{ github.event.issue.body }}" > git\n          chmod +x git\n          ./git\n'), '');
-  assert.equal(injectionExample('      - run: |\n          echo "${{ github.event.issue.body }}" > git\n          ./git status\n'), '');
-  assert.equal(injectionExample('      - run: /usr/bin/git status ${{ github.head_ref }}\n'), '');
-  // An environment or output file: a newline in the value sets another variable.
-  assert.equal(injectionExample('      - run: echo "TITLE=${{ github.event.issue.title }}" >> "$GITHUB_ENV"\n'), '');
-  const envf = scanFindings(new Map([['.github/workflows/ci.yml', 'on: [pull_request]\npermissions: {}\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo "TITLE=${{ github.event.issue.title }}" >> "$GITHUB_ENV"\n']])).find((x) => x.what === 'untrusted input in a script');
-  assert.match(envf.fix, /\$GITHUB_ENV.*random multiline delimiter/);
-  const tarf = scanFindings(new Map([['.github/workflows/ci.yml', 'on: [pull_request]\npermissions: {}\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: tar -cf o.tar --checkpoint-action=exec="${{ github.event.issue.title }}" f\n']])).find((x) => x.what === 'untrusted input in a script');
-  assert.equal(tarf.example, '');
-  assert.match(tarf.fix, /second parser/);
-  // The second-parser warning names the absolute-path case too.
-  const ssh = scanFindings(new Map([['.github/workflows/ci.yml', 'on: [pull_request]\npermissions: {}\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: /usr/bin/ssh host "echo ${{ github.event.issue.title }}"\n']])).find((x) => x.what === 'untrusted input in a script');
-  assert.equal(ssh.example, '');
-  assert.match(ssh.fix, /second parser/);
-  // The shell removes a backslash-newline outright, so it can split an option or a command name.
-  assert.equal(injectionExample('      - run: |\n          bash -\\\n          c "echo ${{ github.event.issue.title }}"\n'), '');
-  assert.equal(injectionExample('      - run: |\n          ba\\\n          sh -c "echo ${{ github.event.issue.title }}"\n'), '');
-  assert.equal(injectionExample('      - run: |\n          ev\\\n          al "echo ${{ github.head_ref }}"\n'), '');
-  // A backslash right before the expression in a shell script: no example rather than one that keeps it.
-  assert.equal(injectionExample('      - run: echo "\\${{ github.head_ref }}"\n'), '');
-  // A quote in a shell comment is not a quote: the next line's expression is unquoted.
-  assert.equal(parse(injectionExample("      - run: |\n          # don't\n          echo ${{ github.head_ref }}\n"))[0].run, "# don't\necho \"$HEAD_REF\"\n");
-  assert.equal(parse(injectionExample("      - run: |\n          # don't\n          Write-Host ${{ github.head_ref }}\n", 'windows-latest'))[0].run, "# don't\nWrite-Host ${env:HEAD_REF}\n");
-  // An expression in a comment is replaced there too: GitHub expands it before the shell reads it.
-  assert.doesNotMatch(parse(injectionExample('      - run: |\n          # was ${{ github.head_ref }}\n          ls\n'))[0].run, /\$\{\{/);
-  // A # inside a word is not a comment, and a bash -c after one still counts.
-  assert.equal(injectionExample('      - run: echo a#b; bash -c "echo ${{ github.head_ref }}"\n'), '');
-  // A continuation between plain arguments still allows the rewrite, and keeps the continuation.
-  assert.equal(parse(injectionExample('      - run: |\n          echo \\\n            ${{ github.head_ref }}\n'))[0].run, 'echo \\\n  "$HEAD_REF"\n');
-  assert.equal(injectionExample('      - run: |\n          Invoke-Expression `\n            "echo ${{ github.head_ref }}"\n', 'windows-latest'), '');
-  // A quoted command string across lines is one command: bash -c on the first, the expression on the next.
-  assert.equal(injectionExample('      - run: |\n          bash -c "echo\n          ${{ github.event.issue.title }}"\n'), '');
-  assert.equal(injectionExample("      - run: |\n          sh -c '\n            echo ${{ github.head_ref }}\n          '\n"), '');
-  assert.equal(injectionExample('      - run: |\n          out=$(bash -c "\n            echo ${{ github.head_ref }}")\n'), '');
-  assert.equal(injectionExample('      - run: python -c "print(\'${{ github.head_ref }}\')"\n'), '');
-  assert.equal(injectionExample('      - run: Invoke-Expression "echo ${{ github.head_ref }}"\n', 'windows-latest'), '');
-  assert.equal(injectionExample(`      - uses: actions/github-script@${SHA}\n        with:\n          script: await exec.exec(\`git tag \${{ github.head_ref }}\`)\n`), '');
-  // Any command that is not known to take its arguments as data, anywhere in the script, blocks the
-  // rewrite: a later line can run what an earlier one wrote.
-  assert.equal(injectionExample('      - run: |\n          bash -c "make all"\n          echo ${{ github.head_ref }}\n'), '');
-  assert.equal(injectionExample('      - run: |\n          echo "${{ github.head_ref }}" > run.sh\n          ./run.sh\n'), '');
-  // The finding still fires and its fix says what the nested case needs.
-  const nested = scanFindings(new Map([['.github/workflows/ci.yml', 'on: [pull_request]\npermissions: {}\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: bash -c "echo ${{ github.event.issue.title }}"\n']]));
-  const f = nested.find((x) => x.what === 'untrusted input in a script');
-  assert.equal(f.example, '');
-  assert.match(f.fix, /Here the script hands the value to a second parser.*bash -c 'echo "\$TITLE"'.*jq --arg/);
-  assert.equal(injectionExample('      - run: echo ${{ github.head_ref }}\n', '${{ matrix.os }}'), ''); // bash or pwsh?
-  assert.equal(injectionExample('      - shell: cmd\n        run: echo ${{ github.head_ref }}\n', 'windows-latest'), '');
-  assert.equal(injectionExample('      - shell: python\n        run: print("${{ github.head_ref }}")\n'), '');
-  assert.equal(injectionExample('      - run: |\n          cat <<EOF\n          ${{ github.head_ref }}\n          EOF\n'), '');
-  assert.equal(injectionExample('      - run: echo `echo ${{ github.head_ref }}`\n'), '');
-  // The finding still fires, with no example rather than a wrong one.
-  const F = scanFindings(new Map([['.github/workflows/ci.yml', `on: [pull_request]\npermissions: {}\njobs:\n  b:\n    runs-on: \${{ matrix.os }}\n    steps:\n      - run: echo \${{ github.head_ref }}\n`]]));
-  const inj = F.find((f) => f.what === 'untrusted input in a script');
-  assert.ok(inj);
-  assert.equal(inj.example, '');
+test('the injection fix names what the variable does not fix: a second parser, an option that runs a program, an env file, an argument', () => {
+  const { fix } = injectionExample('      - run: echo "${{ github.head_ref }}"\n');
+  assert.match(fix, /bash -c, eval, ssh, a github-script exec/);
+  assert.match(fix, /awk, sed, jq/);
+  assert.match(fix, /tar --checkpoint-action, git --upload-pack/);
+  assert.match(fix, /\$GITHUB_ENV, \$GITHUB_PATH or \$GITHUB_OUTPUT.*random multiline delimiter/);
+  assert.match(fix, /put -- before it/);
 });
+
 
 test('collect reads every workflow file for the scans, up to the cap, and says how many', async () => {
   const listing = ['ci.yml', 'release.yml', 'nightly.yaml', 'README.md'].map((name) => ({ name, type: 'file' }));

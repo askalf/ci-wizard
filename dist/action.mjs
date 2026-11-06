@@ -1507,7 +1507,7 @@ var require_stringify = __commonJS({
         props.push(doc.directives.tagString(tag));
       return props.join(" ");
     }
-    function stringify2(item, ctx, onComment, onChompKeep) {
+    function stringify(item, ctx, onComment, onChompKeep) {
       if (identity.isPair(item))
         return item.toString(ctx, onComment, onChompKeep);
       if (identity.isAlias(item)) {
@@ -1536,7 +1536,7 @@ var require_stringify = __commonJS({
 ${ctx.indent}${str}`;
     }
     exports.createStringifyContext = createStringifyContext;
-    exports.stringify = stringify2;
+    exports.stringify = stringify;
   }
 });
 
@@ -1546,7 +1546,7 @@ var require_stringifyPair = __commonJS({
     "use strict";
     var identity = require_identity();
     var Scalar = require_Scalar();
-    var stringify2 = require_stringify();
+    var stringify = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyPair({ key, value }, ctx, onComment, onChompKeep) {
       const { allNullValues, doc, indent, indentStep, options: { commentString, indentSeq, simpleKeys } } = ctx;
@@ -1568,7 +1568,7 @@ var require_stringifyPair = __commonJS({
       });
       let keyCommentDone = false;
       let chompKeep = false;
-      let str = stringify2.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
+      let str = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
       if (!explicitKey && !ctx.inFlow && str.length > 1024) {
         if (simpleKeys)
           throw new Error("With simple keys, single line scalar must not span more than 1024 characters");
@@ -1620,7 +1620,7 @@ ${indent}:`;
         ctx.indent = ctx.indent.substring(2);
       }
       let valueCommentDone = false;
-      const valueStr = stringify2.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
+      const valueStr = stringify.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
       let ws = " ";
       if (keyComment || vsb || vcb) {
         ws = vsb ? "\n" : "";
@@ -1761,7 +1761,7 @@ var require_addPairToJSMap = __commonJS({
     "use strict";
     var log = require_log();
     var merge = require_merge();
-    var stringify2 = require_stringify();
+    var stringify = require_stringify();
     var identity = require_identity();
     var toJS = require_toJS();
     function addPairToJSMap(ctx, map, { key, value }) {
@@ -1797,7 +1797,7 @@ var require_addPairToJSMap = __commonJS({
       if (typeof jsKey !== "object")
         return String(jsKey);
       if (identity.isNode(key) && ctx?.doc) {
-        const strCtx = stringify2.createStringifyContext(ctx.doc, {});
+        const strCtx = stringify.createStringifyContext(ctx.doc, {});
         strCtx.anchors = /* @__PURE__ */ new Set();
         for (const node of ctx.anchors.keys())
           strCtx.anchors.add(node.anchor);
@@ -1864,12 +1864,12 @@ var require_stringifyCollection = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
     "use strict";
     var identity = require_identity();
-    var stringify2 = require_stringify();
+    var stringify = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyCollection(collection, ctx, options) {
       const flow = ctx.inFlow ?? collection.flow;
-      const stringify3 = flow ? stringifyFlowCollection : stringifyBlockCollection;
-      return stringify3(collection, ctx, options);
+      const stringify2 = flow ? stringifyFlowCollection : stringifyBlockCollection;
+      return stringify2(collection, ctx, options);
     }
     function stringifyBlockCollection({ comment, items }, ctx, { blockItemPrefix, flowChars, itemIndent, onChompKeep, onComment }) {
       const { indent, options: { commentString } } = ctx;
@@ -1894,7 +1894,7 @@ var require_stringifyCollection = __commonJS({
           }
         }
         chompKeep = false;
-        let str2 = stringify2.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
+        let str2 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
         if (comment2)
           str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
@@ -1961,7 +1961,7 @@ ${indent}${line}` : "\n";
         }
         if (comment)
           reqNewline = true;
-        let str = stringify2.stringify(item, itemCtx, () => comment = null);
+        let str = stringify.stringify(item, itemCtx, () => comment = null);
         reqNewline || (reqNewline = lines.length > linesAtValue || str.includes("\n"));
         if (i < items.length - 1) {
           str += ",";
@@ -3322,7 +3322,7 @@ var require_stringifyDocument = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
     "use strict";
     var identity = require_identity();
-    var stringify2 = require_stringify();
+    var stringify = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyDocument(doc, options) {
       const lines = [];
@@ -3337,7 +3337,7 @@ var require_stringifyDocument = __commonJS({
       }
       if (hasDirectives)
         lines.push("---");
-      const ctx = stringify2.createStringifyContext(doc, options);
+      const ctx = stringify.createStringifyContext(doc, options);
       const { commentString } = ctx.options;
       if (doc.commentBefore) {
         if (lines.length !== 1)
@@ -3359,7 +3359,7 @@ var require_stringifyDocument = __commonJS({
           contentComment = doc.contents.comment;
         }
         const onChompKeep = contentComment ? void 0 : () => chompKeep = true;
-        let body = stringify2.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
+        let body = stringify.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
         if (contentComment)
           body += stringifyComment.lineComment(body, "", commentString(contentComment));
         if ((body[0] === "|" || body[0] === ">") && lines[lines.length - 1] === "---") {
@@ -3367,7 +3367,7 @@ var require_stringifyDocument = __commonJS({
         } else
           lines.push(body);
       } else {
-        lines.push(stringify2.stringify(doc.contents, ctx));
+        lines.push(stringify.stringify(doc.contents, ctx));
       }
       if (doc.directives?.docEnd) {
         if (doc.comment) {
@@ -3998,7 +3998,7 @@ var require_resolve_block_map = __commonJS({
       if (ctx.atRoot)
         ctx.atRoot = false;
       let offset = bm.offset;
-      let commentEnd2 = null;
+      let commentEnd = null;
       for (const collItem of bm.items) {
         const { start, key, sep, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
@@ -4018,7 +4018,7 @@ var require_resolve_block_map = __commonJS({
               onError(offset, "BAD_INDENT", startColMsg);
           }
           if (!keyProps.anchor && !keyProps.tag && !sep) {
-            commentEnd2 = keyProps.end;
+            commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
                 map.comment += "\n" + keyProps.comment;
@@ -4080,9 +4080,9 @@ var require_resolve_block_map = __commonJS({
           map.items.push(pair);
         }
       }
-      if (commentEnd2 && commentEnd2 < offset)
-        onError(commentEnd2, "IMPOSSIBLE", "Map comment with trailing content");
-      map.range = [bm.offset, offset, commentEnd2 ?? offset];
+      if (commentEnd && commentEnd < offset)
+        onError(commentEnd, "IMPOSSIBLE", "Map comment with trailing content");
+      map.range = [bm.offset, offset, commentEnd ?? offset];
       return map;
     }
     exports.resolveBlockMap = resolveBlockMap;
@@ -4104,7 +4104,7 @@ var require_resolve_block_seq = __commonJS({
       if (ctx.atKey)
         ctx.atKey = false;
       let offset = bs.offset;
-      let commentEnd2 = null;
+      let commentEnd = null;
       for (const { start, value } of bs.items) {
         const props = resolveProps.resolveProps(start, {
           indicator: "seq-item-ind",
@@ -4121,7 +4121,7 @@ var require_resolve_block_seq = __commonJS({
             else
               onError(offset, "MISSING_CHAR", "Sequence item without - indicator");
           } else {
-            commentEnd2 = props.end;
+            commentEnd = props.end;
             if (props.comment)
               seq.comment = props.comment;
             continue;
@@ -4133,7 +4133,7 @@ var require_resolve_block_seq = __commonJS({
         offset = node.range[2];
         seq.items.push(node);
       }
-      seq.range = [bs.offset, offset, commentEnd2 ?? offset];
+      seq.range = [bs.offset, offset, commentEnd ?? offset];
       return seq;
     }
     exports.resolveBlockSeq = resolveBlockSeq;
@@ -5503,7 +5503,7 @@ var require_cst_scalar = __commonJS({
 var require_cst_stringify = __commonJS({
   "node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
     "use strict";
-    var stringify2 = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
+    var stringify = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
     function stringifyToken(token) {
       switch (token.type) {
         case "block-scalar": {
@@ -5556,7 +5556,7 @@ var require_cst_stringify = __commonJS({
         res += stringifyToken(value);
       return res;
     }
-    exports.stringify = stringify2;
+    exports.stringify = stringify;
   }
 });
 
@@ -7286,7 +7286,7 @@ var require_public_api = __commonJS({
       }
       return doc.toJS(Object.assign({ reviver: _reviver }, options));
     }
-    function stringify2(value, replacer, options) {
+    function stringify(value, replacer, options) {
       let _replacer = null;
       if (typeof replacer === "function" || Array.isArray(replacer)) {
         _replacer = replacer;
@@ -7311,7 +7311,7 @@ var require_public_api = __commonJS({
     exports.parse = parse2;
     exports.parseAllDocuments = parseAllDocuments;
     exports.parseDocument = parseDocument;
-    exports.stringify = stringify2;
+    exports.stringify = stringify;
   }
 });
 
@@ -8283,7 +8283,6 @@ function countBy(items, key) {
 }
 
 // src/scans.mjs
-var import_yaml2 = __toESM(require_dist(), 1);
 var FIRST_PARTY = /* @__PURE__ */ new Set(["actions", "github"]);
 function parseUses(uses) {
   const s = String(uses ?? "").trim();
@@ -8386,102 +8385,6 @@ function envNameFor(field) {
   const last = parts.slice(-2).join("_").replace(/^pull_request_/, "PR_").replace(/^github_/, "");
   return last.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase();
 }
-var commentAt = (script, i) => script[i] === "#" && (i === 0 || /[\s;&|()]/.test(script[i - 1]));
-var commentEnd = (script, i) => {
-  const nl = script.indexOf("\n", i);
-  return nl < 0 ? script.length : nl;
-};
-function quoteContexts(script, lang, spans) {
-  const at = new Map(spans.map((sp) => [sp.start, sp]));
-  const states = /* @__PURE__ */ new Map();
-  const stack = ["none"];
-  const top = () => stack[stack.length - 1];
-  let i = 0;
-  while (i < script.length) {
-    const sp = at.get(i);
-    if (sp) {
-      states.set(i, top());
-      i = sp.end;
-      continue;
-    }
-    const c = script[i];
-    const two = script.slice(i, i + 2);
-    const t = top();
-    if (lang === "posix") {
-      if (t === "single") {
-        if (c === "'") stack.pop();
-        i += 1;
-        continue;
-      }
-      if (c === "\\") {
-        i += 2;
-        continue;
-      }
-      if (c === "`" || two === "<<" || script.startsWith("$((", i)) return null;
-      if (t === "double") {
-        if (c === '"') stack.pop();
-        else if (two === "$(") {
-          stack.push("subst");
-          i += 2;
-          continue;
-        }
-        i += 1;
-        continue;
-      }
-      if (commentAt(script, i)) {
-        const stop = commentEnd(script, i);
-        for (const sp2 of spans) if (sp2.start > i && sp2.start < stop) states.set(sp2.start, "none");
-        i = Math.max(stop, ...spans.filter((sp2) => sp2.start > i && sp2.start < stop).map((sp2) => sp2.end));
-        continue;
-      }
-      if (c === "'") stack.push("single");
-      else if (c === '"') stack.push("double");
-      else if (two === "$(") {
-        stack.push("subst");
-        i += 2;
-        continue;
-      } else if (c === "(" && t === "subst") return null;
-      else if (c === ")" && t === "subst") stack.pop();
-      i += 1;
-      continue;
-    }
-    if (lang === "pwsh") {
-      if (t === "single") {
-        if (c === "'") {
-          if (script[i + 1] === "'") {
-            i += 2;
-            continue;
-          }
-          stack.pop();
-        }
-        i += 1;
-        continue;
-      }
-      if (c === "`") {
-        i += 2;
-        continue;
-      }
-      if (two === '@"' || two === "@'" || two === "$(" || two === "<#") return null;
-      if (t === "double") {
-        if (c === '"') stack.pop();
-        i += 1;
-        continue;
-      }
-      if (commentAt(script, i)) {
-        const stop = commentEnd(script, i);
-        for (const sp2 of spans) if (sp2.start > i && sp2.start < stop) states.set(sp2.start, "none");
-        i = Math.max(stop, ...spans.filter((sp2) => sp2.start > i && sp2.start < stop).map((sp2) => sp2.end));
-        continue;
-      }
-      if (c === "'") stack.push("single");
-      else if (c === '"') stack.push("double");
-      i += 1;
-      continue;
-    }
-    return null;
-  }
-  return (offset) => states.has(offset) ? states.get(offset) : null;
-}
 function shellLang(shell, runsOn) {
   if (shell !== void 0 && shell !== null) {
     const first = String(shell).trim().split(/\s+/)[0].toLowerCase();
@@ -8495,446 +8398,20 @@ function shellLang(shell, runsOn) {
   if (labels.some((l) => /^(ubuntu|macos|linux)/.test(l))) return "posix";
   return null;
 }
-var NESTED = {
-  posix: [
-    /\b(ba|z|da|k|fi|c|tc)?sh\s+(-[A-Za-z]+\s+)*-[A-Za-z]*c\b/,
-    /(^|[\s;&|(`'"\\/=])(eval|source|exec|ssh|su|xargs|awk|gawk|mawk|nawk|sed|jq|yq|envsubst|osascript)\b/,
-    /--(checkpoint-action|to-command|use-compress-program|compress-program|upload-pack|receive-pack|use-askpass|split-string)\b/,
-    /(^|[\s;&|(`])\.\s/,
-    /\|\s*(\S*\/)?(ba|z|da|k|fi|c|tc)?sh\b/,
-    /\b(python[0-9.]*|node|nodejs|deno|bun|perl|ruby|php|pwsh|powershell|Rscript|lua)\b[^\n]*\s-(c|e|E|r|Command|eval|exec)\b/,
-    /\bfind\b[^\n]*\s-exec(dir)?\b/,
-    /\bgit\b[^\n]*\s-c\s/
-  ],
-  pwsh: [/\b(Invoke-Expression|iex|Invoke-Command|Start-Process|cmd(\.exe)?|bash|sh|wsl|pwsh|powershell|python[0-9.]*|node)\b/i, /\s-(Command|c|e|EncodedCommand)\b/i],
-  js: [/\b(eval|Function|exec|execSync|execFile|execFileSync|spawn|spawnSync|execa|execaCommand|getExecOutput|runInNewContext|runInThisContext|setTimeout|setInterval|import)\s*\(/, /\$`/, /child_process/]
-};
-function commandAt(script, offset, lang) {
-  const spans = [...script.matchAll(/\$\{\{[\s\S]*?\}\}/g)].map((m) => [m.index, m.index + m[0].length]);
-  const spanAt = new Map(spans);
-  let start = 0;
-  let quote = null;
-  let depth = 0;
-  for (let i = 0; i < script.length; i += 1) {
-    if (spanAt.has(i)) {
-      i = spanAt.get(i) - 1;
-      continue;
-    }
-    const c = script[i];
-    if (quote === "'") {
-      if (c === "'") {
-        if (lang === "pwsh" && script[i + 1] === "'") {
-          i += 1;
-          continue;
-        }
-        quote = null;
-      }
-      continue;
-    }
-    if (c === (lang === "pwsh" ? "`" : "\\")) {
-      i += 1;
-      continue;
-    }
-    if (quote === '"') {
-      if (c === '"') quote = null;
-      else if (c === "$" && script[i + 1] === "(") {
-        depth += 1;
-        i += 1;
-      }
-      continue;
-    }
-    if (depth === 0 && commentAt(script, i)) {
-      let stop = commentEnd(script, i);
-      for (const [a, b] of spans) if (a > i && a < stop) stop = Math.max(stop, b);
-      i = stop - 1;
-      continue;
-    }
-    if (c === "'" || c === '"') quote = c;
-    else if (c === "$" && script[i + 1] === "(") {
-      depth += 1;
-      i += 1;
-    } else if (c === ")" && depth > 0) depth -= 1;
-    else if (c === "\n" && depth === 0) {
-      if (offset >= start && offset < i) return script.slice(start, i);
-      start = i + 1;
-    }
-  }
-  return quote || depth ? script : script.slice(start);
-}
-function nestedInterpreter(script, offset, lang) {
-  const text = lang === "js" ? script : lang === "pwsh" ? commandAt(script, offset, lang).replace(/`\r?\n/g, " ") : commandAt(script, offset, lang).replace(/\\\r?\n/g, "");
-  return (NESTED[lang] || []).some((re) => re.test(text));
-}
-var DATA_COMMANDS = {
-  // Each checked for options that run or load a program (tar --checkpoint-action, sort
-  // --compress-program, wget --use-askpass, curl --engine) or evaluate an argument (declare, read,
-  // unset and [[ evaluate an array subscript such as a[$(cmd)]); those are left out. chmod is left
-  // out so a file the script writes cannot be made executable.
-  posix: /* @__PURE__ */ new Set([
-    "echo",
-    "printf",
-    "test",
-    "[",
-    "cd",
-    "mkdir",
-    "touch",
-    "rm",
-    "rmdir",
-    "cp",
-    "mv",
-    "cat",
-    "tee",
-    "head",
-    "tail",
-    "wc",
-    "cut",
-    "tr",
-    "grep",
-    "egrep",
-    "fgrep",
-    "uniq",
-    "ls",
-    "basename",
-    "dirname",
-    "realpath",
-    "readlink",
-    "date",
-    "sleep",
-    "true",
-    "false",
-    ":",
-    "exit",
-    "return",
-    "sha256sum",
-    "sha1sum",
-    "md5sum",
-    "base64",
-    "printenv",
-    "mktemp",
-    "cmp",
-    "gh",
-    "git"
-  ]),
-  pwsh: /* @__PURE__ */ new Set([
-    "write-host",
-    "write-output",
-    "write-error",
-    "write-warning",
-    "write-verbose",
-    "echo",
-    "set-content",
-    "add-content",
-    "out-file",
-    "new-item",
-    "remove-item",
-    "copy-item",
-    "move-item",
-    "test-path",
-    "get-content",
-    "get-childitem",
-    "gh",
-    "git",
-    "exit"
-  ])
-};
-var GIT_SUBCOMMANDS = /* @__PURE__ */ new Set(["checkout", "switch", "commit", "tag", "branch", "add", "status", "rev-parse"]);
-var GH_SUBCOMMANDS = {
-  pr: /* @__PURE__ */ new Set(["comment", "edit", "create", "view", "close", "reopen", "review", "list", "ready", "lock", "unlock", "status", "merge"]),
-  issue: /* @__PURE__ */ new Set(["comment", "edit", "create", "view", "close", "reopen", "list", "lock", "unlock", "status"]),
-  release: /* @__PURE__ */ new Set(["create", "view", "list", "edit", "upload", "download"]),
-  label: /* @__PURE__ */ new Set(["create", "edit", "list"]),
-  run: /* @__PURE__ */ new Set(["view", "list"])
-};
-function argumentsAreData(name, args) {
-  const bare = args.map((w) => w.replace(/^(['"])(.*)\1$/, "$2"));
-  if (name === "git") return GIT_SUBCOMMANDS.has(bare[0]) && !bare.some((w) => /^(-[cuxO]|--(exec|upload-pack|receive-pack|config|template|run))/.test(w));
-  if (name === "gh") return Boolean(GH_SUBCOMMANDS[bare[0]] && GH_SUBCOMMANDS[bare[0]].has(bare[1]));
-  if (name === "printf" || name === "test" || name === "[") return !bare.some((w) => w === "-v" || w === "-R");
-  return true;
-}
-var SHELL_KEYWORDS = /* @__PURE__ */ new Set(["if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "{", "}", "time", "esac", "elseif", "try", "catch", "finally"]);
-var SKIP_SEGMENT = /* @__PURE__ */ new Set(["for", "case", "select", "function", "foreach", "switch"]);
-var ENV_FILE = /GITHUB_(ENV|PATH|OUTPUT|STATE)\b/;
-function onlyDataCommands(script, lang) {
-  const safe = DATA_COMMANDS[lang];
-  if (!safe) return false;
-  if (ENV_FILE.test(script)) return false;
-  const text = lang === "pwsh" ? script.replace(/`\r?\n/g, " ") : script.replace(/\\\r?\n/g, "");
-  const ends = new Map([...text.matchAll(/\$\{\{[\s\S]*?\}\}/g)].map((m) => [m.index, m.index + m[0].length]));
-  const segments = [[]];
-  let word = "";
-  let quote = null;
-  const endWord = () => {
-    if (word) segments[segments.length - 1].push(word);
-    word = "";
-  };
-  const endSegment = () => {
-    endWord();
-    segments.push([]);
-  };
-  for (let i = 0; i < text.length; i += 1) {
-    if (ends.has(i)) {
-      word += text.slice(i, ends.get(i));
-      i = ends.get(i) - 1;
-      continue;
-    }
-    const c = text[i];
-    const two = text.slice(i, i + 2);
-    if (quote === "'") {
-      word += c;
-      if (c === "'") quote = null;
-      continue;
-    }
-    if (quote === '"') {
-      if (lang === "posix" && (c === "`" || two === "$(")) return false;
-      if (lang === "pwsh" && two === "$(") return false;
-      if (c === (lang === "pwsh" ? "`" : "\\")) {
-        word += two;
-        i += 1;
-        continue;
-      }
-      word += c;
-      if (c === '"') quote = null;
-      continue;
-    }
-    if (c === (lang === "pwsh" ? "`" : "\\")) {
-      word += two;
-      i += 1;
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      quote = c;
-      word += c;
-      continue;
-    }
-    if (c === "#" && !word) {
-      const nl = text.indexOf("\n", i);
-      i = (nl < 0 ? text.length : nl) - 1;
-      continue;
-    }
-    if (lang === "posix" && (two === "<<" || c === "`")) return false;
-    if (lang === "posix" && c === "$" && text[i + 1] === "{") {
-      const close = text.indexOf("}", i);
-      if (close < 0) return false;
-      word += text.slice(i, close + 1);
-      i = close;
-      continue;
-    }
-    if (lang === "posix" && two === "$(") {
-      endSegment();
-      i += 1;
-      continue;
-    }
-    if (lang === "pwsh" && (two === '@"' || two === "@'" || two === "<#")) return false;
-    if (c === "&" && (text[i - 1] === ">" || text[i + 1] === ">") || c === ">" && text[i + 1] === "&") {
-      word += c;
-      continue;
-    }
-    if ("\n;&|(){}".includes(c)) {
-      endSegment();
-      continue;
-    }
-    if (/\s/.test(c)) {
-      endWord();
-      continue;
-    }
-    word += c;
-  }
-  if (quote) return false;
-  endWord();
-  const PREFIX = /* @__PURE__ */ new Set(["env", "nohup", "nice", "timeout", "stdbuf", "command", "builtin"]);
-  for (const seg of segments) {
-    let k = 0;
-    if (lang === "pwsh" && /^\$[\w:]+$/.test(seg[0] || "") && seg[1] === "=") k = 2;
-    for (; ; ) {
-      while (k < seg.length && (/^[A-Za-z_]\w*=/.test(seg[k]) || SHELL_KEYWORDS.has(seg[k].toLowerCase()))) k += 1;
-      if (k >= seg.length) break;
-      if (SKIP_SEGMENT.has(seg[k].toLowerCase())) break;
-      let name = seg[k].replace(/^(['"])(.*)\1$/, "$2");
-      if (/[$`*?'"&/\\]/.test(name) || name === ".") return false;
-      if (lang === "pwsh") name = name.toLowerCase();
-      if (lang === "posix" && PREFIX.has(name)) {
-        k += 1;
-        while (k < seg.length && /^(-|\d+[smhd]?$|[A-Za-z_]\w*=)/.test(seg[k])) {
-          if (name === "env" && /^(-S|--split-string)/.test(seg[k])) return false;
-          k += 1;
-        }
-        continue;
-      }
-      if (!safe.has(name) || !argumentsAreData(name, seg.slice(k + 1))) return false;
-      break;
-    }
-  }
-  return true;
-}
-function reference(lang, ctx, name) {
-  const table = lang === "posix" ? { none: `"$${name}"`, subst: `"$${name}"`, double: `\${${name}}`, single: `'"$${name}"'` } : { none: `\${env:${name}}`, double: `\${env:${name}}` };
-  return table[ctx] ?? null;
-}
-function rewriteJs(script, hits, nameOf, spans) {
-  const hitAt = new Map(hits.map((h) => [h.index, h]));
-  const endAt = new Map(spans.map((sp) => [sp.start, sp.end]));
-  const ref = (i2) => `process.env.${nameOf.get(hitAt.get(i2).expression)}`;
-  let out = "";
-  let i = 0;
-  while (i < script.length) {
-    const c = script[i];
-    const two = script.slice(i, i + 2);
-    if (hitAt.has(i)) return null;
-    if (endAt.has(i)) {
-      out += script.slice(i, endAt.get(i));
-      i = endAt.get(i);
-      continue;
-    }
-    if (c === "/" && two !== "//" && two !== "/*") return null;
-    if (two === "//" || two === "/*") {
-      const close = two === "//" ? script.indexOf("\n", i) : script.indexOf("*/", i + 2);
-      const stop = close < 0 ? script.length : two === "//" ? close : close + 2;
-      let j = i;
-      while (j < stop) {
-        if (hitAt.has(j)) {
-          out += ref(j);
-          j = endAt.get(j);
-          continue;
-        }
-        if (endAt.has(j)) {
-          out += script.slice(j, endAt.get(j));
-          j = endAt.get(j);
-          continue;
-        }
-        out += script[j];
-        j += 1;
-      }
-      i = Math.max(stop, j);
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      let j = i + 1;
-      let body = "";
-      let untrusted = 0;
-      let trusted = false;
-      while (j < script.length && script[j] !== c) {
-        if (hitAt.has(j)) {
-          body += `\${${ref(j)}}`;
-          untrusted += 1;
-          j = endAt.get(j);
-          continue;
-        }
-        if (endAt.has(j)) {
-          trusted = true;
-          body += script.slice(j, endAt.get(j));
-          j = endAt.get(j);
-          continue;
-        }
-        const ch = script[j];
-        if (ch === "\n") return null;
-        if (ch === "\\") {
-          if (/[1-7]/.test(script[j + 1] || "") || endAt.has(j + 1)) return null;
-          body += script.slice(j, j + 2);
-          j += 2;
-          continue;
-        }
-        body += ch === "`" ? "\\`" : ch === "$" && script[j + 1] === "{" ? "\\$" : ch;
-        j += 1;
-      }
-      if (j >= script.length) return null;
-      if (!untrusted) {
-        out += script.slice(i, j + 1);
-        i = j + 1;
-        continue;
-      }
-      if (trusted) return null;
-      if (/[{,]\s*$/.test(out) && /^\s*:/.test(script.slice(j + 1))) return null;
-      const only = untrusted === 1 && /^\$\{process\.env\.\w+\}$/.test(body);
-      out += only ? body.slice(2, -1) : `\`${body}\``;
-      i = j + 1;
-      continue;
-    }
-    if (c === "`") {
-      let j = i + 1;
-      let body = "`";
-      while (j < script.length && script[j] !== "`") {
-        if (hitAt.has(j)) {
-          body += `\${${ref(j)}}`;
-          j = endAt.get(j);
-          continue;
-        }
-        if (endAt.has(j)) {
-          body += script.slice(j, endAt.get(j));
-          j = endAt.get(j);
-          continue;
-        }
-        if (script[j] === "\\") {
-          if (endAt.has(j + 1)) return null;
-          body += script.slice(j, j + 2);
-          j += 2;
-          continue;
-        }
-        if (script[j] === "$" && script[j + 1] === "{") return null;
-        body += script[j];
-        j += 1;
-      }
-      if (j >= script.length) return null;
-      out += `${body}\``;
-      i = j + 1;
-      continue;
-    }
-    out += c;
-    i += 1;
-  }
-  return out;
-}
-function rewriteStep(step, { lang, script, field }) {
-  if (!lang || typeof script !== "string") return "";
-  const all = [...script.matchAll(/\$\{\{[\s\S]*?\}\}/g)].map((m) => ({ start: m.index, end: m.index + m[0].length }));
-  const hits = untrustedExpressions(script);
-  if (!hits.length) return "";
-  if (hits.some((h) => nestedInterpreter(script, h.index, lang))) return "";
-  const env = { ...step.env && typeof step.env === "object" ? step.env : {} };
-  const nameOf = /* @__PURE__ */ new Map();
-  for (const h of hits) {
-    if (nameOf.has(h.expression)) continue;
-    const base = envNameFor(h.field);
-    let name = base;
-    for (let n = 2; Object.prototype.hasOwnProperty.call(env, name) && env[name] !== h.expression; n += 1) name = `${base}_${n}`;
-    env[name] = h.expression;
-    nameOf.set(h.expression, name);
-  }
-  let out;
-  if (lang === "js") {
-    out = rewriteJs(script, hits, nameOf, all);
-    if (out === null) return "";
-  } else {
-    if (!onlyDataCommands(script, lang)) return "";
-    const ctxAt = quoteContexts(script, lang, all);
-    if (!ctxAt) return "";
-    out = script;
-    for (const h of [...hits].sort((a, b) => b.index - a.index)) {
-      const ref = reference(lang, ctxAt(h.index), nameOf.get(h.expression));
-      if (ref === null) return "";
-      out = out.slice(0, h.index) + ref + out.slice(h.index + h.expression.length);
-    }
-    if (lang === "posix") out = out.replace(/''("\$\w+")''/g, "$1");
-  }
-  if (untrustedExpressions(out).length) return "";
-  const rewritten = {};
-  let placed = false;
-  for (const [k, v] of Object.entries(step)) {
-    if (k === "env") {
-      rewritten.env = env;
-      placed = true;
-      continue;
-    }
-    if (!placed && (k === "with" || k === "run")) {
-      rewritten.env = env;
-      placed = true;
-    }
-    if (k === "run" && field === "run") rewritten.run = out;
-    else if (k === "with" && field === "script") rewritten.with = { ...v, script: out };
-    else rewritten[k] = v;
-  }
-  if (!placed) rewritten.env = env;
-  return (0, import_yaml2.stringify)([rewritten], { lineWidth: 0 }).trimEnd();
+function patternExample(x) {
+  const name = envNameFor(x.field);
+  const head = `# the pattern, not a drop-in edit: the expression moves to env, the script reads the variable
+- name: ${JSON.stringify(x.step)}
+  env:
+    ${name}: ${x.expression}
+`;
+  if (x.lang === "js") return `${head}  with:
+    script: |
+      // read process.env.${name} where the expression was`;
+  if (x.lang === "pwsh") return `${head}  run: |
+    # read $env:${name} where the expression was, e.g. Write-Host $env:${name}`;
+  return `${head}  run: |
+    # read "$${name}" (in double quotes) where the expression was, e.g. echo "$${name}"`;
 }
 function jobsOf(doc) {
   return Object.entries(doc.jobs || {}).filter(([, j]) => j && typeof j === "object");
@@ -8956,17 +8433,13 @@ function scanWorkflow(text) {
       const scripts = [];
       if (st.run !== void 0) {
         const shell = st.shell ?? job.defaults?.run?.shell ?? doc.defaults?.run?.shell;
-        scripts.push({ script: st.run, field: "run", lang: shellLang(shell, job["runs-on"]) });
+        scripts.push({ script: st.run, lang: shellLang(shell, job["runs-on"]) });
       }
       if (/^actions\/github-script@/.test(String(st.uses || "")) && st.with && typeof st.with === "object") {
-        scripts.push({ script: st.with.script, field: "script", lang: "js" });
+        scripts.push({ script: st.with.script, lang: "js" });
       }
       for (const sc of scripts) {
-        const hits = untrustedExpressions(sc.script);
-        if (!hits.length) continue;
-        const example = rewriteStep(st, sc);
-        const envFile = typeof sc.script === "string" && ENV_FILE.test(sc.script);
-        for (const hit of hits) injections.push({ job: id, step, ...hit, example, envFile, nested: Boolean(sc.lang && typeof sc.script === "string" && nestedInterpreter(sc.script, hit.index, sc.lang)) });
+        for (const hit of untrustedExpressions(sc.script)) injections.push({ job: id, step, lang: sc.lang, ...hit });
       }
     });
   }
@@ -9007,11 +8480,9 @@ function scanFindings(files) {
       what: "untrusted input in a script",
       workflow: where([...new Set(injections.map((x) => x.path))]),
       evidence: `${list(injections.map((x) => `${x.path} job ${x.job}, ${x.step}: ${x.expression}`), 4)}; the expression is pasted into the script before it runs, so a title, branch name or comment written as shell code runs as shell code`,
-      fix: "pass the value through an environment variable and quote it in the script, so it is read as data and never parsed as code" + (injections.some((x) => x.nested) ? `. ${injections.filter((x) => x.nested).length === injections.length ? "Here the" : "Where the"} script hands the value to a second parser (bash -c, eval, ssh, awk, sed, jq, a github-script exec), the variable must reach that parser as data too: let the inner program read it from the environment itself (bash -c 'echo "$TITLE"', in single quotes) or pass it as a separate argument (jq --arg), never expand it into the command or program text` : "") + (injections.some((x) => x.envFile) ? ". Writing the value to $GITHUB_ENV, $GITHUB_PATH or $GITHUB_OUTPUT is an injection of its own, since a newline in it sets another variable for every later step: write it with a random multiline delimiter (NAME<<DELIM … DELIM), or not at all" : ""),
+      fix: `pass the value through an environment variable and read the variable, quoted, where the expression was ("$VAR" in bash, $env:VAR in PowerShell, process.env.VAR in github-script), so the shell reads it as data. The variable is only data while nothing parses it again: not inside a command string (bash -c, eval, ssh, a github-script exec), a program (awk, sed, jq), an option that runs a program (tar --checkpoint-action, git --upload-pack), or a line written to $GITHUB_ENV, $GITHUB_PATH or $GITHUB_OUTPUT (a newline in it sets another variable: write it with a random multiline delimiter); where it is a command's argument, put -- before it so a leading dash is not read as an option`,
       tradeoff: "none to speak of: the step reads the same value, and only the shell no longer executes it",
-      // The first step that can be rewritten with certainty, as it stands with only its expressions
-      // moved to env; none when no step can (a cmd or python shell, a heredoc, a matrix OS).
-      example: (injections.find((x) => x.example) || {}).example || ""
+      example: patternExample(injections[0])
     });
   }
   const writeAll = scans.filter((s) => s.writeAll.length);
