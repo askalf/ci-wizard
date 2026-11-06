@@ -10116,9 +10116,15 @@ function summary(a) {
     parts.push(`${plural(billedFindings.length, "finding")} would save about ${saved} billed minutes a week`);
   }
   if (waitOnly.length) parts.push(`${plural(waitOnly.length, "finding")} would save developer wait rather than minutes`);
-  if (guards.length) {
-    const against = [...new Set(guards.map(guardsAgainst).filter(Boolean))].map((g) => `against ${g}`);
-    parts.push(against.length ? `${plural(guards.length, "finding")} ${guards.length === 1 ? "guards" : "guard"} ${against.join(" and ")}` : `${plural(guards.length, "finding")} ${guards.length === 1 ? "is a guard" : "are guards"}`);
+  const known = guards.filter(guardsAgainst);
+  const unknown = guards.length - known.length;
+  if (known.length) {
+    const against = [...new Set(known.map(guardsAgainst))].map((g) => `against ${g}`);
+    parts.push(`${plural(known.length, "finding")} ${known.length === 1 ? "guards" : "guard"} ${against.join(" and ")}`);
+  }
+  if (unknown) {
+    const kind = unknown === 1 ? known.length ? "is another guard" : "is a guard" : known.length ? "are other guards" : "are guards";
+    parts.push(`${plural(unknown, "finding")} ${kind}`);
   }
   const caveat = jobFindings.length || billedFindings.length ? " Savings are estimates, and fixes can overlap, so they add up to an upper bound." : "";
   L.push(`${usage} ${parts.join("; ")}.${caveat}`);

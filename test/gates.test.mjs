@@ -384,5 +384,9 @@ test('the summary says what each kind of guard guards against', () => {
     /2 findings guard against merging a pull request whose checks fail and against hung jobs\./);
   // A guard the report has no wording for is still counted, without a made-up purpose.
   assert.match(line([guard('some future guard')]), /1 finding is a guard\./);
+  assert.match(line([guard('some future guard'), guard('another future guard')]), /2 findings are guards\./);
+  // Known and unknown together: each counted apart, the known purpose given only to its own.
+  assert.match(line([guard('jobs without a working timeout'), guard('some future guard')]), /1 finding guards against hung jobs; 1 finding is another guard\./);
+  assert.match(line([guard('jobs without a working timeout'), guard('a'), guard('b')]), /1 finding guards against hung jobs; 2 findings are other guards\./);
   assert.equal(savingText(guard('some future guard')), 'a guard, not minutes');
 });
