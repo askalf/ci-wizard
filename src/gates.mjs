@@ -32,6 +32,14 @@ const SCAN_COMMAND = /^(semgrep (ci|scan)|snyk code test|codeql database (create
 // another program by its path, package or image (go run, pipx run, a container).
 const NOT_CODE_TOOLS = new Set(['scorecard', 'scorecard-action', 'zizmor', 'actionlint', 'poutine']);
 const RUNNERS = new Set(['go', 'docker', 'podman', 'pipx']);
+// The words after a runner's run subcommand (go run, pipx run, docker run, docker container run),
+// or none: go install and docker pull fetch a tool without running it.
+const runOperands = (args) => {
+  const words = args.map((a, i) => [a, i]).filter(([a]) => !a.startsWith('-'));
+  const [first, second] = words;
+  const run = first && first[0] === 'run' ? first : first && first[0] === 'container' && second && second[0] === 'run' ? second : null;
+  return run ? args.slice(run[1] + 1) : [];
+};
 
 // Checks that test, build or analyse the change: the ones a merge should wait for. Matched on the
 // check's name, so the finding says "inferred" and lists the rest apart.
@@ -65,7 +73,7 @@ function fileFacts(scanFiles) {
       const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u))
         || images.some((i) => NOT_CODE_TOOLS.has(imageName(i)))
         || commands.some(([program, ...args]) => NOT_CODE_TOOLS.has(program.toLowerCase())
-          || (RUNNERS.has(program) && args.some((a) => NOT_CODE_TOOLS.has(imageName(a)))));
+          || (RUNNERS.has(program) && runOperands(args).some((a) => NOT_CODE_TOOLS.has(imageName(a)))));
       if (uses.some((u) => CODE_SCANNERS.test(u))
         || (!notCode && uses.some((u) => u.startsWith('github/codeql-action/upload-sarif@')))
         || images.some((i) => SCANNER_IMAGES.has(imageName(i)))

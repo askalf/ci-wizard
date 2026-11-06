@@ -326,6 +326,10 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   assert.ok(!counts(job('      - run: actionlint -format "{{json .}}" > a.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(!counts(job('      - run: go run github.com/rhysd/actionlint/cmd/actionlint@latest -format "{{json .}}" > a.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(!counts(job('      - run: uvx zizmor --format sarif . > z.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(!counts(job('      - run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -format sarif > a.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  // Installing or pulling a linter without running it leaves a code scanner's upload counted.
+  assert.ok(counts(job('      - run: go install github.com/rhysd/actionlint/cmd/actionlint@latest\n      - run: trivy fs --format sarif -o t.sarif .\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(counts(job('      - run: docker pull rhysd/actionlint:latest && trivy fs --format sarif -o t.sarif .\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   // A linter only mentioned does not make a code scanner's upload about workflows.
   assert.ok(counts(job('      - run: echo "actionlint runs elsewhere"; trivy fs --format sarif -o t.sarif .\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
 });
