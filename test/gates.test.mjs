@@ -259,3 +259,28 @@ test('two rulesets requiring the same name, one from any app and one from Action
     assert.doesNotMatch(f.evidence, /not judged/); // "test" was judged through its Actions binding
   }
 });
+
+test('code scanning: Semgrep, Snyk, SonarSource and a code scanner\'s SARIF upload count; a Scorecard upload does not', () => {
+  const g = gates({ code_scanning_runs: false });
+  const job = (steps, extra = '') => `on: [pull_request]\njobs:\n  scan:\n    runs-on: ubuntu-latest\n${extra}    steps:\n${steps}`;
+  const counts = (text) => !whats(gateFindings(g, { scanFiles: files(text), scanned: all(1) })).includes('no code scanning');
+  assert.ok(counts(job('      - uses: semgrep/semgrep-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(counts(job('      - uses: snyk/actions/node@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(counts(job('      - uses: SonarSource/sonarqube-scan-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(counts(job('      - run: semgrep ci --sarif > out.sarif\n')));
+  assert.ok(counts(job('      - run: semgrep ci\n', '    container:\n      image: semgrep/semgrep\n')));
+  assert.ok(counts(job('      - run: trivy fs --format sarif -o t.sarif .\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  // Near misses: Scorecard's or a workflow linter's SARIF is not about the code; a script that only
+  // mentions a scanner is not one.
+  assert.ok(!counts(job('      - uses: ossf/scorecard-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(!counts(job('      - uses: zizmorcore/zizmor-action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(!counts(job('      - run: echo "we should add semgrep someday"\n')));
+  // A workflow linter run by command, whose SARIF is about the workflows.
+  assert.ok(!counts(job('      - run: actionlint -format "{{json .}}" > a.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+});
+
+test('a workflow file is parsed once: the scans and the gate checks share the document', async () => {
+  const { parseWorkflow } = await import('../src/workflow.mjs');
+  const text = `on: [push]\njobs:\n  x${Date.now()}:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make\n`;
+  assert.equal(parseWorkflow(text), parseWorkflow(text));
+});

@@ -300,24 +300,43 @@ const list = (xs, n = 5) => `${xs.slice(0, n).join('; ')}${xs.length > n ? ` and
 const where = (paths) => (paths.length === 1 ? paths[0] : `${paths.length} workflow files: ${list(paths, 4)}`);
 
 /** The scan findings for a repository's workflow files (path -> text), one per kind. */
-export function scanFindings(files) {
+export function scanFindings(files, { repo = null } = {}) {
   const scans = [...files].map(([path, text]) => ({ path, ...scanWorkflow(text) })).filter((s) => s.parsed);
   const F = [];
 
   const unpinned = scans.flatMap((s) => s.unpinned.map((u) => ({ ...u, path: s.path })));
   if (unpinned.length) {
-    const third = unpinned.filter((u) => !u.firstParty);
+    // Who can move each reference: a third party, GitHub (actions/, github/), the repository's own
+    // owner, or the repository itself. The last is better referenced locally than pinned.
+    const [owner, name] = String(repo || '').toLowerCase().split('/');
+    const whose = (u) => {
+      const [o, r] = u.uses.toLowerCase().split('@')[0].split('/');
+      if (owner && o === owner && r === name) return 'self';
+      if (owner && o === owner) return 'owner';
+      return u.firstParty ? 'github' : 'third';
+    };
+    const by = { third: [], github: [], owner: [], self: [] };
+    for (const u of unpinned) by[whose(u)].push(u);
     const unique = (xs) => [...new Set(xs.map((u) => u.uses))];
     const paths = [...new Set(unpinned.map((u) => u.path))];
+    const parts = [];
+    if (by.third.length) parts.push(`third-party: ${list(unique(by.third))}`);
+    if (by.owner.length) parts.push(`owned by ${owner}: ${list(unique(by.owner), 3)}`);
+    if (by.github.length) parts.push(`GitHub's own: ${list(unique(by.github), 3)}`);
+    if (by.self.length) parts.push(`this repository's own, at a branch or tag (a local ./ reference needs no pin): ${list(unique(by.self), 3)}`);
+    // The example fixes the riskiest kind: a third party's action first, a local reference for the
+    // repository's own reusable workflow.
+    const first = by.third[0] || by.owner[0] || by.github[0] || by.self[0];
+    const [ref, tag] = first.uses.split('@');
+    const localPath = whose(first) === 'self' ? ref.split('/').slice(2).join('/') : null;
     F.push({
       saving: 0, unit: 'risk', confidence: 'confirmed', what: 'actions not pinned to a commit',
       workflow: where(paths),
-      evidence: `${unpinned.length} action reference${unpinned.length === 1 ? '' : 's'} ${unpinned.length === 1 ? 'is' : 'are'} pinned to a tag or branch, which its owner (or anyone who takes over the repository) can move to other code`
-        + (third.length ? `; third-party: ${list(unique(third))}` : '; all are GitHub\'s own actions')
-        + (unpinned.length > third.length ? `${third.length ? '; GitHub\'s own' : ''}: ${list(unique(unpinned.filter((u) => u.firstParty)), 3)}` : ''),
-      fix: 'pin each to the full 40-character commit SHA of the release it means, with the tag in a comment, and let Dependabot or Renovate propose new pins as releases come',
+      evidence: `${unpinned.length} action reference${unpinned.length === 1 ? '' : 's'} ${unpinned.length === 1 ? 'is' : 'are'} pinned to a tag or branch, which can be moved to other code by whoever controls that repository; ${parts.join('; ')}`,
+      fix: 'pin each to the full 40-character commit SHA of the release it means, with the tag in a comment, and let Dependabot or Renovate propose new pins as releases come'
+        + (by.self.length ? '; reference this repository\'s own reusable workflows and actions locally (./.github/...), which runs the same commit as the caller' : ''),
       tradeoff: 'a new release becomes a pull request to review instead of arriving silently with a moved tag',
-      example: `- uses: ${(third[0] || unpinned[0]).uses.split('@')[0]}@<full 40-character commit SHA>  # ${(third[0] || unpinned[0]).uses.split('@')[1]}`,
+      example: localPath ? `- uses: ./${localPath}   # the same commit as the caller, nothing to pin` : `- uses: ${ref}@<full 40-character commit SHA>  # ${tag}`,
     });
   }
 

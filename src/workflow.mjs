@@ -25,14 +25,25 @@ export function category(name) {
   return 'work';
 }
 
+// The scans, the merge-gate checks and the measurements each read the same files: a parsed file is
+// kept by its text, so each is parsed once per audit. Callers treat the document as read-only.
+const parsed = new Map();
+const PARSED_MAX = 512;
+
 export function parseWorkflow(text) {
   if (!text) return {};
+  const key = String(text);
+  if (parsed.has(key)) return parsed.get(key);
+  let doc;
   try {
-    const doc = parse(text, { uniqueKeys: false });
-    return doc && typeof doc === 'object' && !Array.isArray(doc) ? doc : {};
+    doc = parse(key, { uniqueKeys: false });
+    doc = doc && typeof doc === 'object' && !Array.isArray(doc) ? doc : {};
   } catch {
-    return {};
+    doc = {};
   }
+  if (parsed.size >= PARSED_MAX) parsed.clear();
+  parsed.set(key, doc);
+  return doc;
 }
 
 // A job's steps as a list. A file that gives `steps` as anything else (a mapping, a number) has no

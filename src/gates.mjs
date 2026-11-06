@@ -2,7 +2,7 @@
 // whether pull requests are checked at all, and the two workflows a supply-chain review expects
 // (code scanning, dependency updates). Every finding comes from what the API showed; whatever it
 // could not read (a ruleset, a listing) yields no finding rather than a guess.
-import { allSteps, parseWorkflow, triggersOf } from './workflow.mjs';
+import { parseWorkflow, triggersOf } from './workflow.mjs';
 
 // GitHub Actions' app id. Only a required check bound to it is known to come from a workflow job,
 // which the runs show. One bound to another app (a coverage service, a review bot), or bound to no
@@ -11,6 +11,10 @@ const ACTIONS_APP = 15368;
 export const isActionsCheck = (c) => c.integrationId === ACTIONS_APP;
 
 const PR_TRIGGERS = new Set(['pull_request', 'pull_request_target', 'merge_group']);
+
+// Actions that scan a repository's code and report its vulnerabilities: CodeQL, Semgrep, Snyk,
+// SonarSource (SonarCloud, SonarQube), Bearer.
+const CODE_SCANNERS = /^(github\/codeql-action\/(init|analyze)|returntocorp\/semgrep-action|semgrep\/semgrep-action|snyk\/actions\/|sonarsource\/|bearer\/bearer-action)/i;
 
 // Checks that test, build or analyse the change: the ones a merge should wait for. Matched on the
 // check's name, so the finding says "inferred" and lists the rest apart.
@@ -26,9 +30,25 @@ function fileFacts(scanFiles) {
     const doc = parseWorkflow(text);
     if (!Object.keys(doc).length) continue;
     if (triggersOf(doc).some((t) => PR_TRIGGERS.has(t))) onPr.push(path);
-    // A step that runs CodeQL, read from the parsed steps: a commented-out line or a script that
-    // mentions it is not one.
-    if (allSteps(doc).some((st) => /^github\/codeql-action\/(init|analyze)@/i.test(String(st.uses || '').trim()))) codeql = true;
+    // A step that scans the code, read from the parsed steps (a commented-out line or a script that
+    // only mentions one is not one): CodeQL, or another code scanner by its action, its container
+    // or its command. A SARIF upload counts when its job is not a Scorecard or workflow-linter run,
+    // whose results are about the repository's settings or workflows, not its code.
+    for (const job of Object.values(doc.jobs || {})) {
+      if (!job || typeof job !== 'object') continue;
+      const steps = Array.isArray(job.steps) ? job.steps.filter((st) => st && typeof st === 'object') : [];
+      const uses = steps.map((st) => String(st.uses || '').trim().toLowerCase());
+      const runs = steps.map((st) => String(st.run || ''));
+      const image = String((job.container && (job.container.image || job.container)) || '').toLowerCase();
+      // A job that runs Scorecard or a workflow linter (by action or by command) uploads results
+      // about settings or workflows, not about the code.
+      const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u))
+        || runs.some((r) => /\b(scorecard|zizmor|actionlint|poutine)\b/i.test(r));
+      if (uses.some((u) => CODE_SCANNERS.test(u))
+        || (!notCode && uses.some((u) => u.startsWith('github/codeql-action/upload-sarif@')))
+        || /semgrep|snyk|sonar/.test(image)
+        || runs.some((r) => /(^|[\s;&|(])(semgrep (ci|scan)|snyk code test|codeql database (create|analyze))\b/.test(r))) codeql = true;
+    }
   }
   return { onPr, codeql };
 }
@@ -114,7 +134,7 @@ export function gateFindings(gates, { scanFiles = new Map(), scanned = null, vis
     const paid = visibility && visibility !== 'public';
     F.push({
       saving: 0, unit: 'risk', confidence: 'inferred', what: 'no code scanning', workflow: 'all workflows',
-      evidence: `no workflow file runs github/codeql-action and no code scanning run is in the window, so pull requests are not scanned for vulnerabilities in the code${paid ? '; on a private repository this needs GitHub Advanced Security (or Code Security)' : ''}`,
+      evidence: `no workflow file runs a code scanner (CodeQL, Semgrep, Snyk, SonarSource, or a SARIF upload) and no code scanning default-setup run is in the window, so pull requests are not scanned for vulnerabilities in the code${paid ? '; CodeQL on a private repository needs GitHub Advanced Security (or Code Security)' : ''}`,
       fix: 'turn on CodeQL default setup (Settings, Code security, Code scanning), or add a CodeQL workflow, and require its analyze check',
       tradeoff: 'each push and pull request runs an analysis (minutes for most repositories); findings need triage',
       example: '',

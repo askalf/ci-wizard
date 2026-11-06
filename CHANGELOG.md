@@ -13,6 +13,17 @@ Merge gates: what stands between a pull request and the default branch.
 - **no workflow checks pull requests**, **no code scanning**, **no dependency updates:** the
   workflows a supply-chain review expects, when the listings show they are missing.
 
+Checked against 1,224 workflow files from 40 popular repositories (no crash, no parse failure,
+and every untrusted expression found in a script was one the scan reports):
+
+- **Unpinned references by owner:** the evidence says who can move each reference: a third
+  party, the repository's owner, GitHub, or the repository itself. The repository's own reusable
+  workflow at a branch gets a local `./` reference as its example, which needs no pin.
+- **More code scanners:** Semgrep, Snyk, SonarSource, Bearer and code-scanner SARIF uploads now
+  count as code scanning. Scorecard and workflow-linter uploads don't.
+- **One parse per file:** each workflow file is parsed once per audit and shared by the scans,
+  the gate checks and the measurements.
+
 Required checks come from the default branch's rulesets and protection summary, which every
 token can read. A pull request's checks are the jobs of each workflow's newest pull request run,
 already read for timing when sampled. When something can't be read, nothing is claimed.

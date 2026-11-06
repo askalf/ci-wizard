@@ -8236,14 +8236,22 @@ function category(name) {
   for (const [c, rx] of CATS) if (rx.test(n)) return c;
   return "work";
 }
+var parsed = /* @__PURE__ */ new Map();
+var PARSED_MAX = 512;
 function parseWorkflow(text) {
   if (!text) return {};
+  const key = String(text);
+  if (parsed.has(key)) return parsed.get(key);
+  let doc;
   try {
-    const doc = (0, import_yaml.parse)(text, { uniqueKeys: false });
-    return doc && typeof doc === "object" && !Array.isArray(doc) ? doc : {};
+    doc = (0, import_yaml.parse)(key, { uniqueKeys: false });
+    doc = doc && typeof doc === "object" && !Array.isArray(doc) ? doc : {};
   } catch {
-    return {};
+    doc = {};
   }
+  if (parsed.size >= PARSED_MAX) parsed.clear();
+  parsed.set(key, doc);
+  return doc;
 }
 function stepsOfJob(job) {
   return job && Array.isArray(job.steps) ? job.steps : [];
@@ -8807,24 +8815,40 @@ function scanWorkflow(text) {
 }
 var list = (xs, n = 5) => `${xs.slice(0, n).join("; ")}${xs.length > n ? ` and ${xs.length - n} more` : ""}`;
 var where = (paths) => paths.length === 1 ? paths[0] : `${paths.length} workflow files: ${list(paths, 4)}`;
-function scanFindings(files) {
+function scanFindings(files, { repo = null } = {}) {
   const scans = [...files].map(([path, text]) => ({ path, ...scanWorkflow(text) })).filter((s) => s.parsed);
   const F = [];
   const unpinned = scans.flatMap((s) => s.unpinned.map((u) => ({ ...u, path: s.path })));
   if (unpinned.length) {
-    const third = unpinned.filter((u) => !u.firstParty);
+    const [owner, name] = String(repo || "").toLowerCase().split("/");
+    const whose = (u) => {
+      const [o, r] = u.uses.toLowerCase().split("@")[0].split("/");
+      if (owner && o === owner && r === name) return "self";
+      if (owner && o === owner) return "owner";
+      return u.firstParty ? "github" : "third";
+    };
+    const by = { third: [], github: [], owner: [], self: [] };
+    for (const u of unpinned) by[whose(u)].push(u);
     const unique = (xs) => [...new Set(xs.map((u) => u.uses))];
     const paths = [...new Set(unpinned.map((u) => u.path))];
+    const parts = [];
+    if (by.third.length) parts.push(`third-party: ${list(unique(by.third))}`);
+    if (by.owner.length) parts.push(`owned by ${owner}: ${list(unique(by.owner), 3)}`);
+    if (by.github.length) parts.push(`GitHub's own: ${list(unique(by.github), 3)}`);
+    if (by.self.length) parts.push(`this repository's own, at a branch or tag (a local ./ reference needs no pin): ${list(unique(by.self), 3)}`);
+    const first = by.third[0] || by.owner[0] || by.github[0] || by.self[0];
+    const [ref, tag] = first.uses.split("@");
+    const localPath = whose(first) === "self" ? ref.split("/").slice(2).join("/") : null;
     F.push({
       saving: 0,
       unit: "risk",
       confidence: "confirmed",
       what: "actions not pinned to a commit",
       workflow: where(paths),
-      evidence: `${unpinned.length} action reference${unpinned.length === 1 ? "" : "s"} ${unpinned.length === 1 ? "is" : "are"} pinned to a tag or branch, which its owner (or anyone who takes over the repository) can move to other code` + (third.length ? `; third-party: ${list(unique(third))}` : "; all are GitHub's own actions") + (unpinned.length > third.length ? `${third.length ? "; GitHub's own" : ""}: ${list(unique(unpinned.filter((u) => u.firstParty)), 3)}` : ""),
-      fix: "pin each to the full 40-character commit SHA of the release it means, with the tag in a comment, and let Dependabot or Renovate propose new pins as releases come",
+      evidence: `${unpinned.length} action reference${unpinned.length === 1 ? "" : "s"} ${unpinned.length === 1 ? "is" : "are"} pinned to a tag or branch, which can be moved to other code by whoever controls that repository; ${parts.join("; ")}`,
+      fix: "pin each to the full 40-character commit SHA of the release it means, with the tag in a comment, and let Dependabot or Renovate propose new pins as releases come" + (by.self.length ? "; reference this repository's own reusable workflows and actions locally (./.github/...), which runs the same commit as the caller" : ""),
       tradeoff: "a new release becomes a pull request to review instead of arriving silently with a moved tag",
-      example: `- uses: ${(third[0] || unpinned[0]).uses.split("@")[0]}@<full 40-character commit SHA>  # ${(third[0] || unpinned[0]).uses.split("@")[1]}`
+      example: localPath ? `- uses: ./${localPath}   # the same commit as the caller, nothing to pin` : `- uses: ${ref}@<full 40-character commit SHA>  # ${tag}`
     });
   }
   const injections = scans.flatMap((s) => s.injections.map((x) => ({ ...x, path: s.path })));
@@ -8867,6 +8891,7 @@ function scanFindings(files) {
 var ACTIONS_APP = 15368;
 var isActionsCheck = (c) => c.integrationId === ACTIONS_APP;
 var PR_TRIGGERS = /* @__PURE__ */ new Set(["pull_request", "pull_request_target", "merge_group"]);
+var CODE_SCANNERS = /^(github\/codeql-action\/(init|analyze)|returntocorp\/semgrep-action|semgrep\/semgrep-action|snyk\/actions\/|sonarsource\/|bearer\/bearer-action)/i;
 var GATE_LIKE = /\b(test|tests|lint|build|check|checks|verify|analy[sz]e|codeql|typecheck|types|dist|unit|e2e|ci|fuzz|fuzzing)\b/i;
 var list2 = (xs, n = 6) => `${xs.slice(0, n).join(", ")}${xs.length > n ? ` and ${xs.length - n} more` : ""}`;
 function fileFacts(scanFiles) {
@@ -8876,7 +8901,15 @@ function fileFacts(scanFiles) {
     const doc = parseWorkflow(text);
     if (!Object.keys(doc).length) continue;
     if (triggersOf(doc).some((t) => PR_TRIGGERS.has(t))) onPr.push(path);
-    if (allSteps(doc).some((st) => /^github\/codeql-action\/(init|analyze)@/i.test(String(st.uses || "").trim()))) codeql = true;
+    for (const job of Object.values(doc.jobs || {})) {
+      if (!job || typeof job !== "object") continue;
+      const steps = Array.isArray(job.steps) ? job.steps.filter((st) => st && typeof st === "object") : [];
+      const uses = steps.map((st) => String(st.uses || "").trim().toLowerCase());
+      const runs = steps.map((st) => String(st.run || ""));
+      const image = String(job.container && (job.container.image || job.container) || "").toLowerCase();
+      const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u)) || runs.some((r) => /\b(scorecard|zizmor|actionlint|poutine)\b/i.test(r));
+      if (uses.some((u) => CODE_SCANNERS.test(u)) || !notCode && uses.some((u) => u.startsWith("github/codeql-action/upload-sarif@")) || /semgrep|snyk|sonar/.test(image) || runs.some((r) => /(^|[\s;&|(])(semgrep (ci|scan)|snyk code test|codeql database (create|analyze))\b/.test(r))) codeql = true;
+    }
   }
   return { onPr, codeql };
 }
@@ -8964,7 +8997,7 @@ function gateFindings(gates, { scanFiles = /* @__PURE__ */ new Map(), scanned = 
       confidence: "inferred",
       what: "no code scanning",
       workflow: "all workflows",
-      evidence: `no workflow file runs github/codeql-action and no code scanning run is in the window, so pull requests are not scanned for vulnerabilities in the code${paid ? "; on a private repository this needs GitHub Advanced Security (or Code Security)" : ""}`,
+      evidence: `no workflow file runs a code scanner (CodeQL, Semgrep, Snyk, SonarSource, or a SARIF upload) and no code scanning default-setup run is in the window, so pull requests are not scanned for vulnerabilities in the code${paid ? "; CodeQL on a private repository needs GitHub Advanced Security (or Code Security)" : ""}`,
       fix: "turn on CodeQL default setup (Settings, Code security, Code scanning), or add a CodeQL workflow, and require its analyze check",
       tradeoff: "each push and pull request runs an analysis (minutes for most repositories); findings need triage",
       example: ""
@@ -9688,7 +9721,7 @@ function analyse(repo, data) {
     workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || "", week, repo, data.outcomeSamples && data.outcomeSamples.get(wf) || {}));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
-  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" ? true : data.visibility ? "private" : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || /* @__PURE__ */ new Map()), ...scanFindings(data.scanFiles || /* @__PURE__ */ new Map()), ...gateFindings(data.gates, { scanFiles: data.scanFiles || /* @__PURE__ */ new Map(), scanned: data.scanned, visibility: data.visibility })];
+  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" ? true : data.visibility ? "private" : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || /* @__PURE__ */ new Map()), ...scanFindings(data.scanFiles || /* @__PURE__ */ new Map(), { repo }), ...gateFindings(data.gates, { scanFiles: data.scanFiles || /* @__PURE__ */ new Map(), scanned: data.scanned, visibility: data.visibility })];
   const findings = groupFindings(raw).filter((f) => f.unit === "wait" || f.unit === "risk" || f.unit === "guard" || f.saving >= T.minSavingWeek).map((f) => ({
     saving_min_week: round(f.saving, 1),
     unit: f.unit || "job",

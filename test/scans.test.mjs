@@ -316,3 +316,26 @@ test('the audit ranks scan risks first and says how many files it scanned', () =
   assert.equal(plain.findings.filter((f) => f.what === 'actions not pinned to a commit').length, 0);
   assert.doesNotMatch(report(plain), /Security scans/);
 });
+
+test('unpinned references are told apart by who can move them: a third party, the owner, GitHub, or this repository', () => {
+  const file = wf([
+    '      - uses: actions/checkout@v4',
+    '      - uses: someone/tool@v1',
+    '      - uses: acme/shared-actions/setup@main',
+    '  call:',
+  ].join('\n') + '\n') + `  reuse:\n    uses: acme/app/.github/workflows/build.yml@main\n`;
+  const [f] = scanFindings(new Map([['.github/workflows/ci.yml', file]]), { repo: 'acme/app' });
+  assert.match(f.evidence, /third-party: someone\/tool@v1/);
+  assert.match(f.evidence, /owned by acme: acme\/shared-actions\/setup@main/);
+  assert.match(f.evidence, /GitHub's own: actions\/checkout@v4/);
+  assert.match(f.evidence, /this repository's own, at a branch or tag \(a local \.\/ reference needs no pin\): acme\/app\/\.github\/workflows\/build\.yml@main/);
+  assert.match(f.example, /^- uses: someone\/tool@<full 40-character commit SHA> {2}# v1$/); // the riskiest first
+  // Only the repository's own reusable workflow: the example is the local reference.
+  const own = `on: [push]\npermissions: {}\njobs:\n  reuse:\n    uses: acme/app/.github/workflows/build.yml@main\n`;
+  const [g] = scanFindings(new Map([['.github/workflows/ci.yml', own]]), { repo: 'Acme/App' });
+  assert.equal(g.example, '- uses: ./.github/workflows/build.yml   # the same commit as the caller, nothing to pin');
+  assert.match(g.fix, /reference this repository's own reusable workflows and actions locally/);
+  // Without the repository named, the owner cannot be told apart: third-party, as before.
+  const [h] = scanFindings(new Map([['.github/workflows/ci.yml', own]]));
+  assert.match(h.evidence, /third-party: acme\/app\/\.github\/workflows\/build\.yml@main/);
+});

@@ -284,7 +284,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   takes over the repository. Local actions (`./`) and Docker images are not references. One finding
   for the repository; the evidence separates third-party actions from GitHub's own (`actions/`,
   `github/`).
-- **Confidence** confirmed. A risk, ranked first.
+- **Confidence** confirmed. A risk, ranked first. The evidence says who can move each reference:
+  a third party, the repository's owner, GitHub (`actions/`, `github/`), or the repository itself.
+  The repository's own reusable workflow or action referenced at a branch or tag is better
+  referenced locally (`./.github/...`), which runs the caller's own commit and needs no pin.
 - **Fix** the full commit SHA of the release, with the tag in a comment, and Dependabot or Renovate
   to propose new pins. *Trade-off:* a new release becomes a pull request to review instead of
   arriving with a moved tag.
@@ -392,9 +395,16 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 
 ## no code scanning
 
-- **Fires when** every workflow file was read, no step's `uses:` is `github/codeql-action/init` or
-  `/analyze` (a commented-out step or a script that mentions it does not count), and no code
-  scanning default-setup run (`dynamic/github-code-scanning`) is in the window. On a private
+- **Fires when** every workflow file was read, no job runs a code scanner, and no code
+  scanning default-setup run (`dynamic/github-code-scanning`) is in the window. A code scanner is,
+  read from the parsed steps (a commented-out step or a script that only mentions one does not
+  count):
+  - CodeQL (`github/codeql-action/init` or `/analyze`);
+  - Semgrep, Snyk, SonarSource or Bearer, by their action, their container image, or a
+    `semgrep ci`/`semgrep scan`, `snyk code test` or `codeql database` command;
+  - a SARIF upload (`github/codeql-action/upload-sarif`), unless its job runs Scorecard or a
+    workflow linter (zizmor, actionlint, poutine), whose results are about settings or
+    workflows, not the code. On a private
   repository the evidence notes that code scanning needs GitHub Advanced Security.
 - **Confidence** inferred: default setup that has not run in the window, or another scanner, is not
   seen. A risk.
