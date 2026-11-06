@@ -33,8 +33,10 @@ measured time, never the result of running the fix; the formulas are below. Thre
 `THRESHOLDS` in `src/analyse.mjs`.
 
 **Grouping.** The wrap-up tail, toolchain, queue-wait and short-hosted-jobs rules fire per
-workflow and are reported once, listing the workflows, with the savings summed and the largest
-one's evidence shown.
+workflow and are reported once, listing the workflows, with the savings summed. The evidence says
+what is measured once, then each workflow's own figure and saving, largest first, noting a
+workflow timed from only a few successful runs; up to six workflows are shown and the rest
+counted. Jobs without a working timeout are merged the same way (below).
 
 **Trade-offs and examples.** Every finding carries the trade-off written below with its rule, and
 where a fix is a change to the workflow file, YAML for it: the setup action's cache input for the
