@@ -305,9 +305,13 @@ function reference(lang, ctx, name) {
  * '…' or "…" string turns that whole string into one template literal, so it stays one operand:
  * "Title: ${{ title }}".toUpperCase() becomes `Title: ${process.env.TITLE}`.toUpperCase(), not a
  * concatenation the method call would split. A string that held only the expression becomes the
- * bare variable. Returns null where the result could differ from the script: a string that also
- * holds a trusted expression (its substituted text could break the template), an object key, a
- * legacy octal escape, a nested template, an unterminated string.
+ * bare variable. Only expressions inside string and template literals are rewritten, where what
+ * the script does with the text is plain; anything else returns null: an expression in bare code
+ * (it was code, and no variable reproduces that), a slash in code (a regular expression or a
+ * division, which this walker does not tell apart, and a regex can hold quotes that would mislead
+ * it), an escape right before an expression, a string that also holds a trusted expression (its
+ * substituted text could break the template), an object key, a legacy octal escape, a nested
+ * template, an unterminated string.
  */
 function rewriteJs(script, hits, nameOf, spans) {
   const hitAt = new Map(hits.map((h) => [h.index, h]));
@@ -318,8 +322,9 @@ function rewriteJs(script, hits, nameOf, spans) {
   while (i < script.length) {
     const c = script[i];
     const two = script.slice(i, i + 2);
-    if (hitAt.has(i)) { out += ref(i); i = endAt.get(i); continue; }
+    if (hitAt.has(i)) return null;
     if (endAt.has(i)) { out += script.slice(i, endAt.get(i)); i = endAt.get(i); continue; }
+    if (c === '/' && two !== '//' && two !== '/*') return null;
     if (two === '//' || two === '/*') {
       // GitHub expands an expression before JavaScript sees the comment, so a body with a newline
       // (or */) would end the comment and run as code: the expression is replaced here too, with
@@ -347,7 +352,7 @@ function rewriteJs(script, hits, nameOf, spans) {
         const ch = script[j];
         if (ch === '\n') return null;
         if (ch === '\\') {
-          if (/[1-7]/.test(script[j + 1] || '')) return null;
+          if (/[1-7]/.test(script[j + 1] || '') || endAt.has(j + 1)) return null;
           body += script.slice(j, j + 2);
           j += 2;
           continue;
@@ -370,7 +375,7 @@ function rewriteJs(script, hits, nameOf, spans) {
       while (j < script.length && script[j] !== '`') {
         if (hitAt.has(j)) { body += `\${${ref(j)}}`; j = endAt.get(j); continue; }
         if (endAt.has(j)) { body += script.slice(j, endAt.get(j)); j = endAt.get(j); continue; }
-        if (script[j] === '\\') { body += script.slice(j, j + 2); j += 2; continue; }
+        if (script[j] === '\\') { if (endAt.has(j + 1)) return null; body += script.slice(j, j + 2); j += 2; continue; }
         if (script[j] === '$' && script[j + 1] === '{') return null; // a nested template
         body += script[j];
         j += 1;
@@ -422,6 +427,8 @@ export function rewriteStep(step, { lang, script, field }) {
     }
     if (lang === 'posix') out = out.replace(/''("\$\w+")''/g, '$1');
   }
+  // Whatever the walkers did, an example that still interpolates untrusted text is no fix.
+  if (untrustedExpressions(out).length) return '';
   const rewritten = {};
   let placed = false;
   for (const [k, v] of Object.entries(step)) {

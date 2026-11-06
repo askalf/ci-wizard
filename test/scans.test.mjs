@@ -204,6 +204,17 @@ test('the injection example is the step itself, command and settings kept, read 
   assert.equal(none('core.info("${{ github.sha }}: ${{ github.event.issue.title }}")'), ''); // a trusted expression in the same string
   assert.equal(none('const o = { "k ${{ github.head_ref }}": 1 }'), ''); // an object key
   assert.equal(none('core.info(`${a ? "x" : "y"} ${{ github.head_ref }}`)'), ''); // a nested template
+  // An escape right before the expression, in a string or a template: the walker would skip it.
+  assert.equal(none('core.info("\\${{ github.event.issue.title }}")'), '');
+  assert.equal(none('core.info(`\\${{ github.event.issue.title }}`)'), '');
+  // A regular expression: a variable name there is not its value. Any slash in code gives no example.
+  assert.equal(none("const re = /${{ github.event.issue.title }}/; core.info(String(re.test('hello')))"), '');
+  assert.equal(none('const re = /it\'s/; core.info("${{ github.event.issue.title }}")'), '');
+  assert.equal(none('const n = a / b; core.info("${{ github.event.issue.title }}")'), '');
+  // An expression in bare code was code; no variable reproduces that.
+  assert.equal(none('const n = ${{ github.event.issue.title }};'), '');
+  // A slash inside a string or a comment is not code.
+  assert.equal(js('// a/b\ncore.info("x/y ${{ github.head_ref }}")'), '// a/b\ncore.info(`x/y ${process.env.HEAD_REF}`)');
 
   // PowerShell on Windows, by the runner or by the shell.
   assert.equal(parse(injectionExample('      - run: Write-Host "${{ github.head_ref }}"\n', 'windows-latest'))[0].run, 'Write-Host "${env:HEAD_REF}"');
@@ -226,6 +237,8 @@ test('the injection example is left out where the rewrite cannot be certain', ()
   assert.equal(injectionExample('      - run: |\n          bash -\\\n          c "echo ${{ github.event.issue.title }}"\n'), '');
   assert.equal(injectionExample('      - run: |\n          ba\\\n          sh -c "echo ${{ github.event.issue.title }}"\n'), '');
   assert.equal(injectionExample('      - run: |\n          ev\\\n          al "echo ${{ github.head_ref }}"\n'), '');
+  // A backslash right before the expression in a shell script: no example rather than one that keeps it.
+  assert.equal(injectionExample('      - run: echo "\\${{ github.head_ref }}"\n'), '');
   // A quote in a shell comment is not a quote: the next line's expression is unquoted.
   assert.equal(parse(injectionExample("      - run: |\n          # don't\n          echo ${{ github.head_ref }}\n"))[0].run, "# don't\necho \"$HEAD_REF\"\n");
   assert.equal(parse(injectionExample("      - run: |\n          # don't\n          Write-Host ${{ github.head_ref }}\n", 'windows-latest'))[0].run, "# don't\nWrite-Host ${env:HEAD_REF}\n");

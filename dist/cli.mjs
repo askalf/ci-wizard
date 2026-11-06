@@ -8577,16 +8577,13 @@ function rewriteJs(script, hits, nameOf, spans) {
   while (i < script.length) {
     const c = script[i];
     const two = script.slice(i, i + 2);
-    if (hitAt.has(i)) {
-      out += ref(i);
-      i = endAt.get(i);
-      continue;
-    }
+    if (hitAt.has(i)) return null;
     if (endAt.has(i)) {
       out += script.slice(i, endAt.get(i));
       i = endAt.get(i);
       continue;
     }
+    if (c === "/" && two !== "//" && two !== "/*") return null;
     if (two === "//" || two === "/*") {
       const close = two === "//" ? script.indexOf("\n", i) : script.indexOf("*/", i + 2);
       const stop = close < 0 ? script.length : two === "//" ? close : close + 2;
@@ -8629,7 +8626,7 @@ function rewriteJs(script, hits, nameOf, spans) {
         const ch = script[j];
         if (ch === "\n") return null;
         if (ch === "\\") {
-          if (/[1-7]/.test(script[j + 1] || "")) return null;
+          if (/[1-7]/.test(script[j + 1] || "") || endAt.has(j + 1)) return null;
           body += script.slice(j, j + 2);
           j += 2;
           continue;
@@ -8665,6 +8662,7 @@ function rewriteJs(script, hits, nameOf, spans) {
           continue;
         }
         if (script[j] === "\\") {
+          if (endAt.has(j + 1)) return null;
           body += script.slice(j, j + 2);
           j += 2;
           continue;
@@ -8714,6 +8712,7 @@ function rewriteStep(step, { lang, script, field }) {
     }
     if (lang === "posix") out = out.replace(/''("\$\w+")''/g, "$1");
   }
+  if (untrustedExpressions(out).length) return "";
   const rewritten = {};
   let placed = false;
   for (const [k, v] of Object.entries(step)) {
