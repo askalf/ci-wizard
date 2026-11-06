@@ -399,29 +399,37 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 
 - **Fires when** every workflow file was read, no job runs a code scanner, and no code
   scanning default-setup run (`dynamic/github-code-scanning`) is in the window. A code scanner is,
-  read from the parsed steps (a commented-out step or a script that only mentions one does not
-  count):
+  read from the parsed steps (a commented-out step does not count):
   - CodeQL (`github/codeql-action/init` or `/analyze`);
-  - Semgrep, Snyk, SonarSource's scan actions or Bearer, by their action, their container
-    image (`semgrep/semgrep`, `snyk/snyk`, `sonarsource/sonar-scanner-cli`, `bearer/bearer`, as
-    the job's container or a `docker://` step), or a `semgrep ci`/`semgrep scan`,
-    `snyk code test`, `bearer scan` or `codeql database` command. A command counts where a shell
-    command starts (after an assignment, or a wrapper such as `sudo -u root`, `env -u NAME` or `npx` with its options), not in text it passes on:
-    an echoed message, a comment or a here-document. SonarSource's quality-gate action only waits
-    for a scan's result, and `snyk/actions/setup` only installs the CLI: neither counts (a scan
-    command after the setup does);
+  - Semgrep, Snyk, SonarSource or Bearer, by their action, their container image, or their
+    command:
+    - actions: `semgrep/semgrep-action`, `snyk/actions/*` except `setup` (which only installs
+      the CLI), SonarSource's scan actions (not its quality-gate action, which only waits for a
+      scan's result), `bearer/bearer-action`;
+    - images, matched by name as the job's container or a `docker://` step: `semgrep/semgrep`,
+      `snyk/snyk`, `sonarsource/sonar-scanner-cli`, `bearer/bearer` (not a SonarQube server
+      image);
+    - commands: `semgrep ci`/`semgrep scan`, `snyk code test`, `bearer scan`,
+      `codeql database create`/`analyze`;
   - a SARIF upload (`github/codeql-action/upload-sarif`), unless its job runs Scorecard or a
-    workflow linter (zizmor, actionlint, poutine; by action, by its image as the job's container
-    or a `docker://` step, or by a command that runs one, directly or as what `go run`,
-    `pipx run` or `docker run` runs: the program, package or image past the runner's global and
-    run options; for a container, its `--entrypoint` when given (which replaces the image's own,
-    the words after the image being its arguments), or else the image and a command right after
-    it (an option there belongs to the image's entrypoint); an option value such as `--name actionlint` is not, and `go install`
-    or `docker pull` alone runs nothing), whose results are about settings
-    or workflows, not the code. Each job is judged
-    on its own: a linter's SARIF handed to another job as an artifact and uploaded there counts
-    as code scanning. On a private
-  repository the evidence notes that code scanning needs GitHub Advanced Security.
+    workflow linter (zizmor, actionlint, poutine), whose results are about settings or workflows,
+    not the code. The linter is recognised by its action, its image (as above), or a command that
+    runs it.
+
+  A command is read from the script's own commands, not its text. The script is split into
+  commands outside quotes, without comments or here-document bodies. A command's program is
+  found past `if`/`then`/`do`, assignments, and wrappers (`sudo`, `env`, `npx`, `uvx` and
+  others) with their options and option values. For `go run`, `pipx run` and `docker run` (or
+  `podman run`), what runs is the program, package or image past the runner's options. For a
+  container, an `--entrypoint` replaces the image's own (the words after the image are then its
+  arguments); without one, the word right after the image is its command unless it is an option.
+  So `echo "run semgrep ci later"`, `docker run --name actionlint aquasec/trivy`,
+  `go install …/actionlint` and `docker pull rhysd/actionlint` run neither a scanner nor a
+  linter, and `sudo -u ci semgrep ci` runs a scanner.
+
+  Each job is judged on its own: a linter's SARIF handed to another job as an artifact and
+  uploaded there counts as code scanning. On a private repository the evidence notes that code
+  scanning needs GitHub Advanced Security.
 - **Confidence** inferred: default setup that has not run in the window, or another scanner, is not
   seen. A risk.
 
