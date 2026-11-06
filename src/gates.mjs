@@ -31,15 +31,43 @@ const SCAN_COMMAND = /^(semgrep (ci|scan)|snyk code test|codeql database (create
 // Tools whose SARIF is about the repository's settings or its workflows, and the programs that run
 // another program by its path, package or image (go run, pipx run, a container).
 const NOT_CODE_TOOLS = new Set(['scorecard', 'scorecard-action', 'zizmor', 'actionlint', 'poutine']);
-const RUNNERS = new Set(['go', 'docker', 'podman', 'pipx']);
-// The words after a runner's run subcommand (go run, pipx run, docker run, docker container run),
-// or none: go install and docker pull fetch a tool without running it.
-const runOperands = (args) => {
-  const words = args.map((a, i) => [a, i]).filter(([a]) => !a.startsWith('-'));
-  const [first, second] = words;
-  const run = first && first[0] === 'run' ? first : first && first[0] === 'container' && second && second[0] === 'run' ? second : null;
-  return run ? args.slice(run[1] + 1) : [];
-};
+// Runners that fetch and run another program, each with its options that take a value. What runs
+// is the operand of the run subcommand (go run, pipx run, docker or podman run, docker container
+// run), found past the options: `docker run --name actionlint aquasec/trivy` runs Trivy. For a
+// container, the image and the command given after it both say what runs. go install, docker pull
+// and the like run nothing.
+const CONTAINER_VALUED = ['-e', '--env', '--env-file', '-v', '--volume', '--mount', '-w', '--workdir', '--name', '-u', '--user', '-p', '--publish', '--network', '--net', '--entrypoint', '-l', '--label', '--platform', '--pull', '-h', '--hostname', '--add-host', '--device', '--cap-add', '--cap-drop', '--security-opt', '--tmpfs', '--ulimit', '--restart', '--log-driver', '--log-opt', '--gpus', '--ipc', '--pid', '--runtime', '--shm-size', '--stop-signal', '--cpus', '-m', '--memory', '--group-add', '--cidfile', '--dns', '--expose', '--link', '--userns', '--uts', '--volumes-from'];
+const RUNNERS = new Map([
+  ['go', { valued: new Set(['-C', '-o', '-p', '-tags', '-ldflags', '-gcflags', '-asmflags', '-mod', '-modfile', '-overlay', '-pkgdir', '-toolexec', '-exec']), container: false }],
+  ['pipx', { valued: new Set(['--spec', '--python', '--index-url', '--pip-args']), container: false }],
+  ['docker', { valued: new Set(CONTAINER_VALUED), container: true }],
+  ['podman', { valued: new Set(CONTAINER_VALUED), container: true }],
+]);
+
+/** The index of the first operand in args from `from`, past options and their values; -1 if none. */
+function operandAt(args, from, valued) {
+  for (let i = from; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--') return i + 1 < args.length ? i + 1 : -1;
+    if (!a.startsWith('-') || a === '-') return i;
+    if (valued.has(a)) i += 1; // the option's value is the next word; --name=x carries its own
+  }
+  return -1;
+}
+
+/** What a runner command runs (its program, package or image, and a container's command), or none. */
+function runTargets(program, args) {
+  const runner = RUNNERS.get(program);
+  if (!runner) return [];
+  // The subcommand: the first word that is not an option (docker container run: the second).
+  let at = operandAt(args, 0, new Set());
+  if (runner.container && args[at] === 'container') at = operandAt(args, at + 1, new Set());
+  if (at === -1 || args[at] !== 'run') return [];
+  const target = operandAt(args, at + 1, runner.valued);
+  if (target === -1) return [];
+  const command = runner.container ? operandAt(args, target + 1, new Set()) : -1;
+  return [args[target], ...(command === -1 ? [] : [args[command]])];
+}
 
 // Checks that test, build or analyse the change: the ones a merge should wait for. Matched on the
 // check's name, so the finding says "inferred" and lists the rest apart.
@@ -73,7 +101,7 @@ function fileFacts(scanFiles) {
       const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u))
         || images.some((i) => NOT_CODE_TOOLS.has(imageName(i)))
         || commands.some(([program, ...args]) => NOT_CODE_TOOLS.has(program.toLowerCase())
-          || (RUNNERS.has(program) && runOperands(args).some((a) => NOT_CODE_TOOLS.has(imageName(a)))));
+          || runTargets(program, args).some((a) => NOT_CODE_TOOLS.has(imageName(a))));
       if (uses.some((u) => CODE_SCANNERS.test(u))
         || (!notCode && uses.some((u) => u.startsWith('github/codeql-action/upload-sarif@')))
         || images.some((i) => SCANNER_IMAGES.has(imageName(i)))

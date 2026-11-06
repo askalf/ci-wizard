@@ -327,6 +327,12 @@ test('code scanning: Semgrep, Snyk, SonarSource scans, Bearer and a code scanner
   assert.ok(!counts(job('      - run: go run github.com/rhysd/actionlint/cmd/actionlint@latest -format "{{json .}}" > a.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(!counts(job('      - run: uvx zizmor --format sarif . > z.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(!counts(job('      - run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -format sarif > a.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(!counts(job('      - run: docker run --rm node:22 actionlint -format sarif > a.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(!counts(job('      - run: pipx run --spec zizmor==1.5 zizmor --format sarif . > z.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  // A linter's name as an option value, or as the scanner's own argument, is not a linter run.
+  assert.ok(counts(job('      - run: docker run --name actionlint aquasec/trivy fs --format sarif . > t.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(counts(job('      - run: docker run -e TOOL=zizmor -v "$PWD:/src" aquasec/trivy fs --skip-dirs actionlint --format sarif /src > t.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
+  assert.ok(counts(job('      - run: go run -tags actionlint ./cmd/scan --sarif > s.sarif\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   // Installing or pulling a linter without running it leaves a code scanner's upload counted.
   assert.ok(counts(job('      - run: go install github.com/rhysd/actionlint/cmd/actionlint@latest\n      - run: trivy fs --format sarif -o t.sarif .\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));
   assert.ok(counts(job('      - run: docker pull rhysd/actionlint:latest && trivy fs --format sarif -o t.sarif .\n      - uses: github/codeql-action/upload-sarif@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n')));

@@ -9054,13 +9054,33 @@ var SCANNER_IMAGES = /* @__PURE__ */ new Set(["semgrep", "snyk", "sonar-scanner-
 var imageName = (image) => String(image || "").trim().toLowerCase().replace(/^docker:\/\//, "").split("/").pop().split(/[:@]/)[0];
 var SCAN_COMMAND = /^(semgrep (ci|scan)|snyk code test|codeql database (create|analyze)|bearer scan)( |$)/;
 var NOT_CODE_TOOLS = /* @__PURE__ */ new Set(["scorecard", "scorecard-action", "zizmor", "actionlint", "poutine"]);
-var RUNNERS = /* @__PURE__ */ new Set(["go", "docker", "podman", "pipx"]);
-var runOperands = (args) => {
-  const words = args.map((a, i) => [a, i]).filter(([a]) => !a.startsWith("-"));
-  const [first, second] = words;
-  const run2 = first && first[0] === "run" ? first : first && first[0] === "container" && second && second[0] === "run" ? second : null;
-  return run2 ? args.slice(run2[1] + 1) : [];
-};
+var CONTAINER_VALUED = ["-e", "--env", "--env-file", "-v", "--volume", "--mount", "-w", "--workdir", "--name", "-u", "--user", "-p", "--publish", "--network", "--net", "--entrypoint", "-l", "--label", "--platform", "--pull", "-h", "--hostname", "--add-host", "--device", "--cap-add", "--cap-drop", "--security-opt", "--tmpfs", "--ulimit", "--restart", "--log-driver", "--log-opt", "--gpus", "--ipc", "--pid", "--runtime", "--shm-size", "--stop-signal", "--cpus", "-m", "--memory", "--group-add", "--cidfile", "--dns", "--expose", "--link", "--userns", "--uts", "--volumes-from"];
+var RUNNERS = /* @__PURE__ */ new Map([
+  ["go", { valued: /* @__PURE__ */ new Set(["-C", "-o", "-p", "-tags", "-ldflags", "-gcflags", "-asmflags", "-mod", "-modfile", "-overlay", "-pkgdir", "-toolexec", "-exec"]), container: false }],
+  ["pipx", { valued: /* @__PURE__ */ new Set(["--spec", "--python", "--index-url", "--pip-args"]), container: false }],
+  ["docker", { valued: new Set(CONTAINER_VALUED), container: true }],
+  ["podman", { valued: new Set(CONTAINER_VALUED), container: true }]
+]);
+function operandAt(args, from, valued) {
+  for (let i = from; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--") return i + 1 < args.length ? i + 1 : -1;
+    if (!a.startsWith("-") || a === "-") return i;
+    if (valued.has(a)) i += 1;
+  }
+  return -1;
+}
+function runTargets(program, args) {
+  const runner = RUNNERS.get(program);
+  if (!runner) return [];
+  let at = operandAt(args, 0, /* @__PURE__ */ new Set());
+  if (runner.container && args[at] === "container") at = operandAt(args, at + 1, /* @__PURE__ */ new Set());
+  if (at === -1 || args[at] !== "run") return [];
+  const target = operandAt(args, at + 1, runner.valued);
+  if (target === -1) return [];
+  const command2 = runner.container ? operandAt(args, target + 1, /* @__PURE__ */ new Set()) : -1;
+  return [args[target], ...command2 === -1 ? [] : [args[command2]]];
+}
 var GATE_LIKE = /\b(test|tests|lint|build|check|checks|verify|analy[sz]e|codeql|typecheck|types|dist|unit|e2e|ci|fuzz|fuzzing)\b/i;
 var list2 = (xs, n = 6) => `${xs.slice(0, n).join(", ")}${xs.length > n ? ` and ${xs.length - n} more` : ""}`;
 function fileFacts(scanFiles) {
@@ -9077,7 +9097,7 @@ function fileFacts(scanFiles) {
       const runs = steps.map((st) => String(st.run || ""));
       const images = [job.container && typeof job.container === "object" ? job.container.image : job.container, ...uses.filter((u) => u.startsWith("docker://"))];
       const commands = runs.flatMap((r) => shellCommands(r)).map(programWords).filter((c) => c.length);
-      const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u)) || images.some((i) => NOT_CODE_TOOLS.has(imageName(i))) || commands.some(([program, ...args]) => NOT_CODE_TOOLS.has(program.toLowerCase()) || RUNNERS.has(program) && runOperands(args).some((a) => NOT_CODE_TOOLS.has(imageName(a))));
+      const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u)) || images.some((i) => NOT_CODE_TOOLS.has(imageName(i))) || commands.some(([program, ...args]) => NOT_CODE_TOOLS.has(program.toLowerCase()) || runTargets(program, args).some((a) => NOT_CODE_TOOLS.has(imageName(a))));
       if (uses.some((u) => CODE_SCANNERS.test(u)) || !notCode && uses.some((u) => u.startsWith("github/codeql-action/upload-sarif@")) || images.some((i) => SCANNER_IMAGES.has(imageName(i))) || commands.some((c) => SCAN_COMMAND.test(c.join(" ")))) codeql = true;
     }
   }
