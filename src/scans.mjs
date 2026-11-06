@@ -232,14 +232,15 @@ function shellLang(shell, runsOn) {
 const NESTED = {
   posix: [
     /\b(ba|z|da|k|fi|c|tc)?sh\s+(-[A-Za-z]+\s+)*-[A-Za-z]*c\b/,
-    /(^|[\s;&|(`])(eval|source|exec|ssh|su|xargs|awk|gawk|mawk|nawk|sed|jq|yq|envsubst|osascript)\b/,
+    /(^|[\s;&|(`'"\\/])(eval|source|exec|ssh|su|xargs|awk|gawk|mawk|nawk|sed|jq|yq|envsubst|osascript)\b/,
     /(^|[\s;&|(`])\.\s/,
+    /\|\s*(\S*\/)?(ba|z|da|k|fi|c|tc)?sh\b/,
     /\b(python[0-9.]*|node|nodejs|deno|bun|perl|ruby|php|pwsh|powershell|Rscript|lua)\b[^\n]*\s-(c|e|E|r|Command|eval|exec)\b/,
     /\bfind\b[^\n]*\s-exec(dir)?\b/,
     /\bgit\b[^\n]*\s-c\s/,
   ],
   pwsh: [/\b(Invoke-Expression|iex|Invoke-Command|Start-Process|cmd(\.exe)?|bash|sh|wsl|pwsh|powershell|python[0-9.]*|node)\b/i, /\s-(Command|c|e|EncodedCommand)\b/i],
-  js: [/\b(eval|Function|exec|execSync|execFile|execFileSync|spawn|spawnSync|execa|execaCommand|runInNewContext|runInThisContext)\s*\(/, /\$`/, /child_process/],
+  js: [/\b(eval|Function|exec|execSync|execFile|execFileSync|spawn|spawnSync|execa|execaCommand|getExecOutput|runInNewContext|runInThisContext|setTimeout|setInterval|import)\s*\(/, /\$`/, /child_process/],
 };
 
 /**
@@ -290,6 +291,95 @@ export function nestedInterpreter(script, offset, lang) {
     : lang === 'pwsh' ? commandAt(script, offset, lang).replace(/`\r?\n/g, ' ')
       : commandAt(script, offset, lang).replace(/\\\r?\n/g, '');
   return (NESTED[lang] || []).some((re) => re.test(text));
+}
+
+// The commands a rewritten shell step may run: each takes its arguments as data, never as code or
+// a program. A blocklist of second parsers cannot be complete (an absolute path, a pipe into sh, a
+// command held in a variable, a file written and then run), so the rewrite is offered only when
+// every command in the script is one of these.
+const DATA_COMMANDS = {
+  posix: new Set([
+    'echo', 'printf', 'gh', 'git', 'curl', 'wget', 'test', '[', '[[', 'cd', 'pushd', 'popd', 'mkdir', 'cp', 'mv',
+    'rm', 'rmdir', 'ln', 'touch', 'cat', 'tee', 'grep', 'egrep', 'fgrep', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut',
+    'tr', 'ls', 'basename', 'dirname', 'realpath', 'readlink', 'date', 'sleep', 'true', 'false', ':', 'exit',
+    'return', 'export', 'local', 'declare', 'readonly', 'typeset', 'set', 'unset', 'shift', 'read', 'base64',
+    'sha256sum', 'sha1sum', 'md5sum', 'tar', 'zip', 'unzip', 'gzip', 'gunzip', 'chmod', 'chown', 'mktemp', 'diff',
+    'cmp', 'printenv',
+  ]),
+  pwsh: new Set([
+    'write-host', 'write-output', 'write-error', 'write-warning', 'write-verbose', 'echo', 'set-content',
+    'add-content', 'out-file', 'new-item', 'remove-item', 'copy-item', 'move-item', 'test-path', 'get-content',
+    'get-childitem', 'gh', 'git', 'exit',
+  ]),
+};
+const SHELL_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until', '!', '{', '}', 'time', 'esac', 'elseif', 'try', 'catch', 'finally']);
+const SKIP_SEGMENT = new Set(['for', 'case', 'select', 'function', 'foreach', 'switch']);
+
+/**
+ * Whether every command in a shell script takes its arguments as data (DATA_COMMANDS). The script
+ * is split into simple commands at unquoted separators (newline, ;, &, |, parentheses, braces);
+ * each one's command word, after assignments and keywords, has to be a known name: one held in a
+ * variable, a substitution inside a string, a heredoc, or any other name gives false.
+ */
+export function onlyDataCommands(script, lang) {
+  const safe = DATA_COMMANDS[lang];
+  if (!safe) return false;
+  const text = lang === 'pwsh' ? script.replace(/`\r?\n/g, ' ') : script.replace(/\\\r?\n/g, '');
+  const ends = new Map([...text.matchAll(/\$\{\{[\s\S]*?\}\}/g)].map((m) => [m.index, m.index + m[0].length]));
+  const segments = [[]];
+  let word = '';
+  let quote = null;
+  const endWord = () => { if (word) segments[segments.length - 1].push(word); word = ''; };
+  const endSegment = () => { endWord(); segments.push([]); };
+  for (let i = 0; i < text.length; i += 1) {
+    if (ends.has(i)) { word += text.slice(i, ends.get(i)); i = ends.get(i) - 1; continue; }
+    const c = text[i];
+    const two = text.slice(i, i + 2);
+    if (quote === "'") { word += c; if (c === "'") quote = null; continue; }
+    if (quote === '"') {
+      if (lang === 'posix' && (c === '`' || two === '$(')) return false; // a command inside a string
+      if (lang === 'pwsh' && two === '$(') return false;
+      if (c === (lang === 'pwsh' ? '`' : '\\')) { word += two; i += 1; continue; }
+      word += c;
+      if (c === '"') quote = null;
+      continue;
+    }
+    if (c === (lang === 'pwsh' ? '`' : '\\')) { word += two; i += 1; continue; }
+    if (c === "'" || c === '"') { quote = c; word += c; continue; }
+    if (c === '#' && !word) { const nl = text.indexOf('\n', i); i = (nl < 0 ? text.length : nl) - 1; continue; }
+    if (lang === 'posix' && (two === '<<' || c === '`')) return false;
+    if (lang === 'posix' && c === '$' && text[i + 1] === '{') { const close = text.indexOf('}', i); if (close < 0) return false; word += text.slice(i, close + 1); i = close; continue; }
+    if (lang === 'posix' && two === '$(') { endSegment(); i += 1; continue; }
+    if (lang === 'pwsh' && (two === '@"' || two === "@'" || two === '<#')) return false;
+    if ((c === '&' && (text[i - 1] === '>' || text[i + 1] === '>')) || (c === '>' && text[i + 1] === '&')) { word += c; continue; }
+    if ('\n;&|(){}'.includes(c)) { endSegment(); continue; }
+    if (/\s/.test(c)) { endWord(); continue; }
+    word += c;
+  }
+  if (quote) return false;
+  endWord();
+  const PREFIX = new Set(['sudo', 'env', 'nohup', 'nice', 'timeout', 'stdbuf', 'command', 'builtin']);
+  for (const seg of segments) {
+    let k = 0;
+    if (lang === 'pwsh' && /^\$[\w:]+$/.test(seg[0] || '') && seg[1] === '=') k = 2; // $x = …
+    for (;;) {
+      while (k < seg.length && (/^[A-Za-z_]\w*=/.test(seg[k]) || SHELL_KEYWORDS.has(seg[k].toLowerCase()))) k += 1;
+      if (k >= seg.length) break;
+      if (SKIP_SEGMENT.has(seg[k].toLowerCase())) break;
+      let name = seg[k].replace(/^(['"])(.*)\1$/, '$2');
+      if (/[$`*?'"&]/.test(name) || name === '.') return false;
+      name = name.split('/').pop();
+      if (lang === 'pwsh') name = name.toLowerCase();
+      if (lang === 'posix' && PREFIX.has(name)) {
+        k += 1;
+        while (k < seg.length && /^(-|\d+[smhd]?$|[A-Za-z_]\w*=)/.test(seg[k])) k += 1;
+        continue;
+      }
+      if (!safe.has(name)) return false;
+      break;
+    }
+  }
+  return true;
 }
 
 /** How a script reads environment variable `name` in a quote context, or null where it cannot. */
@@ -417,6 +507,7 @@ export function rewriteStep(step, { lang, script, field }) {
     out = rewriteJs(script, hits, nameOf, all);
     if (out === null) return '';
   } else {
+    if (!onlyDataCommands(script, lang)) return '';
     const ctxAt = quoteContexts(script, lang, all);
     if (!ctxAt) return '';
     out = script;

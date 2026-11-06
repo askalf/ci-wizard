@@ -233,6 +233,20 @@ test('the injection example is left out where the rewrite cannot be certain', ()
   // A backslash continuation between the shell and its -c is the same command.
   assert.equal(injectionExample('      - run: |\n          bash \\\n            -c "echo ${{ github.event.issue.title }}"\n'), '');
   assert.equal(injectionExample('      - run: |\n          docker run img sh \\\n            -c "echo ${{ github.head_ref }}"\n'), '');
+  // A second parser by its path, through a pipe, or held in a variable.
+  assert.equal(injectionExample('      - run: /usr/bin/ssh host "echo ${{ github.event.issue.title }}"\n'), '');
+  assert.equal(injectionExample("      - run: /usr/local/bin/jq '.x == \"${{ github.head_ref }}\"' f.json\n"), '');
+  assert.equal(injectionExample('      - run: echo "${{ github.head_ref }}" | sh\n'), '');
+  assert.equal(injectionExample('      - run: $RUNNER "${{ github.head_ref }}"\n'), '');
+  assert.equal(injectionExample('      - run: make VERSION=${{ github.head_ref }}\n'), ''); // make expands it into a recipe
+  assert.equal(injectionExample('      - run: echo "today $(date) ${{ github.head_ref }}"\n'), '');
+  // Data commands, through sudo, env or an assignment, and keywords, still get the rewrite.
+  assert.equal(parse(injectionExample('      - run: |\n          if [ -n "${{ github.head_ref }}" ]; then\n            sudo -E git checkout ${{ github.head_ref }}\n          fi\n          REF=x env -i gh pr view\n'))[0].run,
+    'if [ -n "${HEAD_REF}" ]; then\n  sudo -E git checkout "$HEAD_REF"\nfi\nREF=x env -i gh pr view\n');
+  // The second-parser warning names the absolute-path case too.
+  const ssh = scanFindings(new Map([['.github/workflows/ci.yml', 'on: [pull_request]\npermissions: {}\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: /usr/bin/ssh host "echo ${{ github.event.issue.title }}"\n']])).find((x) => x.what === 'untrusted input in a script');
+  assert.equal(ssh.example, '');
+  assert.match(ssh.fix, /second parser/);
   // The shell removes a backslash-newline outright, so it can split an option or a command name.
   assert.equal(injectionExample('      - run: |\n          bash -\\\n          c "echo ${{ github.event.issue.title }}"\n'), '');
   assert.equal(injectionExample('      - run: |\n          ba\\\n          sh -c "echo ${{ github.event.issue.title }}"\n'), '');
@@ -243,7 +257,7 @@ test('the injection example is left out where the rewrite cannot be certain', ()
   assert.equal(parse(injectionExample("      - run: |\n          # don't\n          echo ${{ github.head_ref }}\n"))[0].run, "# don't\necho \"$HEAD_REF\"\n");
   assert.equal(parse(injectionExample("      - run: |\n          # don't\n          Write-Host ${{ github.head_ref }}\n", 'windows-latest'))[0].run, "# don't\nWrite-Host ${env:HEAD_REF}\n");
   // An expression in a comment is replaced there too: GitHub expands it before the shell reads it.
-  assert.doesNotMatch(parse(injectionExample('      - run: |\n          # was ${{ github.head_ref }}\n          make\n'))[0].run, /\$\{\{/);
+  assert.doesNotMatch(parse(injectionExample('      - run: |\n          # was ${{ github.head_ref }}\n          ls\n'))[0].run, /\$\{\{/);
   // A # inside a word is not a comment, and a bash -c after one still counts.
   assert.equal(injectionExample('      - run: echo a#b; bash -c "echo ${{ github.head_ref }}"\n'), '');
   // A continuation between plain arguments still allows the rewrite, and keeps the continuation.
@@ -256,8 +270,10 @@ test('the injection example is left out where the rewrite cannot be certain', ()
   assert.equal(injectionExample('      - run: python -c "print(\'${{ github.head_ref }}\')"\n'), '');
   assert.equal(injectionExample('      - run: Invoke-Expression "echo ${{ github.head_ref }}"\n', 'windows-latest'), '');
   assert.equal(injectionExample(`      - uses: actions/github-script@${SHA}\n        with:\n          script: await exec.exec(\`git tag \${{ github.head_ref }}\`)\n`), '');
-  // A second parser elsewhere in the script, on another line, does not block this line's rewrite.
-  assert.equal(parse(injectionExample('      - run: |\n          bash -c "make all"\n          echo ${{ github.head_ref }}\n'))[0].run, 'bash -c "make all"\necho "$HEAD_REF"\n');
+  // Any command that is not known to take its arguments as data, anywhere in the script, blocks the
+  // rewrite: a later line can run what an earlier one wrote.
+  assert.equal(injectionExample('      - run: |\n          bash -c "make all"\n          echo ${{ github.head_ref }}\n'), '');
+  assert.equal(injectionExample('      - run: |\n          echo "${{ github.head_ref }}" > run.sh\n          ./run.sh\n'), '');
   // The finding still fires and its fix says what the nested case needs.
   const nested = scanFindings(new Map([['.github/workflows/ci.yml', 'on: [pull_request]\npermissions: {}\njobs:\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: bash -c "echo ${{ github.event.issue.title }}"\n']]));
   const f = nested.find((x) => x.what === 'untrusted input in a script');
