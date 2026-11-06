@@ -6,6 +6,7 @@
 import { concurrencyGroupOf, categoryOf, forkReachableSelfHosted, allJobTimeouts, assignJobRuns, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, workflowFacts } from './workflow.mjs';
 import { countBy, fmtS, mean, median, pct, round, secs, sum } from './util.mjs';
 import { scanFindings } from './scans.mjs';
+import { gateFindings } from './gates.mjs';
 import { CANCEL_OUTDATED, ONE_RUN_PER_COMMIT, cacheExample, checkoutAdvice, forkGuardExample, managerOf, triggerExample } from './advice.mjs';
 
 export const THRESHOLDS = {
@@ -602,7 +603,7 @@ export function analyse(repo, data) {
     workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || '', week, repo, (data.outcomeSamples && data.outcomeSamples.get(wf)) || {}));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
-  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === 'public' ? true : data.visibility ? 'private' : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || new Map()), ...scanFindings(data.scanFiles || new Map())];
+  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === 'public' ? true : data.visibility ? 'private' : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || new Map()), ...scanFindings(data.scanFiles || new Map()), ...gateFindings(data.gates, { scanFiles: data.scanFiles || new Map(), scanned: data.scanned, visibility: data.visibility })];
   // A finding that saves under a minute a week is noise next to the rest; one that saves developer
   // wait has no minutes to compare and always stays.
   const findings = groupFindings(raw).filter((f) => f.unit === 'wait' || f.unit === 'risk' || f.unit === 'guard' || f.saving >= T.minSavingWeek).map((f) => ({
@@ -617,6 +618,8 @@ export function analyse(repo, data) {
     // The scans read every workflow file collect listed (scanFiles); an audit built without that
     // listing (a caller's own data) runs no scans and says so by reporting none read.
     scanned: data.scanned || { read: (data.scanFiles || new Map()).size, of: null, unreadable: [] },
+    // What guards a merge into the default branch, as read (null where it could not be read).
+    gates: data.gates ? { branch: data.gates.branch, required: data.gates.required, pr_checks: data.gates.pr_checks, pr_runs_read: data.gates.pr_runs_read } : null,
     only: data.only || [],
     only_missing: data.onlyMissing || [],
     runs_total: data.runs.length,

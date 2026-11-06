@@ -1,0 +1,124 @@
+// What stands between a pull request and the default branch: the checks a merge has to wait for,
+// whether pull requests are checked at all, and the two workflows a supply-chain review expects
+// (code scanning, dependency updates). Every finding comes from what the API showed; whatever it
+// could not read (a ruleset, a listing) yields no finding rather than a guess.
+import { parseWorkflow, triggersOf } from './workflow.mjs';
+
+// GitHub Actions' app id. A required check with this integration, or none, is one a workflow job
+// reports; one from another app (a coverage service, a review bot) cannot be read from the runs.
+const ACTIONS_APP = 15368;
+export const isActionsCheck = (c) => c.integrationId === null || c.integrationId === undefined || c.integrationId === ACTIONS_APP;
+
+const PR_TRIGGERS = new Set(['pull_request', 'pull_request_target', 'merge_group']);
+
+// Checks that test, build or analyse the change: the ones a merge should wait for. Matched on the
+// check's name, so the finding says "inferred" and lists the rest apart.
+const GATE_LIKE = /\b(test|tests|lint|build|check|checks|verify|analy[sz]e|codeql|typecheck|types|dist|unit|e2e|ci|fuzz|fuzzing)\b/i;
+
+const list = (xs, n = 6) => `${xs.slice(0, n).join(', ')}${xs.length > n ? ` and ${xs.length - n} more` : ''}`;
+
+/** What the workflow files say: which run on pull requests, and which run CodeQL. */
+function fileFacts(scanFiles) {
+  const onPr = [];
+  let codeql = false;
+  for (const [path, text] of scanFiles) {
+    const doc = parseWorkflow(text);
+    if (!Object.keys(doc).length) continue;
+    if (triggersOf(doc).some((t) => PR_TRIGGERS.has(t))) onPr.push(path);
+    if (/uses:\s*['"]?github\/codeql-action\/(init|analyze)@/i.test(text)) codeql = true;
+  }
+  return { onPr, codeql };
+}
+
+/**
+ * The merge-gate findings, from collect's `gates`, the workflow files the scans read, whether the
+ * workflow directory was fully listed, and the repository's visibility.
+ */
+export function gateFindings(gates, { scanFiles = new Map(), scanned = null, visibility = null } = {}) {
+  if (!gates) return [];
+  const F = [];
+  const branch = gates.branch || 'the default branch';
+  const files = fileFacts(scanFiles);
+  const listedAll = Boolean(scanned && scanned.of !== null && scanned.of !== undefined && scanned.read === scanned.of);
+  const prChecks = gates.pr_checks || [];
+  const prSeen = gates.pr_runs_read > 0;
+
+  // Nothing checks a pull request: no workflow file triggers on one, and none ran on one.
+  if (listedAll && !files.onPr.length && !gates.pr_runs_seen) {
+    F.push({
+      saving: 0, unit: 'risk', confidence: 'confirmed', what: 'no workflow checks pull requests', workflow: 'all workflows',
+      evidence: `none of the ${scanned.of} workflow files triggers on pull_request, and no pull request run is in the window: a change reaches ${branch} with nothing run on it first`,
+      fix: 'run the tests (and the build) on pull_request, then require that check on the default branch',
+      tradeoff: 'each pull request costs a run; a fork\'s pull request runs with a read-only token and no secrets, which is the safe default',
+      example: 'on:\n  push:\n    branches: [main]\n  pull_request:',
+    });
+  }
+
+  if (Array.isArray(gates.required)) {
+    const required = gates.required;
+    const actionsRequired = required.filter(isActionsCheck);
+    const requiredNames = new Set(required.map((c) => c.context));
+    if (!required.length && (prSeen || files.onPr.length)) {
+      // Pull requests get checks, but the branch requires none: a red pull request can be merged.
+      F.push({
+        saving: 0, unit: 'risk', confidence: 'confirmed', what: 'merges do not wait for any check', workflow: branch,
+        evidence: `no ruleset or branch protection on ${branch} requires a status check${prChecks.length ? `, though pull requests get ${prChecks.length}: ${list(prChecks)}` : ''}, so a pull request whose tests fail can still be merged`,
+        fix: `require the checks that must pass in a ruleset on ${branch} (Settings, Rules, Rulesets: Require status checks to pass), by the exact names pull requests show`,
+        tradeoff: 'a required check that does not run on a pull request (a path filter, a renamed job) blocks it; require only checks that run on every pull request',
+        example: '',
+      });
+    }
+    if (required.length && prSeen) {
+      // A required check no pull request reported: renamed, path-filtered, or removed. GitHub waits
+      // for it forever, so merges block or the rule is bypassed.
+      const missing = actionsRequired.filter((c) => !prChecks.includes(c.context)).map((c) => c.context);
+      if (missing.length) {
+        F.push({
+          saving: 0, unit: 'risk', confidence: 'inferred', what: 'required checks no pull request reports', workflow: branch,
+          evidence: `${branch} requires ${list(missing.map((m) => `"${m}"`))}, but the newest pull request run of each of ${gates.pr_runs_read} workflow${gates.pr_runs_read === 1 ? '' : 's'} in the window reported no job by that name (they reported ${list(prChecks)}): GitHub waits for a required check until it reports, so a pull request without it cannot merge without bypassing the rule. A renamed job, a path filter or an \`if:\` on the workflow are the usual causes`,
+          fix: 'rename the required check to the job name pull requests show (a matrix leg is "name (value)", a reusable workflow\'s job "caller / job"), or make the workflow run on every pull request and skip inside the job instead of filtering the trigger',
+          tradeoff: 'a check that only runs for some paths cannot be required as it is: a job that always runs and exits early when nothing relevant changed can',
+          example: '',
+        });
+      }
+      // Checks pull requests get that a merge does not wait for, and that look like tests or builds.
+      const notRequired = prChecks.filter((n) => !requiredNames.has(n));
+      const gateLike = notRequired.filter((n) => GATE_LIKE.test(n));
+      if (gateLike.length) {
+        F.push({
+          saving: 0, unit: 'guard', confidence: 'inferred', what: 'pull request checks merges do not wait for', workflow: branch,
+          evidence: `pull requests get ${list(gateLike.map((n) => `"${n}"`))}, which look like tests, builds, analysis or fuzzing, but ${branch} does not require ${gateLike.length === 1 ? 'it' : 'them'}, so a pull request can merge with ${gateLike.length === 1 ? 'it' : 'them'} failing${notRequired.length > gateLike.length ? ` (${notRequired.length - gateLike.length} other unrequired check${notRequired.length - gateLike.length === 1 ? '' : 's'} not listed)` : ''}`,
+          fix: `add the ones that must pass to the required status checks on ${branch}, by these exact names`,
+          tradeoff: 'a required check that is slow or flaky holds every merge; fix or speed it up before requiring it',
+          example: '',
+        });
+      }
+      const otherApps = required.filter((c) => !isActionsCheck(c)).map((c) => c.context);
+      if (otherApps.length && F.length) F[F.length - 1].evidence += `; required checks from other apps (${list(otherApps)}) are not read from the runs`;
+    }
+  }
+
+  // Code scanning: a CodeQL workflow file, or default setup's dynamic runs.
+  if (listedAll && !files.codeql && !gates.code_scanning_runs) {
+    const paid = visibility && visibility !== 'public';
+    F.push({
+      saving: 0, unit: 'risk', confidence: 'inferred', what: 'no code scanning', workflow: 'all workflows',
+      evidence: `no workflow file runs github/codeql-action and no code scanning run is in the window, so pull requests are not scanned for vulnerabilities in the code${paid ? '; on a private repository this needs GitHub Advanced Security (or Code Security)' : ''}`,
+      fix: 'turn on CodeQL default setup (Settings, Code security, Code scanning), or add a CodeQL workflow, and require its analyze check',
+      tradeoff: 'each push and pull request runs an analysis (minutes for most repositories); findings need triage',
+      example: '',
+    });
+  }
+
+  // Dependency updates: without them, pinned actions and lockfiles stay on what they were.
+  if (gates.dependency_updates === false) {
+    F.push({
+      saving: 0, unit: 'risk', confidence: 'confirmed', what: 'no dependency updates', workflow: 'the repository',
+      evidence: 'there is no .github/dependabot.yml and no Renovate configuration, and no Dependabot run is in the window: pinned actions and locked dependencies never move to fixed versions unless someone does it by hand',
+      fix: 'add .github/dependabot.yml for github-actions (and the package ecosystem the repository uses), weekly',
+      tradeoff: 'update pull requests to review, about one a week per ecosystem when grouped',
+      example: 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule:\n      interval: weekly\n    groups:\n      actions:\n        patterns: ["*"]',
+    });
+  }
+  return F;
+}

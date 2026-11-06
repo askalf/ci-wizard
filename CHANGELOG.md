@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+Merge gates: what stands between a pull request and the default branch.
+
+- **merges do not wait for any check:** pull requests get checks, but no ruleset or branch
+  protection requires one, so a red pull request can merge.
+- **required checks no pull request reports:** a required check name that no recent pull request
+  produced, such as a renamed job or a path-filtered workflow. GitHub waits for it forever.
+- **pull request checks merges do not wait for:** a test, build, analysis or fuzzing check that pull
+  requests get but the branch doesn't require. This is a guard, judged from the check's name.
+- **no workflow checks pull requests**, **no code scanning**, **no dependency updates:** the
+  workflows a supply-chain review expects, when the listings show they are missing.
+
+Required checks come from the default branch's rulesets and protection summary, which every
+token can read. A pull request's checks are the jobs of each workflow's newest pull request run,
+already read for timing when sampled. When something can't be read, nothing is claimed.
+
 ## 0.2.0
 
 Faster audits:

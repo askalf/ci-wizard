@@ -6351,15 +6351,15 @@ var require_parser = __commonJS({
     var node_process = __require("process");
     var cst = require_cst();
     var lexer = require_lexer();
-    function includesToken(list2, type) {
-      for (let i = 0; i < list2.length; ++i)
-        if (list2[i].type === type)
+    function includesToken(list3, type) {
+      for (let i = 0; i < list3.length; ++i)
+        if (list3[i].type === type)
           return true;
       return false;
     }
-    function findNonEmptyIndex(list2) {
-      for (let i = 0; i < list2.length; ++i) {
-        switch (list2[i].type) {
+    function findNonEmptyIndex(list3) {
+      for (let i = 0; i < list3.length; ++i) {
+        switch (list3[i].type) {
           case "space":
           case "comment":
           case "newline":
@@ -7653,8 +7653,13 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   const onlyMissing = wanted.length ? only.filter((n) => String(n).trim() && !ranked.some(([label, rs]) => matches(label, rs, n))) : [];
   const samples = /* @__PURE__ */ new Map();
   const outcomeSamples = /* @__PURE__ */ new Map();
+  const rawJobs = /* @__PURE__ */ new Map();
+  const jobsRaw = (r) => {
+    if (!rawJobs.has(r.id)) rawJobs.set(r.id, client.get(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`));
+    return rawJobs.get(r.id);
+  };
   const jobsOf2 = async (r) => {
-    const j = await client.get(`repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`);
+    const j = await jobsRaw(r);
     return j ? (j.jobs || []).filter((x) => x.started_at && x.completed_at && x.conclusion !== "skipped") : null;
   };
   const samplePaths = [...new Set(top.map(([, rs]) => String(rs[0].path || "").split("@")[0]).filter((p) => p.startsWith(".github/workflows/")))];
@@ -7709,7 +7714,81 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   const root = rootListing || [];
   const names = new Set((Array.isArray(root) ? root : []).map((x) => x && x.name));
   const lockfiles = LOCKFILES.filter((f) => names.has(f)).sort();
-  return { runs, byWf, samples, outcomeSamples, scanFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, only: wanted.length ? only : [], onlyMissing };
+  onProgress("reading merge gates");
+  const gates = await collectGates(client, repo, { runs, byWf, defaultBranch, rootNames: Array.isArray(rootListing) ? names : null, jobsRaw, settle, settled });
+  return { runs, byWf, samples, outcomeSamples, scanFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, gates, only: wanted.length ? only : [], onlyMissing };
+}
+var PR_EVENTS = /* @__PURE__ */ new Set(["pull_request", "pull_request_target", "merge_group"]);
+var RENOVATE_FILES = ["renovate.json", "renovate.json5", ".renovaterc", ".renovaterc.json", ".renovaterc.json5"];
+async function collectGates(client, repo, { runs, byWf, defaultBranch, rootNames, jobsRaw, settle, settled }) {
+  const soft = async (p) => {
+    try {
+      return { ok: true, value: await settled(settle(p)) };
+    } catch (e) {
+      if (e instanceof RateLimitError) throw e;
+      return { ok: false, value: null };
+    }
+  };
+  const branch = defaultBranch ? encodeURIComponent(defaultBranch) : null;
+  const prRuns = [];
+  for (const rs of byWf.values()) {
+    const pr = rs.find((r) => PR_EVENTS.has(r.event));
+    if (pr) prRuns.push(pr);
+  }
+  const [rules, branchInfo, githubDir, ...prJobLists] = await Promise.all([
+    branch ? soft(client.get(`repos/${repo}/rules/branches/${branch}?per_page=100`)) : { ok: false, value: null },
+    branch ? soft(client.get(`repos/${repo}/branches/${branch}`)) : { ok: false, value: null },
+    soft(client.get(`repos/${repo}/contents/.github`)),
+    ...prRuns.map((r) => soft(jobsRaw(r)))
+  ]);
+  let required = null;
+  const rulesRead = rules.ok && Array.isArray(rules.value);
+  const protection = branchInfo.ok && branchInfo.value ? branchInfo.value.protection : void 0;
+  const classicRead = protection !== void 0 && protection !== null;
+  if (rulesRead || classicRead) {
+    const seen = /* @__PURE__ */ new Map();
+    const add = (context, integrationId) => {
+      if (typeof context !== "string" || !context) return;
+      if (!seen.has(context)) seen.set(context, { context, integrationId: integrationId ?? null });
+    };
+    if (rulesRead) {
+      for (const rule of rules.value) {
+        if (rule && rule.type === "required_status_checks") {
+          for (const c of rule.parameters && rule.parameters.required_status_checks || []) add(c && c.context, c && c.integration_id);
+        }
+      }
+    }
+    if (classicRead && protection.enabled !== false) {
+      const rsc = protection.required_status_checks || {};
+      if (rsc.enforcement_level !== "off") {
+        for (const c of rsc.contexts || []) add(c, null);
+        for (const c of rsc.checks || []) add(c && c.context, c && c.app_id);
+      }
+    }
+    required = [...seen.values()];
+  }
+  const prChecks = /* @__PURE__ */ new Set();
+  let prJobsRead = 0;
+  prJobLists.forEach((r) => {
+    if (r.ok && r.value && Array.isArray(r.value.jobs)) {
+      prJobsRead += 1;
+      for (const j of r.value.jobs) if (j && typeof j.name === "string") prChecks.add(j.name);
+    }
+  });
+  const codeScanningRuns = runs.some((r) => String(r.path || "").startsWith("dynamic/github-code-scanning"));
+  const dependabotRuns = runs.some((r) => String(r.path || "").startsWith("dynamic/dependabot"));
+  const ghNames = githubDir.ok && Array.isArray(githubDir.value) ? new Set(githubDir.value.map((x) => x && x.name)) : null;
+  const dependabotFile = ghNames ? ghNames.has("dependabot.yml") || ghNames.has("dependabot.yaml") : null;
+  const renovateFile = ghNames && rootNames ? RENOVATE_FILES.some((f) => rootNames.has(f) || ghNames.has(f)) : null;
+  return {
+    branch: defaultBranch,
+    required,
+    pr_runs_seen: prRuns.length,
+    pr_runs_read: prJobsRead,
+    pr_checks: [...prChecks].sort(),
+    code_scanning_runs: codeScanningRuns,
+    dependency_updates: dependabotRuns || dependabotFile || renovateFile ? true : dependabotFile === null || renovateFile === null ? null : false
+  };
 }
 
 // src/workflow.mjs
@@ -8758,6 +8837,125 @@ function scanFindings(files) {
   return F;
 }
 
+// src/gates.mjs
+var ACTIONS_APP = 15368;
+var isActionsCheck = (c) => c.integrationId === null || c.integrationId === void 0 || c.integrationId === ACTIONS_APP;
+var PR_TRIGGERS = /* @__PURE__ */ new Set(["pull_request", "pull_request_target", "merge_group"]);
+var GATE_LIKE = /\b(test|tests|lint|build|check|checks|verify|analy[sz]e|codeql|typecheck|types|dist|unit|e2e|ci|fuzz|fuzzing)\b/i;
+var list2 = (xs, n = 6) => `${xs.slice(0, n).join(", ")}${xs.length > n ? ` and ${xs.length - n} more` : ""}`;
+function fileFacts(scanFiles) {
+  const onPr = [];
+  let codeql = false;
+  for (const [path, text] of scanFiles) {
+    const doc = parseWorkflow(text);
+    if (!Object.keys(doc).length) continue;
+    if (triggersOf(doc).some((t) => PR_TRIGGERS.has(t))) onPr.push(path);
+    if (/uses:\s*['"]?github\/codeql-action\/(init|analyze)@/i.test(text)) codeql = true;
+  }
+  return { onPr, codeql };
+}
+function gateFindings(gates, { scanFiles = /* @__PURE__ */ new Map(), scanned = null, visibility = null } = {}) {
+  if (!gates) return [];
+  const F = [];
+  const branch = gates.branch || "the default branch";
+  const files = fileFacts(scanFiles);
+  const listedAll = Boolean(scanned && scanned.of !== null && scanned.of !== void 0 && scanned.read === scanned.of);
+  const prChecks = gates.pr_checks || [];
+  const prSeen = gates.pr_runs_read > 0;
+  if (listedAll && !files.onPr.length && !gates.pr_runs_seen) {
+    F.push({
+      saving: 0,
+      unit: "risk",
+      confidence: "confirmed",
+      what: "no workflow checks pull requests",
+      workflow: "all workflows",
+      evidence: `none of the ${scanned.of} workflow files triggers on pull_request, and no pull request run is in the window: a change reaches ${branch} with nothing run on it first`,
+      fix: "run the tests (and the build) on pull_request, then require that check on the default branch",
+      tradeoff: "each pull request costs a run; a fork's pull request runs with a read-only token and no secrets, which is the safe default",
+      example: "on:\n  push:\n    branches: [main]\n  pull_request:"
+    });
+  }
+  if (Array.isArray(gates.required)) {
+    const required = gates.required;
+    const actionsRequired = required.filter(isActionsCheck);
+    const requiredNames = new Set(required.map((c) => c.context));
+    if (!required.length && (prSeen || files.onPr.length)) {
+      F.push({
+        saving: 0,
+        unit: "risk",
+        confidence: "confirmed",
+        what: "merges do not wait for any check",
+        workflow: branch,
+        evidence: `no ruleset or branch protection on ${branch} requires a status check${prChecks.length ? `, though pull requests get ${prChecks.length}: ${list2(prChecks)}` : ""}, so a pull request whose tests fail can still be merged`,
+        fix: `require the checks that must pass in a ruleset on ${branch} (Settings, Rules, Rulesets: Require status checks to pass), by the exact names pull requests show`,
+        tradeoff: "a required check that does not run on a pull request (a path filter, a renamed job) blocks it; require only checks that run on every pull request",
+        example: ""
+      });
+    }
+    if (required.length && prSeen) {
+      const missing = actionsRequired.filter((c) => !prChecks.includes(c.context)).map((c) => c.context);
+      if (missing.length) {
+        F.push({
+          saving: 0,
+          unit: "risk",
+          confidence: "inferred",
+          what: "required checks no pull request reports",
+          workflow: branch,
+          evidence: `${branch} requires ${list2(missing.map((m) => `"${m}"`))}, but the newest pull request run of each of ${gates.pr_runs_read} workflow${gates.pr_runs_read === 1 ? "" : "s"} in the window reported no job by that name (they reported ${list2(prChecks)}): GitHub waits for a required check until it reports, so a pull request without it cannot merge without bypassing the rule. A renamed job, a path filter or an \`if:\` on the workflow are the usual causes`,
+          fix: `rename the required check to the job name pull requests show (a matrix leg is "name (value)", a reusable workflow's job "caller / job"), or make the workflow run on every pull request and skip inside the job instead of filtering the trigger`,
+          tradeoff: "a check that only runs for some paths cannot be required as it is: a job that always runs and exits early when nothing relevant changed can",
+          example: ""
+        });
+      }
+      const notRequired = prChecks.filter((n) => !requiredNames.has(n));
+      const gateLike = notRequired.filter((n) => GATE_LIKE.test(n));
+      if (gateLike.length) {
+        F.push({
+          saving: 0,
+          unit: "guard",
+          confidence: "inferred",
+          what: "pull request checks merges do not wait for",
+          workflow: branch,
+          evidence: `pull requests get ${list2(gateLike.map((n) => `"${n}"`))}, which look like tests, builds, analysis or fuzzing, but ${branch} does not require ${gateLike.length === 1 ? "it" : "them"}, so a pull request can merge with ${gateLike.length === 1 ? "it" : "them"} failing${notRequired.length > gateLike.length ? ` (${notRequired.length - gateLike.length} other unrequired check${notRequired.length - gateLike.length === 1 ? "" : "s"} not listed)` : ""}`,
+          fix: `add the ones that must pass to the required status checks on ${branch}, by these exact names`,
+          tradeoff: "a required check that is slow or flaky holds every merge; fix or speed it up before requiring it",
+          example: ""
+        });
+      }
+      const otherApps = required.filter((c) => !isActionsCheck(c)).map((c) => c.context);
+      if (otherApps.length && F.length) F[F.length - 1].evidence += `; required checks from other apps (${list2(otherApps)}) are not read from the runs`;
+    }
+  }
+  if (listedAll && !files.codeql && !gates.code_scanning_runs) {
+    const paid = visibility && visibility !== "public";
+    F.push({
+      saving: 0,
+      unit: "risk",
+      confidence: "inferred",
+      what: "no code scanning",
+      workflow: "all workflows",
+      evidence: `no workflow file runs github/codeql-action and no code scanning run is in the window, so pull requests are not scanned for vulnerabilities in the code${paid ? "; on a private repository this needs GitHub Advanced Security (or Code Security)" : ""}`,
+      fix: "turn on CodeQL default setup (Settings, Code security, Code scanning), or add a CodeQL workflow, and require its analyze check",
+      tradeoff: "each push and pull request runs an analysis (minutes for most repositories); findings need triage",
+      example: ""
+    });
+  }
+  if (gates.dependency_updates === false) {
+    F.push({
+      saving: 0,
+      unit: "risk",
+      confidence: "confirmed",
+      what: "no dependency updates",
+      workflow: "the repository",
+      evidence: "there is no .github/dependabot.yml and no Renovate configuration, and no Dependabot run is in the window: pinned actions and locked dependencies never move to fixed versions unless someone does it by hand",
+      fix: "add .github/dependabot.yml for github-actions (and the package ecosystem the repository uses), weekly",
+      tradeoff: "update pull requests to review, about one a week per ecosystem when grouped",
+      example: 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule:\n      interval: weekly\n    groups:\n      actions:\n        patterns: ["*"]'
+    });
+  }
+  return F;
+}
+
 // src/advice.mjs
 var LOCK_OF = {
   npm: "package-lock.json",
@@ -8921,7 +9119,7 @@ var THRESHOLDS = {
 var TIMED_OUTCOMES = ["failure", "cancelled", "timed_out"];
 var NO_JOB_OUTCOMES = /* @__PURE__ */ new Set(["skipped", "action_required", "startup_failure", "stale"]);
 var WAITED_ON = /* @__PURE__ */ new Set(["push", "pull_request", "pull_request_target", "merge_group"]);
-var PR_EVENTS = /* @__PURE__ */ new Set(["pull_request", "pull_request_target"]);
+var PR_EVENTS2 = /* @__PURE__ */ new Set(["pull_request", "pull_request_target"]);
 var GROUPED = /* @__PURE__ */ new Set(["self-hosted wrap-up tail", "toolchain setup", "queue wait", "short hosted jobs bill a whole minute"]);
 function ranOnGitHubHosted(job) {
   if (job.runner_group_name) return job.runner_group_name === "GitHub Actions";
@@ -9005,7 +9203,7 @@ function duplicateCommits(workflowRuns) {
 function outdatedRuns(workflowRuns) {
   const runsByBranch = /* @__PURE__ */ new Map();
   for (const r of workflowRuns) {
-    if (!PR_EVENTS.has(r.event) || !r.run_started_at) continue;
+    if (!PR_EVENTS2.has(r.event) || !r.run_started_at) continue;
     if (!runsByBranch.has(r.head_branch)) runsByBranch.set(r.head_branch, []);
     runsByBranch.get(r.head_branch).push(r);
   }
@@ -9460,7 +9658,7 @@ function analyse(repo, data) {
     workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || "", week, repo, data.outcomeSamples && data.outcomeSamples.get(wf) || {}));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
-  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" ? true : data.visibility ? "private" : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || /* @__PURE__ */ new Map()), ...scanFindings(data.scanFiles || /* @__PURE__ */ new Map())];
+  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" ? true : data.visibility ? "private" : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || /* @__PURE__ */ new Map()), ...scanFindings(data.scanFiles || /* @__PURE__ */ new Map()), ...gateFindings(data.gates, { scanFiles: data.scanFiles || /* @__PURE__ */ new Map(), scanned: data.scanned, visibility: data.visibility })];
   const findings = groupFindings(raw).filter((f) => f.unit === "wait" || f.unit === "risk" || f.unit === "guard" || f.saving >= T.minSavingWeek).map((f) => ({
     saving_min_week: round(f.saving, 1),
     unit: f.unit || "job",
@@ -9480,6 +9678,8 @@ function analyse(repo, data) {
     // The scans read every workflow file collect listed (scanFiles); an audit built without that
     // listing (a caller's own data) runs no scans and says so by reporting none read.
     scanned: data.scanned || { read: (data.scanFiles || /* @__PURE__ */ new Map()).size, of: null, unreadable: [] },
+    // What guards a merge into the default branch, as read (null where it could not be read).
+    gates: data.gates ? { branch: data.gates.branch, required: data.gates.required, pr_checks: data.gates.pr_checks, pr_runs_read: data.gates.pr_runs_read } : null,
     only: data.only || [],
     only_missing: data.onlyMissing || [],
     runs_total: data.runs.length,

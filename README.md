@@ -136,12 +136,18 @@ as the markdown report in the job summary, and `--html` renders it as a page.
 | job token wider than the job | `permissions: write-all`, or no permissions block, so the job gets the repository's default token |
 | fork pull requests run on self-hosted runners | a fork's code can reach your runner |
 | self-hosted runners reused across jobs | a persistent runner lets a job see what the one before left |
+| merges do not wait for any check | pull requests get checks, but the default branch requires none, so a red pull request can merge |
+| required checks no pull request reports | a required check name that no recent pull request produced (a renamed job, a path filter): GitHub waits for it forever |
+| no workflow checks pull requests | no workflow file triggers on `pull_request`, and none ran on one |
+| no code scanning | no CodeQL workflow and no default-setup run |
+| no dependency updates | no Dependabot or Renovate configuration, so pinned actions never move to fixed versions |
 
-**A guard against hung jobs** saves no minutes, so it is listed after the findings that save time:
+**Guards** save no minutes, so they are listed after the findings that save time:
 
 | Finding | What it means |
 | --- | --- |
 | jobs without a working timeout | a hung job holds its runner (and bills) for up to 6 hours |
+| pull request checks merges do not wait for | a test, build, analysis or fuzzing check pull requests get that the default branch doesn't require, judged by its name |
 
 **Then the savings.** Each is estimated from measured timings. The cause is confirmed against the
 workflow file wherever the file says (*confirmed*), and is labelled *cause inferred* where it
@@ -167,9 +173,11 @@ one that has a hostile contributor.
 - **What it reads.** Through the API only, these endpoints:
   - `GET /repos/{repo}/actions/runs` (up to 500 runs), `/actions/runs/{id}/jobs` and
     `/actions/workflows`;
-  - `/contents/.github/workflows`, the workflow files (up to 30), and the root listing (to see
-    which lockfile is committed);
-  - `/repos/{repo}` (default branch and visibility).
+  - `/contents/.github/workflows`, the workflow files (up to 30), the root listing (to see which
+    lockfile is committed) and the `.github` listing (for Dependabot's configuration);
+  - `/repos/{repo}` (default branch and visibility);
+  - `/rules/branches/{default branch}` and `/branches/{default branch}`, for the checks a merge
+    must wait for. These need only the read access every token has.
 
   Nothing is cloned, and nothing from the repository is run.
 - **What it sends, and where.** The token goes only as the `Authorization` header of those GET
@@ -233,7 +241,7 @@ one that has a hostile contributor.
 
 - **Token.** It needs **actions: read** and **contents: read**. A workflow's own `GITHUB_TOKEN`
   is enough for the repository it runs in. A repository the token cannot see reads as not found.
-- **Cost.** About 50 to 70 API calls for a busy repository, made up to six at a time. That is
+- **Cost.** About 50 to 80 API calls for a busy repository, made up to six at a time. That is
   about 10 seconds for 500 runs.
 - **Rate limit.** While GitHub reports the remaining count (api.github.com does), the client sends
   no more requests once the token has 25 calls or fewer left, counting the ones in flight. That
