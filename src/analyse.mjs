@@ -455,8 +455,9 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
     if (suggest >= t.minutes) continue;
     // billed: a hung run of this job would bill by the minute. That needs the job's own runs to be
     // mostly on GitHub's standard hosted runners (a report from before per-job runners were kept
-    // falls back to the workflow's share), and a repository not known to be public, where those
-    // runners are free. A larger runner reports its own runner group, so it is never taken as billed.
+    // falls back to the workflow's share), and a repository not known to be public: on a public
+    // one those runners are free. A larger runner reports its own runner group, so it is never
+    // taken as billed.
     const hostedRuns = sum(runs.map((n) => (durations[n].hosted_share ?? (w.hosted_share >= 0.5 ? 1 : 0)) * durations[n].runs));
     const billed = hostedRuns >= sampled / 2 && isPublic !== true;
     if (t.isDefault || t.minutes > T.timeoutLoose * Math.max(maxS / 60, 1)) loose.push({ ...t, maxS, sampled, suggest, billed });
