@@ -7443,12 +7443,16 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
   let hourResetsAt = null;
   let inFlight = 0;
   let active = 0;
+  let probed = false;
   const waiting = [];
-  const acquire = () => active < concurrency ? (active++, Promise.resolve()) : new Promise((r) => waiting.push(r));
+  const cap = () => probed ? concurrency : 1;
+  const acquire = () => active < cap() ? (active++, Promise.resolve()) : new Promise((r) => waiting.push(r));
   const release = () => {
-    const next = waiting.shift();
-    if (next) next();
-    else active--;
+    active--;
+    while (waiting.length && active < cap()) {
+      active++;
+      waiting.shift()();
+    }
   };
   let limit = null;
   async function request(path, { raw = false } = {}) {
@@ -7478,14 +7482,18 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
       inFlight--;
       const left = res.headers.get("x-ratelimit-remaining");
       const resetHeader = Number(res.headers.get("x-ratelimit-reset"));
+      const hasReset = Number.isFinite(resetHeader) && resetHeader > 0;
       if (left !== null && Number.isFinite(Number(left))) {
         const n = Number(left);
-        const newHour = Number.isFinite(resetHeader) && resetHeader > 0 && (hourResetsAt === null || resetHeader > hourResetsAt);
-        if (newHour) hourResetsAt = resetHeader;
-        remaining = remaining === null || newHour ? n : Math.min(remaining, n);
+        if (hasReset && hourResetsAt !== null && resetHeader < hourResetsAt) {
+        } else {
+          const newHour = hasReset && (hourResetsAt === null || resetHeader > hourResetsAt);
+          if (newHour) hourResetsAt = resetHeader;
+          remaining = remaining === null || newHour ? n : Math.min(remaining, n);
+        }
       } else if (remaining !== null) remaining -= 1;
-      const cap = res.headers.get("x-ratelimit-limit");
-      if (cap !== null && Number.isFinite(Number(cap))) limit = Number(cap);
+      const cap2 = res.headers.get("x-ratelimit-limit");
+      if (cap2 !== null && Number.isFinite(Number(cap2))) limit = Number(cap2);
       const reset = res.headers.get("x-ratelimit-reset");
       const resetAt = reset ? new Date(Number(reset) * 1e3) : null;
       if (res.status === 404) return null;
@@ -7524,6 +7532,7 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
     try {
       return await request(path, opts);
     } finally {
+      probed = true;
       release();
     }
   }

@@ -96,3 +96,49 @@ test('collect: a window with more runs than the cap is truncated from the count'
   const d = await collect(createClient({ fetchImpl: fakeFetch(routes) }), 'o/r', { now, maxPages: 3 });
   assert.equal(d.truncated, true);
 });
+
+test('a fresh client sends one request until it knows the budget, so a cold start keeps the reserve', async () => {
+  let sent = 0;
+  let left = 30;
+  let concurrent = 0;
+  let peak = 0;
+  const client = createClient({ concurrency: 6, fetchImpl: async () => {
+    sent++; concurrent++; peak = Math.max(peak, concurrent);
+    await delay(5);
+    concurrent--; left--;
+    return answer({}, { 'x-ratelimit-remaining': String(left), 'x-ratelimit-reset': '2000000000' });
+  } });
+  const results = await Promise.allSettled(Array.from({ length: 6 }, (_, i) => client.get(`x/${i}`)));
+  assert.ok(left >= 25, `left ${left}`);
+  assert.equal(sent, 5);
+  assert.ok(results.filter((r) => r.status === 'rejected').every((r) => r.reason instanceof RateLimitError));
+  // Once the budget is known, requests go out together again.
+  const roomy = createClient({ concurrency: 4, fetchImpl: async () => {
+    concurrent++; peak = Math.max(peak, concurrent);
+    await delay(5);
+    concurrent--;
+    return answer({}, { 'x-ratelimit-remaining': '4000', 'x-ratelimit-reset': '2000000000' });
+  } });
+  peak = 0;
+  await Promise.all(Array.from({ length: 12 }, (_, i) => roomy.get(`y/${i}`)));
+  assert.equal(peak, 4);
+});
+
+test("a late answer from an hour that has reset does not lower the new hour's budget", async () => {
+  // The client already knows the old hour (27 left: room for two more above the reserve). Two
+  // requests straddle the reset: the new hour's answer (4999) comes first, the old hour's (26) after.
+  const queue = [{ left: '27', reset: '2000000000', wait: 0 }];
+  const client = createClient({ fetchImpl: async () => {
+    const a = queue.shift() || { left: '4998', reset: '2000003600', wait: 0 };
+    await delay(a.wait);
+    return answer({}, { 'x-ratelimit-remaining': a.left, 'x-ratelimit-reset': a.reset });
+  } });
+  await client.get('probe');
+  assert.equal(client.remaining, 27);
+  queue.push({ left: '26', reset: '2000000000', wait: 30 }, { left: '4999', reset: '2000003600', wait: 1 });
+  await Promise.all([client.get('a'), client.get('b')]);
+  assert.equal(client.remaining, 4999);
+  // Another request can go, and its count stands.
+  await client.get('c');
+  assert.equal(client.remaining, 4998);
+});

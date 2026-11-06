@@ -108,13 +108,20 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
   let inFlight = 0;
   // At most `concurrency` requests at once: the audit's calls are independent reads, and GitHub
   // asks clients not to send many at the same moment.
+  // Until the first answer arrives the budget is unknown, so one request goes alone: six sent
+  // blind could spend calls the reserve keeps. After it, the full concurrency applies (and with no
+  // count reported at all, the reserve cannot be enforced, as the report says).
   let active = 0;
+  let probed = false;
   const waiting = [];
-  const acquire = () => (active < concurrency ? (active++, Promise.resolve()) : new Promise((r) => waiting.push(r)));
+  const cap = () => (probed ? concurrency : 1);
+  const acquire = () => (active < cap() ? (active++, Promise.resolve()) : new Promise((r) => waiting.push(r)));
   const release = () => {
-    const next = waiting.shift();
-    if (next) next();
-    else active--;
+    active--;
+    while (waiting.length && active < cap()) {
+      active++;
+      waiting.shift()();
+    }
   };
   // The token's hourly budget as GitHub reports it (x-ratelimit-limit): 1,000 for a workflow's
   // GITHUB_TOKEN, 5,000 for a person's token, 5,000 or more for a GitHub App installation, 60 with
@@ -158,11 +165,16 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
       // An answer with a count replaces ours, unless it is older news: within the same hour the
       // lower count stands (another answer may have come back first). An answer without one (or
       // with one that is not a number) was still charged, so it counts as spent.
+      const hasReset = Number.isFinite(resetHeader) && resetHeader > 0;
       if (left !== null && Number.isFinite(Number(left))) {
         const n = Number(left);
-        const newHour = Number.isFinite(resetHeader) && resetHeader > 0 && (hourResetsAt === null || resetHeader > hourResetsAt);
-        if (newHour) hourResetsAt = resetHeader;
-        remaining = remaining === null || newHour ? n : Math.min(remaining, n);
+        if (hasReset && hourResetsAt !== null && resetHeader < hourResetsAt) {
+          // A count from an hour that has already reset says nothing about this one: ignored.
+        } else {
+          const newHour = hasReset && (hourResetsAt === null || resetHeader > hourResetsAt);
+          if (newHour) hourResetsAt = resetHeader;
+          remaining = remaining === null || newHour ? n : Math.min(remaining, n);
+        }
       } else if (remaining !== null) remaining -= 1;
       const cap = res.headers.get('x-ratelimit-limit');
       if (cap !== null && Number.isFinite(Number(cap))) limit = Number(cap);
@@ -208,6 +220,7 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
     try {
       return await request(path, opts);
     } finally {
+      probed = true;
       release();
     }
   }
