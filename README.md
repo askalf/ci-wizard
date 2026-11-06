@@ -127,7 +127,7 @@ as the markdown report in the job summary, and `--html` renders it as a page.
 
 ## What it finds
 
-**Security and stability risks come first.** They are ranked before any saving:
+**Security risks come first.** They are ranked before any saving:
 
 | Finding | What it means |
 | --- | --- |
@@ -136,9 +136,16 @@ as the markdown report in the job summary, and `--html` renders it as a page.
 | job token wider than the job | `permissions: write-all`, or no permissions block, so the job gets the repository's default token |
 | fork pull requests run on self-hosted runners | a fork's code can reach your runner |
 | self-hosted runners reused across jobs | a persistent runner lets a job see what the one before left |
+
+**A guard against hung jobs** saves no minutes, so it is listed after the findings that save time:
+
+| Finding | What it means |
+| --- | --- |
 | jobs without a working timeout | a hung job holds its runner (and bills) for up to 6 hours |
 
-**Then the savings.** Each is measured and confirmed against the workflow file:
+**Then the savings.** Each is estimated from measured timings. The cause is confirmed against the
+workflow file wherever the file says (*confirmed*), and is labelled *cause inferred* where it
+doesn't, such as a checkout step whose depth is set by an expression:
 
 | Finding | |
 | --- | --- |
@@ -174,7 +181,8 @@ one that has a hostile contributor.
 - **Hostile input.** Workflow, job and step names, file names and expressions are written by
   whoever can push or open a pull request, and they are treated that way:
   - every report renders them as text: no markup, link, image, mention or terminal control code;
-  - parsing takes linear time, so a crafted file can't stall the audit;
+  - the matching ci-wizard does on that text takes linear time, so a crafted name or value can't
+    stall the audit (YAML is parsed by the bundled yaml library, with its alias limits);
   - each request has a 30-second deadline and a 20 MB cap.
 
   [SECURITY.md](SECURITY.md) lists what is in scope, and how to report a vulnerability privately.
@@ -227,9 +235,11 @@ one that has a hostile contributor.
   is enough for the repository it runs in. A repository the token cannot see reads as not found.
 - **Cost.** About 50 to 70 API calls for a busy repository, made up to six at a time. That is
   about 10 seconds for 500 runs.
-- **Rate limit.** Once the token has 25 calls or fewer left, it sends no more requests, counting
-  the ones in flight. That always leaves at least 25 for the repository's own CI, and the report
-  says how many were left.
+- **Rate limit.** While GitHub reports the remaining count (api.github.com does), the client sends
+  no more requests once the token has 25 calls or fewer left, counting the ones in flight. That
+  leaves at least 25 for the repository's own CI, and the report says how many were left. An API
+  that reports no count gives the reserve nothing to hold against, so it can't be enforced, and
+  the report says so.
 - **Behind a proxy** (`HTTPS_PROXY`, as on many self-hosted runners), the CLI and the action use
   it on Node 22.21 and later. On an older Node they warn that the proxy is ignored.
 - **Node.** The CLI needs Node 20 or later. The action runs on the runner's Node 24.
