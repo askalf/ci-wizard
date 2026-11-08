@@ -119,7 +119,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   *Trade-off:* pinning to the image's version ties the job to the image's update schedule.
 - **On self-hosted runners** the rule fires at 2 s per step, when the workflow file has a
   `actions/setup-*` step (node, python, go, java, dotnet, ruby) on a job that runs on self-hosted
-  runners, each such step priced from its own job's sampled runs. The host can carry the runtime,
+  runners and the step sets up the runtime and nothing else (no `cache`, `cache-dependency-path`,
+  `bundler-cache`, `registry-url` or other input that restores a cache or signs in to a registry:
+  dropping such a step would lose that work), each such step priced from its own job's sampled
+  runs. The host can carry the runtime,
   so the step only restates a version: a tool-cache hit still costs the step, and a cold row
   downloads the runtime again. **Estimate** those steps' time, times runs a week; the rest of the
   workflow's toolchain time (hosted jobs' included) is judged by the 15 s rule above on its own. **Fix** the runtime the host has, its
@@ -135,8 +138,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   tests on two platforms are two results, so neither counts; a job already counted within itself
   is left out of the cross-job scope, so no run is counted twice. Two steps are two runs whatever their names: two unnamed `run: npm test` steps are both
   "Run npm test", and are priced at the lower of their shared timings; one step that starts two
-  suites of one runner is one step, and a step is priced once, in the first finding that takes it,
-  within a job and across jobs alike. Commands are compared with their
+  suites of one runner is one step, and a step is priced once: a step in a within-job finding is
+  out of every cross-job match under any command, and a step in one cross-job finding is out of
+  the next. Commands are compared with their
   reporting flags removed (`--test-reporter`, `--reporter`, `-q`, `-v`, `--silent`): the same tests
   reported differently are the same tests. Runners known: `node --test`, `npm/pnpm/yarn/bun test`
   and `run test*`, jest, vitest, mocha, ava, tap, pytest, unittest, `go test`, `cargo test`, rspec,
@@ -164,7 +168,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   other run, and a destination with no condition runs only on success, so an artifact step with
   `if: always()` or `!cancelled()` keeps the only copy of a failed run's file; a destination counts
   only under the artifact step's own condition, or with none when the artifact step runs on
-  success alone. An upload that runs only on failure (`if: failure()`) is a crash's files kept for
+  success alone and the destination comes before it or right after it (a step between them that
+  fails would skip the destination after the artifact already went up). An upload that runs only on failure (`if: failure()`) is a crash's files kept for
   a look, not a duplicate. The OSSF Scorecard starter workflow carries this pattern.
 - **Confidence** confirmed.
 - **Estimate** the artifact step's time, times runs a week; the retention it adds is not costed.

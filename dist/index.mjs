@@ -9119,7 +9119,8 @@ function stepName(st, i = 0) {
 function repeatedTests(doc) {
   const found = [];
   const byCommand = /* @__PURE__ */ new Map();
-  const counted = /* @__PURE__ */ new Set();
+  const used = /* @__PURE__ */ new Set();
+  const key = (job, index) => `${job}\0${index}`;
   for (const [id, job] of jobsOf2(doc)) {
     const inJob = /* @__PURE__ */ new Map();
     const byRunner = /* @__PURE__ */ new Map();
@@ -9128,42 +9129,38 @@ function repeatedTests(doc) {
       const name = stepName(st, i);
       for (const command of new Set(testCommands(st.run))) {
         if (!inJob.has(command)) inJob.set(command, []);
-        inJob.get(command).push(name);
+        inJob.get(command).push({ index: i, name });
         const runner = runnerOf(command);
         if (!byRunner.has(runner)) byRunner.set(runner, []);
         byRunner.get(runner).push({ index: i, name, command });
       }
     });
     for (const [command, steps] of inJob) {
-      const first = byRunner.get(runnerOf(command)).find((o) => o.command === command);
       if (!byCommand.has(command)) byCommand.set(command, []);
-      byCommand.get(command).push({ job: id, step: steps[0], index: first.index, runsOn: JSON.stringify(job["runs-on"] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
+      byCommand.get(command).push({ job: id, step: steps[0].name, index: steps[0].index, runsOn: JSON.stringify(job["runs-on"] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
-    const used = /* @__PURE__ */ new Set();
     for (const [runner, occurrences] of byRunner) {
       const byIndex = /* @__PURE__ */ new Map();
-      for (const o of occurrences) if (!byIndex.has(o.index) && !used.has(o.index)) byIndex.set(o.index, o.name);
+      for (const o of occurrences) if (!byIndex.has(o.index) && !used.has(key(id, o.index))) byIndex.set(o.index, o.name);
       const steps = [...byIndex.values()];
       const commands = [...new Set(occurrences.filter((o) => byIndex.has(o.index)).map((o) => o.command))];
       if (steps.length > 1) {
         found.push({ scope: "job", jobs: [id], steps, command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
-        for (const i of byIndex.keys()) used.add(i);
-        counted.add(`${id}\0${runner}`);
+        for (const i of byIndex.keys()) used.add(key(id, i));
       }
     }
   }
-  const usedAcross = /* @__PURE__ */ new Set();
   for (const [command, where2] of byCommand) {
     const groups = /* @__PURE__ */ new Map();
     for (const w of where2) {
-      if (w.matrix || counted.has(`${w.job}\0${runnerOf(command)}`) || usedAcross.has(`${w.job}\0${w.index}`)) continue;
+      if (w.matrix || used.has(key(w.job, w.index))) continue;
       if (!groups.has(w.runsOn)) groups.set(w.runsOn, []);
       groups.get(w.runsOn).push(w);
     }
     for (const ws of groups.values()) {
       if (ws.length > 1) {
         found.push({ scope: "workflow", jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), command, same: true });
-        for (const w of ws) usedAcross.add(`${w.job}\0${w.index}`);
+        for (const w of ws) used.add(key(w.job, w.index));
       }
     }
   }
@@ -9188,6 +9185,7 @@ function duplicateUploads(doc) {
       steps.forEach((other, j) => {
         if (j === i) return;
         if (guard(other) !== mine && (guard(other) !== "" || afterFailure)) return;
+        if (guard(other) === "" && j > i + 1) return;
         const uses = String(other.uses || "");
         const w = other.with && typeof other.with === "object" ? other.with : {};
         if (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) alsoTo.add("code scanning");
@@ -9207,7 +9205,10 @@ function selfHostedSetups(doc) {
     if (!runsOnSelfHosted(job["runs-on"])) continue;
     stepsOf2(job).forEach((st, i) => {
       const m = /^actions\/setup-(node|python|go|java|dotnet|ruby)@/.exec(String(st.uses || ""));
-      if (m) found.push({ job: id, step: stepName(st, i), action: `setup-${m[1]}` });
+      if (!m) return;
+      const inputs = st.with && typeof st.with === "object" ? Object.keys(st.with) : [];
+      if (inputs.some((k) => /^(cache|cache-dependency-path|bundler-cache|registry-url|scope|always-auth|server-id|server-username|server-password|gpg-private-key|source-url)$/.test(k))) return;
+      found.push({ job: id, step: stepName(st, i), action: `setup-${m[1]}` });
     });
   }
   return found;

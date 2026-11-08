@@ -84,9 +84,10 @@ export function stepName(st, i = 0) {
 export function repeatedTests(doc) {
   const found = [];
   const byCommand = new Map();
-  // Jobs already counted for a runner within themselves: the cross-job scope leaves them out, so a
-  // run is never counted twice (the estimate then understates a suite run in two jobs twice each).
-  const counted = new Set();
+  // A step is priced once, whatever took it: the steps in a within-job finding are out of every
+  // cross-job match, under any command, and a step in one cross-job finding is out of the next.
+  const used = new Set();
+  const key = (job, index) => `${job}\u0000${index}`;
   for (const [id, job] of jobsOf(doc)) {
     const inJob = new Map();
     const byRunner = new Map();
@@ -95,7 +96,7 @@ export function repeatedTests(doc) {
       const name = stepName(st, i);
       for (const command of new Set(testCommands(st.run))) {
         if (!inJob.has(command)) inJob.set(command, []);
-        inJob.get(command).push(name);
+        inJob.get(command).push({ index: i, name });
         // Occurrences by step, not by display name: two unnamed `run: npm test` steps are both
         // "Run npm test", and are two runs.
         const runner = runnerOf(command);
@@ -104,40 +105,34 @@ export function repeatedTests(doc) {
       }
     });
     for (const [command, steps] of inJob) {
-      const first = byRunner.get(runnerOf(command)).find((o) => o.command === command);
       if (!byCommand.has(command)) byCommand.set(command, []);
-      byCommand.get(command).push({ job: id, step: steps[0], index: first.index, runsOn: JSON.stringify(job['runs-on'] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
+      byCommand.get(command).push({ job: id, step: steps[0].name, index: steps[0].index, runsOn: JSON.stringify(job['runs-on'] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
-    // A step is priced once: a step that starts two runners (or two suites of one) joins the first
-    // finding that takes it and no other, so no step's time is claimed twice.
-    const used = new Set();
     for (const [runner, occurrences] of byRunner) {
+      // One step that starts two suites of one runner is one step: distinct steps by index, each
+      // named once, and none that an earlier runner's finding already took.
       const byIndex = new Map();
-      for (const o of occurrences) if (!byIndex.has(o.index) && !used.has(o.index)) byIndex.set(o.index, o.name);
+      for (const o of occurrences) if (!byIndex.has(o.index) && !used.has(key(id, o.index))) byIndex.set(o.index, o.name);
       const steps = [...byIndex.values()];
       const commands = [...new Set(occurrences.filter((o) => byIndex.has(o.index)).map((o) => o.command))];
       // Two steps of this runner: the same command in both, or two commands (other paths, another directory).
       if (steps.length > 1) {
         found.push({ scope: 'job', jobs: [id], steps, command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
-        for (const i of byIndex.keys()) used.add(i);
-        counted.add(`${id}\u0000${runner}`);
+        for (const i of byIndex.keys()) used.add(key(id, i));
       }
     }
   }
-  // Across jobs the same: a step already in a cross-job finding (two suites in one step, two
-  // commands of two runners) is not priced again under its other command.
-  const usedAcross = new Set();
   for (const [command, where] of byCommand) {
     const groups = new Map();
     for (const w of where) {
-      if (w.matrix || counted.has(`${w.job}\u0000${runnerOf(command)}`) || usedAcross.has(`${w.job}\u0000${w.index}`)) continue;
+      if (w.matrix || used.has(key(w.job, w.index))) continue;
       if (!groups.has(w.runsOn)) groups.set(w.runsOn, []);
       groups.get(w.runsOn).push(w);
     }
     for (const ws of groups.values()) {
       if (ws.length > 1) {
         found.push({ scope: 'workflow', jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), command, same: true });
-        for (const w of ws) usedAcross.add(`${w.job}\u0000${w.index}`);
+        for (const w of ws) used.add(key(w.job, w.index));
       }
     }
   }
@@ -174,9 +169,12 @@ export function duplicateUploads(doc) {
       // artifact step that runs after a failure too (always(), !cancelled()) then keeps the only
       // copy of a failed run's file, so such a destination counts only under the same condition.
       const afterFailure = /always\(\)|cancelled\(\)/.test(mine);
+      // A destination with no condition that comes later counts only when it comes next: a step
+      // between them that fails skips it (implicit success()) after the artifact already went up.
       steps.forEach((other, j) => {
         if (j === i) return;
         if (guard(other) !== mine && (guard(other) !== '' || afterFailure)) return;
+        if (guard(other) === '' && j > i + 1) return;
         const uses = String(other.uses || '');
         const w = other.with && typeof other.with === 'object' ? other.with : {};
         if (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) alsoTo.add('code scanning');
@@ -196,14 +194,19 @@ export function startsTests(doc) {
   return jobsOf(doc).some(([, job]) => stepsOf(job).some((st) => st.run !== undefined && testCommands(st.run).length > 0));
 }
 
-/** A runtime setup action on a job that runs on self-hosted runners, where the host can carry the runtime. */
+/** A runtime setup action, setting up the runtime and nothing else, on a job that runs on self-hosted runners, where the host can carry the runtime. */
 export function selfHostedSetups(doc) {
   const found = [];
   for (const [id, job] of jobsOf(doc)) {
     if (!runsOnSelfHosted(job['runs-on'])) continue;
     stepsOf(job).forEach((st, i) => {
       const m = /^actions\/setup-(node|python|go|java|dotnet|ruby)@/.exec(String(st.uses || ''));
-      if (m) found.push({ job: id, step: stepName(st, i), action: `setup-${m[1]}` });
+      if (!m) return;
+      // A setup that also restores a dependency cache or signs the job in to a registry does more
+      // than state a version: dropping it would lose that work, so it is not this rule's.
+      const inputs = st.with && typeof st.with === 'object' ? Object.keys(st.with) : [];
+      if (inputs.some((k) => /^(cache|cache-dependency-path|bundler-cache|registry-url|scope|always-auth|server-id|server-username|server-password|gpg-private-key|source-url)$/.test(k))) return;
+      found.push({ job: id, step: stepName(st, i), action: `setup-${m[1]}` });
     });
   }
   return found;

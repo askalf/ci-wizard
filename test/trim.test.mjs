@@ -217,6 +217,33 @@ jobs:
           sarif_file: results.sarif
 `);
   assert.deepEqual(duplicateUploads(afterFailure).map((u) => u.job), ['b']);
+  // A destination with no condition after the artifact counts only when it comes next: a step
+  // between them that fails skips it, and the artifact is the only copy of that run's file.
+  const between = doc(`on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        with:
+          path: results.sarif
+      - run: exit 1
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+      - run: exit 1
+      - uses: actions/upload-artifact@v4
+        with:
+          path: results.sarif
+`);
+  // In b the destination went first: a failure after it skips the artifact, never the destination.
+  assert.deepEqual(duplicateUploads(between).map((u) => u.job), ['b']);
 });
 
 test('selfHostedSetups: a setup action on a self-hosted job, not on a hosted one', () => {
@@ -236,6 +263,30 @@ jobs:
       - run: npm test
 `);
   assert.deepEqual(selfHostedSetups(d), [{ job: 'box', step: 'Run actions/setup-node@v4', action: 'setup-node' }]);
+  // A setup that restores a dependency cache or signs in to a registry does more than state a version.
+  const more = doc(`on: push
+jobs:
+  cached:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+  registry:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          registry-url: https://npm.pkg.github.com
+  plain:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+`);
+  assert.deepEqual(selfHostedSetups(more).map((s) => s.job), ['plain']);
 });
 
 const twiceFile = `on: push
@@ -320,6 +371,9 @@ jobs:
   const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'a' }, { ...job({ steps }), name: 'b' }]], file }]);
   assert.deepEqual(a.workflows[0].repeated_tests.map((r) => [r.scope, r.jobs, r.command]), [['workflow', ['a', 'b'], 'pytest tests/unit']]);
   assert.equal(find(a, 'tests run twice')[0].saving_min_week, 30); // one 60 s step x 30 runs / 60, not two
+  // A step in a within-job finding is out of every cross-job match, under any command.
+  const shared = doc('on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: |\n          npm test\n          pytest tests\n      - name: B\n        run: npm test\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - name: C\n        run: pytest tests\n');
+  assert.deepEqual(repeatedTests(shared).map((r) => [r.scope, r.steps, r.command]), [['job', ['A', 'B'], 'npm test']]);
   // One step of two runners beside another such step: one finding, each step priced once.
   const twoRunners = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: |\n          npm test\n          pytest tests\n      - name: B\n        run: |\n          npm test\n          pytest tests\n');
   assert.deepEqual(repeatedTests(twoRunners).map((r) => [r.steps, r.command]), [[['A', 'B'], 'npm test']]);
