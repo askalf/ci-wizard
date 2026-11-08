@@ -270,7 +270,10 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
         if (names.size && runId != null) {
           onProgress(`reading artifacts of ${wf}`);
           const listing = rethrow(await settle(client.get(`repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`)));
-          const listed = listing && Array.isArray(listing.artifacts) ? listing.artifacts : null;
+          // One page of the listing; a run with more artifacts than the page holds may carry a
+          // second artifact of a candidate's name on a page not read, so the record is left unknown.
+          const complete = listing && Array.isArray(listing.artifacts) && !(Number.isFinite(listing.total_count) && listing.total_count > listing.artifacts.length);
+          const listed = complete ? listing.artifacts : null;
           if (listed) {
             const picked = listed.filter((a) => a && a.id != null && !a.expired && names.has(String(a.name)));
             const zips = await Promise.all(picked.map((a) => settle(client.fileOf(`repos/${repo}/actions/artifacts/${a.id}/zip`, { bytes: true, max: maxArtifactBytes }))));

@@ -116,6 +116,15 @@ jobs:
   assert.equal(onlyCommand('echo "$(cp fixtures/postgres.conf backend.conf)"\nnpm test', 'npm test'), false);
   assert.equal(onlyCommand('echo `cp fixtures/postgres.conf backend.conf`\nnpm test', 'npm test'), false);
   assert.equal(onlyCommand('npm test <(cat args)', 'npm test <(cat args)'), false);
+  // An expansion in an aside can assign: `${BACKEND:=postgres}` sets what the tests then read, so an aside carries no `$`.
+  assert.equal(onlyCommand('echo "${BACKEND:=postgres}"\nnpm test -- --backend "$BACKEND"', 'npm test -- --backend "$BACKEND"'), false);
+  assert.equal(onlyCommand('echo "$HOME"\nnpm test', 'npm test'), false);
+  const assigning = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          echo "${BACKEND:=sqlite}"\n          npm test -- --backend "$BACKEND"\n      - run: |\n          echo "${BACKEND:=postgres}"\n          npm test -- --backend "$BACKEND"\n';
+  assert.deepEqual(repeatedTests(doc(assigning)), []);
+  const asSteps = [['Set up job', 1], ['Run echo "${BACKEND:=sqlite}"', 30], ['Run echo "${BACKEND:=postgres}"', 30], ['Complete job', 0]];
+  const asLog = log([['echo "${BACKEND:=sqlite}"', tap(A)], ['echo "${BACKEND:=postgres}"', tap(A)]]);
+  const g = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: asSteps }), name: 't', log_text: asLog }]], file: assigning }]);
+  assert.equal(find(g, 'tests run twice').length, 0, 'identical listings against two assigned backends are two results');
   // An input redirection of any kind feeds the tests: a here-document, a here-string, a file.
   assert.equal(onlyCommand('npm test <<EOF\nsqlite\nEOF', 'npm test'), false);
   assert.equal(onlyCommand('npm test <<< postgres', 'npm test'), false);

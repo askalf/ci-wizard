@@ -34,7 +34,7 @@ jobs:
 `;
 const LOG = '2026-11-08T04:50:38Z ##[group]Run npm test\n2026-11-08T04:50:39Z ok 1 - a\n2026-11-08T04:50:39Z # tests 1\n2026-11-08T04:50:40Z ##[group]Run npm test\n2026-11-08T04:50:41Z ok 1 - a\n2026-11-08T04:50:41Z # tests 1\n';
 
-function setup({ zipBytes = storedZip([{ name: 'results.sarif', data: 'sarif' }]), zipLength = null } = {}) {
+function setup({ zipBytes = storedZip([{ name: 'results.sarif', data: 'sarif' }]), zipLength = null, artifactTotal = 3 } = {}) {
   const now = new Date(Date.parse(t(7 * 86400)));
   const newest = run({ at: 7200, conclusion: 'success' });
   const older = run({ at: 3600, conclusion: 'success' });
@@ -51,7 +51,7 @@ function setup({ zipBytes = storedZip([{ name: 'results.sarif', data: 'sarif' }]
     'repos/o/r/actions/runs?': { total_count: 2, workflow_runs: [newest, older] },
     'repos/o/r/actions/runs/': (path) => {
       if (/\/artifacts/.test(path)) {
-        return { total_count: 3, artifacts: [
+        return { total_count: artifactTotal, artifacts: [
           { id: 901, name: 'SARIF file', size_in_bytes: 16334, expired: false },
           { id: 902, name: 'coverage', size_in_bytes: 5, expired: false },
           { id: 903, name: 'SARIF file', size_in_bytes: 1, expired: true },
@@ -113,4 +113,12 @@ test('collect: logs: false reads no log, artifacts: false reads no artifact; a z
   const text = setup({ zipBytes: 'not a zip' });
   const e = await collect(createClient({ fetchImpl: text.fetchImpl }), 'o/r', { now: text.now });
   assert.deepEqual([...e.samples.values()][0][0][0].run_artifacts[0].entries, null);
+});
+
+test('collect: a listing with more artifacts than the page read may hold a second artifact of the name on another page, so no record is kept and no zip is read', async () => {
+  const paged = setup({ artifactTotal: 101 });
+  const d = await collect(createClient({ fetchImpl: paged.fetchImpl }), 'o/r', { now: paged.now });
+  assert.equal(paged.asked.filter((u) => u.startsWith('GET https://blobs.example/zip/')).length, 0);
+  const [sampled] = d.samples.values();
+  assert.equal(sampled[0][0].run_artifacts, undefined);
 });

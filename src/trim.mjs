@@ -112,8 +112,10 @@ export function onlyCommand(script, command) {
       continue;
     }
     // A command aside only while it touches nothing: a redirection or a pipe writes a file or
-    // feeds another command (`echo postgres > backend.conf` picks the backend under test).
-    if (!HARMLESS.has(ws[0]) || ws.some((w) => /^(<|>|>>|\|)/.test(w) || /[<>|]/.test(w) && !/^['"]/.test(w) && w !== ws[0])) return false;
+    // feeds another command (`echo postgres > backend.conf` picks the backend under test), and an
+    // expansion can assign (`echo "${BACKEND:=postgres}"` sets what the tests then read), so an
+    // aside carries no `$` at all.
+    if (!HARMLESS.has(ws[0]) || ws.some((w) => w.includes('$') || /^(<|>|>>|\|)/.test(w) || /[<>|]/.test(w) && !/^['"]/.test(w) && w !== ws[0])) return false;
   }
   return hits > 0;
 }

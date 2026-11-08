@@ -8531,7 +8531,7 @@ function onlyCommand(script, command) {
       if (!setsOptionsOnly(ws)) return false;
       continue;
     }
-    if (!HARMLESS.has(ws[0]) || ws.some((w) => /^(<|>|>>|\|)/.test(w) || /[<>|]/.test(w) && !/^['"]/.test(w) && w !== ws[0])) return false;
+    if (!HARMLESS.has(ws[0]) || ws.some((w) => w.includes("$") || /^(<|>|>>|\|)/.test(w) || /[<>|]/.test(w) && !/^['"]/.test(w) && w !== ws[0])) return false;
   }
   return hits > 0;
 }
@@ -9023,7 +9023,8 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
         if (names2.size && runId != null) {
           onProgress(`reading artifacts of ${wf}`);
           const listing2 = rethrow(await settle(client.get(`repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`)));
-          const listed2 = listing2 && Array.isArray(listing2.artifacts) ? listing2.artifacts : null;
+          const complete = listing2 && Array.isArray(listing2.artifacts) && !(Number.isFinite(listing2.total_count) && listing2.total_count > listing2.artifacts.length);
+          const listed2 = complete ? listing2.artifacts : null;
           if (listed2) {
             const picked = listed2.filter((a) => a && a.id != null && !a.expired && names2.has(String(a.name)));
             const zips = await Promise.all(picked.map((a) => settle(client.fileOf(`repos/${repo}/actions/artifacts/${a.id}/zip`, { bytes: true, max: maxArtifactBytes }))));

@@ -164,8 +164,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 ## tests run twice
 
 - **Fires when** two things agree. First the workflow file: the same test step twice, two steps
-  whose scripts are one and the same test command and nothing else (`echo` and `set` in its
-  option form aside, `set -euo pipefail`; a `set -- args` assigns what a following `pytest "$@"`
+  whose scripts are one and the same test command and nothing else (`echo` without any `$` and
+  `set` in its option form aside, `set -euo pipefail`; an `echo "${BACKEND:=postgres}"` assigns
+  what the tests then read, a `set -- args` assigns what a following `pytest "$@"`
   reads, a `cd` moves the tests, an `export` changes their environment, a pipe anywhere feeds or
   captures them, an input redirection of any kind feeds them (a here-document, a here-string, a
   file), and a command or process substitution anywhere, an echo's argument included, runs a
@@ -243,7 +244,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   the artifact by run) is not visible here, and the trade-off says to check for one before the
   step goes. Then the newest sampled successful run's record: its artifact of the
   step's name (`name:` as written, else `artifact`; a name set by an expression is not known)
-  must exist, unexpired, once, and its zip's directory must list exactly one file, the path's
+  must exist, unexpired, once in a listing read in full (a run with more artifacts than the page
+  holds leaves the record unknown), and its zip's directory must list exactly one file, the path's
   last segment (upload-artifact keeps a single file at the artifact's root). An artifact holding a
   directory's worth of files, a zip that could not be read or is larger than 8 MB, no artifact of
   that name, or two of it (two jobs uploading alike) confirms nothing, and the rule is silent.
