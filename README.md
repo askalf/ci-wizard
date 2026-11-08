@@ -159,6 +159,7 @@ doesn't, such as a checkout step whose depth is set by an expression:
 | cache dependencies, dependency installs dominate | installs that run uncached, or dominate the job |
 | slow checkout, toolchain setup | full history, LFS, submodules, a setup that could be cached, or a runtime setup on a self-hosted runner that has the runtime |
 | test output floods the log | a passing job's log the size of a test listing, in megabytes a week |
+| tests run twice, an artifact that duplicates another upload | the same one-command test step twice, confirmed by the run's logs listing the same tests; an artifact holding the one file another step already sent to code scanning or the release |
 | the same commit runs twice, outdated runs keep going | push and pull request both firing; no cancel-in-progress |
 | runs far more often than code changes, many small scheduled jobs | fixed cost paid on every run |
 | short hosted jobs bill a whole minute, many short jobs, matrix size | GitHub rounds each hosted job up to a minute |
@@ -175,9 +176,14 @@ one that has a hostile contributor.
 - **What it reads.** Through the API only, these endpoints:
   - `GET /repos/{repo}/actions/runs` (up to 500 runs), `/actions/runs/{id}/jobs` and
     `/actions/workflows`;
-  - `/actions/jobs/{id}/logs` for the jobs of each sampled workflow's newest successful run: only
-    the redirect it answers with, then a HEAD of the log file's address (no token) for its size.
-    The log itself is never downloaded;
+  - `/actions/jobs/{id}/logs` for the jobs of each sampled workflow's newest successful run: the
+    redirect it answers with, then a HEAD of the log file's address (no token) for its size. The
+    log itself is downloaded (from that address, no token, up to 8 MB) only for a job the workflow
+    file names in a candidate for the tests-run-twice rule, and read for the tests its steps list;
+  - `/actions/runs/{id}/artifacts` and `/actions/artifacts/{id}/zip` only where a workflow file
+    names a candidate for the duplicate-upload rule: the newest successful run's listing, then the
+    candidate artifact's zip (from the redirect's address, no token, up to 8 MB), read for the
+    names in its directory and never opened;
   - `/contents/.github/workflows`, the workflow files (up to 30), the root listing (to see which
     lockfile is committed) and the `.github` listing (for Dependabot's configuration);
   - `/repos/{repo}` (default branch and visibility);
@@ -196,7 +202,13 @@ one that has a hostile contributor.
   - every report renders them as text: no markup, link, image, mention or terminal control code;
   - the matching ci-wizard does on that text takes linear time, so a crafted name or value can't
     stall the audit (YAML is parsed by the bundled yaml library, with its alias limits);
-  - each request has a 30-second deadline and a 20 MB cap.
+  - each request has a 30-second deadline and a 20 MB cap; a job log or an artifact zip read for
+    the two step-removing rules has an 8 MB cap of its own;
+  - a job's log and an artifact's directory are a step's own output, and are read only to confirm
+    what the workflow file already shows twice: the test names or counts in two step sections, the
+    file names in the zip. Forged output can keep those rules silent, or make two steps the file
+    shows as identical read as one; it reaches nothing else, and every fix is a workflow change
+    the reader makes, never an action the tool takes.
 
   [SECURITY.md](SECURITY.md) lists what is in scope, and how to report a vulnerability privately.
 - **What you can verify.**

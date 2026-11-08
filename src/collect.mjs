@@ -1,8 +1,13 @@
 import { NotFoundError, RateLimitError } from './github.mjs';
+import { allJobTimeouts, assignJobRuns, parseWorkflow } from './workflow.mjs';
+import { duplicateUploads, repeatedTests } from './trim.mjs';
+import { zipEntries } from './zip.mjs';
 
 // Reads what an audit needs from GitHub, read-only: up to 500 workflow runs from the window, the
 // jobs (with their steps) of the newest successful runs of the busiest workflows, those
-// workflows' files, and the repository's root listing (to see which lockfiles it commits).
+// workflows' files, and the repository's root listing (to see which lockfiles it commits). Where
+// a sampled workflow's file raises a candidate for a rule that would remove a step (trim.mjs), the
+// newest successful run's record of it too: the matched jobs' logs, and the run's artifacts.
 
 // Each segment of a file path percent-encoded: a name with ? or # would otherwise change which
 // file, or which ref, the contents API reads.
@@ -50,7 +55,7 @@ export function groupRuns(runs, names = new Map()) {
  * @param {string} repo owner/name
  * @param {{ days?: number, perWorkflow?: number, perOutcome?: number, workflows?: number, only?: string[], now?: Date, maxPages?: number, onProgress?: (msg: string) => void }} [o]
  */
-export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2, workflows = 8, only = [], now = new Date(), maxPages = 5, maxScanFiles = 30, logs = true, onProgress = () => {} } = {}) {
+export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2, workflows = 8, only = [], now = new Date(), maxPages = 5, maxScanFiles = 30, logs = true, artifacts = true, maxLogBytes = 8 * 1048576, maxArtifactBytes = 8 * 1048576, onProgress = () => {} } = {}) {
   const since = new Date(now.getTime() - days * 86400e3).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const runs = [];
   let truncated = false;
@@ -221,6 +226,64 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
     fileReads.set(path, typeof text === 'string' ? text : null);
     files.set(path, text || '');
   });
+  // The two rules that would remove a step (trim.mjs: the same one-command test step twice, an
+  // artifact of a file another step already published) are not judged from the file alone. Where a
+  // sampled workflow's file raises a candidate, the newest successful run's own record is read:
+  // the matched jobs' whole logs (one API call each for the redirect, the file from its host), and
+  // the run's artifact listing with each candidate artifact's zip (read for the names it holds,
+  // never opened). One API job per file job, else no log is read for it; a record that cannot be
+  // read, or is larger than the cap, is left off, and the rule stays silent.
+  if ((logs || artifacts) && typeof client.fileOf === 'function') {
+    const rethrow = (r) => {
+      if (r.error instanceof RateLimitError) throw r.error;
+      return r.value;
+    };
+    for (const [wf, rs] of top) {
+      const text = files.get(String(rs[0].path || '').split('@')[0]);
+      const newest = (samples.get(wf) || [])[0] || [];
+      if (!text || !newest.length) continue;
+      const doc = parseWorkflow(text);
+      if (logs) {
+        const assigned = assignJobRuns(allJobTimeouts(doc).map((t) => ({ id: t.id, name: t.name, reusable: Boolean(t.reusable) })), [...new Set(newest.map((j) => String(j.name || '')))]);
+        const wanted = new Set();
+        for (const r of repeatedTests(doc)) {
+          for (const id of r.jobs) {
+            const names = assigned.get(id) || [];
+            if (names.length !== 1) continue;
+            const js = newest.filter((j) => String(j.name || '') === names[0] && j.id != null);
+            if (js.length === 1) wanted.add(js[0]);
+          }
+        }
+        if (wanted.size) {
+          onProgress(`reading step logs of ${wf}`);
+          const jobs = [...wanted];
+          const texts = await Promise.all(jobs.map((j) => settle(client.fileOf(`repos/${repo}/actions/jobs/${j.id}/logs`, { max: maxLogBytes }))));
+          jobs.forEach((j, i) => {
+            const t = rethrow(texts[i]);
+            if (typeof t === 'string') j.log_text = t;
+          });
+        }
+      }
+      if (artifacts) {
+        const names = new Set(duplicateUploads(doc).map((u) => u.name).filter((n) => n !== null));
+        const runId = (newest.find((j) => j.run_id != null) || {}).run_id;
+        if (names.size && runId != null) {
+          onProgress(`reading artifacts of ${wf}`);
+          const listing = rethrow(await settle(client.get(`repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`)));
+          const listed = listing && Array.isArray(listing.artifacts) ? listing.artifacts : null;
+          if (listed) {
+            const picked = listed.filter((a) => a && a.id != null && !a.expired && names.has(String(a.name)));
+            const zips = await Promise.all(picked.map((a) => settle(client.fileOf(`repos/${repo}/actions/artifacts/${a.id}/zip`, { bytes: true, max: maxArtifactBytes }))));
+            const record = picked.map((a, i) => {
+              const zip = rethrow(zips[i]);
+              return { name: String(a.name), bytes: Number(a.size_in_bytes) || 0, entries: Buffer.isBuffer(zip) ? zipEntries(zip) : null };
+            });
+            for (const j of newest) j.run_artifacts = record;
+          }
+        }
+      }
+    }
+  }
   // The workflow scans read every workflow file, not only the sampled workflows': an attack comes in
   // through whichever workflow lets it, busy or not. One listing, then each file not read yet, up to
   // maxScanFiles; `scanned` says how many of how many were read.

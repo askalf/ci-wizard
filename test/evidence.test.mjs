@@ -1,0 +1,719 @@
+// The two rules that would remove a step: the same test step twice, and an artifact of a file
+// another step already published. The file picks the candidates and must leave alone everything
+// it can tell apart (every case the review of ci-wizard#33 raised, issue #34); the newest sampled
+// run's record confirms them: the steps' logs list the same tests, the artifact holds the one
+// file. Without that record neither rule says anything.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { analyse } from '../src/analyse.mjs';
+import { artifactNameOf, duplicateUploads, onlyCommand, repeatedTests, sameTests, signaturesOf, stepSections, survivesFailure, testSignature } from '../src/trim.mjs';
+import { parseWorkflow } from '../src/workflow.mjs';
+import { data, find, job, runs } from './helpers.mjs';
+
+const audit = (workflows, o = {}) => analyse('owner/repo', data({ workflows, ...o }));
+const doc = (text) => parseWorkflow(text);
+const brief = (r) => [r.scope, r.jobs, r.steps];
+
+// A job log as the API serves it: a timestamp before every line, colour codes in the runner's
+// own lines, a `##[group]Run <header>` line opening each step.
+const STAMP = '2026-11-08T04:50:39.0374953Z ';
+const tap = (names) => [...names.map((n, i) => `${STAMP}ok ${i + 1} - ${n}`), `${STAMP}# tests ${names.length}`, `${STAMP}# pass ${names.length}`, `${STAMP}# fail 0`].join('\n');
+const log = (sections) => sections.map(([header, body]) => `${STAMP}##[group]Run ${header}\n${STAMP}\u001b[36;1m${header}\u001b[0m\n${STAMP}##[endgroup]\n${body}`).join('\n');
+const A = ['the client records the limit', 'a stop near the limit names the budget', 'collect reads the pages together'];
+const B = ['the client records the limit', 'a stop near the limit names the budget', 'another test entirely'];
+
+test('stepSections: a log splits at the runner\'s step headers, timestamps and colour stripped; a uses step opens a section too', () => {
+  const s = stepSections(log([['actions/checkout@v4', `${STAMP}Syncing repository`], ['npm test', tap(A)]]));
+  assert.deepEqual(s.map((x) => x.header), ['actions/checkout@v4', 'npm test']);
+  assert.match(s[0].text, /^npm test\n|Syncing repository/);
+  assert.ok(!/\u001b|2026-11-08T/.test(s[1].text), 'no colour code and no timestamp survives');
+  assert.deepEqual(stepSections('no header at all\njust lines'), []);
+});
+
+test('testSignature: the tests by name where the runner lists them (TAP, go -v, pytest -v, a tick), else the last summary count, else null', () => {
+  assert.deepEqual(testSignature(stepSections(log([['npm test', tap(A)]]))[0].text), { names: A, count: 3 });
+  assert.deepEqual(testSignature('ok 1 - kept\nok 2 - skipped one # SKIP no database\nnot ok 3 - failing'), { names: ['kept', 'skipped one', 'failing'], count: 3 });
+  assert.deepEqual(testSignature('=== RUN   TestA\n--- PASS: TestA (0.00s)\n--- FAIL: TestB (0.01s)\nok  \tpkg\t0.1s'), { names: ['TestA', 'TestB'], count: 2 });
+  assert.deepEqual(testSignature('tests/test_a.py::test_one PASSED\ntests/test_a.py::test_two FAILED\n===== 1 passed, 1 failed in 0.3s ====='), { names: ['tests/test_a.py::test_one', 'tests/test_a.py::test_two'], count: 2 });
+  assert.deepEqual(testSignature('  ✓ adds (3 ms)\n  ✓ subtracts\nTests:       2 passed, 2 total'), { names: ['adds', 'subtracts'], count: 2 });
+  // Counts alone, from the last summary line: pytest, jest, vitest, mocha, cargo (passed and failed), maven's total, phpunit, rspec, dotnet.
+  assert.deepEqual(testSignature('............\n===== 12 passed in 0.3s ====='), { names: null, count: 12 });
+  assert.deepEqual(testSignature('Tests:       1 failed, 11 passed, 12 total'), { names: null, count: 12 });
+  assert.deepEqual(testSignature(' Tests  12 passed (12)'), { names: null, count: 12 });
+  assert.deepEqual(testSignature('  12 passing (40ms)'), { names: null, count: 12 });
+  assert.deepEqual(testSignature('test result: ok. 10 passed; 0 failed; 0 ignored\ntest result: ok. 5 passed; 1 failed; 0 ignored'), { names: null, count: 6 });
+  assert.deepEqual(testSignature('[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.1 s\n[INFO] Tests run: 12, Failures: 0, Errors: 0, Skipped: 0'), { names: null, count: 12 });
+  assert.deepEqual(testSignature('OK (12 tests, 30 assertions)'), { names: null, count: 12 });
+  assert.deepEqual(testSignature('12 examples, 0 failures'), { names: null, count: 12 });
+  assert.deepEqual(testSignature('Passed!  - Failed:     0, Passed:    12, Skipped:     0, Total:    12, Duration: 1 s'), { names: null, count: 12 });
+  assert.equal(testSignature('npm ci\nadded 2 packages\n> build\nesbuild done'), null);
+  assert.equal(testSignature('===== 0 passed in 0.1s ====='), null, 'a run of nothing establishes nothing');
+});
+
+test('sameTests: by name when both list names, in any order; by count when both only count; null when either shows neither', () => {
+  assert.deepEqual(sameTests({ names: A, count: 3 }, { names: [...A].reverse(), count: 3 }), { same: true, by: 'name', count: 3 });
+  assert.deepEqual(sameTests({ names: A, count: 3 }, { names: B, count: 3 }), { same: false, by: 'name', count: 3 });
+  assert.deepEqual(sameTests({ names: A, count: 3 }, { names: [...A, A[0]], count: 4 }), { same: false, by: 'name', count: 3 }, 'a name listed twice is one more test');
+  assert.deepEqual(sameTests({ names: null, count: 12 }, { names: null, count: 12 }), { same: true, by: 'count', count: 12 });
+  assert.deepEqual(sameTests({ names: A, count: 3 }, { names: null, count: 3 }), { same: true, by: 'count', count: 3 }, 'one side without names compares by count');
+  assert.equal(sameTests({ names: null, count: 12 }, null), null);
+});
+
+test('signaturesOf: the k-th step with a header takes the k-th section it opens; a header count the file does not have, or a step without a header, reads nothing', () => {
+  const text = log([['actions/checkout@v4', ''], ['npm test', tap(A)], ['npm test', tap(B)]]);
+  const [first, second] = signaturesOf(text, ['npm test', 'npm test']);
+  assert.deepEqual(first.names, A);
+  assert.deepEqual(second.names, B);
+  assert.equal(signaturesOf(text, ['npm test']), null, 'one step in the file, two sections in the log: a forged header or a step the file does not show');
+  assert.equal(signaturesOf(text, ['npm test', 'npm test', 'npm test']), null);
+  assert.equal(signaturesOf(text, ['pytest tests']), null, 'no such section');
+  assert.equal(signaturesOf(text, [null]), null);
+  // A step's own output that prints a header line opens a section the file does not have.
+  const forged = log([['npm test', `${tap(A)}\n${STAMP}##[group]Run npm test\n${tap(A)}`]]);
+  assert.equal(signaturesOf(forged, ['npm test']), null);
+});
+
+test('repeatedTests: the same one-command test step twice, in one job or in two jobs alike in every way the file shows, with each step\'s log header', () => {
+  const same = doc(`on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Unit tests
+        run: npm test
+      - name: Again
+        run: npm test -- --silent
+`);
+  assert.deepEqual(repeatedTests(same), [{ scope: 'job', jobs: ['test'], steps: ['Unit tests', 'Again'], headers: ['npm test', 'npm test -- --silent'], shared: [false, false], command: 'npm test' }]);
+  const across = doc(`on: push
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pytest tests
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pytest -q tests
+`);
+  assert.deepEqual(repeatedTests(across), [{ scope: 'workflow', jobs: ['unit', 'coverage'], steps: ['Run pytest tests', 'Run pytest -q tests'], headers: ['pytest tests', 'pytest -q tests'], shared: [false, false], command: 'pytest tests' }]);
+  // A multi-line script's header is its first line, an aside included.
+  const aside = repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          set -euo pipefail\n          npm test\n      - run: npm test\n'));
+  assert.deepEqual(aside.map((r) => r.headers), [['set -euo pipefail', 'npm test']]);
+  assert.equal(onlyCommand('set -euo pipefail\nnpm test -- --silent', 'npm test'), true);
+  assert.equal(onlyCommand('cd pkg\nnpm test', 'npm test'), false); // a cd moves the tests: not the same step
+  assert.equal(onlyCommand('export DB_BACKEND=sqlite\nnpm test', 'npm test'), false); // an export changes their environment
+  assert.equal(onlyCommand('echo postgres > backend.conf\nnpm test', 'npm test'), false); // a redirection writes a file
+  assert.equal(onlyCommand('echo "starting" | tee log.txt\nnpm test', 'npm test'), false);
+  assert.equal(onlyCommand('echo "starting the tests"\nnpm test', 'npm test'), true);
+  assert.equal(onlyCommand('npm test\nnpm run build', 'npm test'), false);
+  assert.equal(onlyCommand('npm test\npytest tests/a', 'npm test'), false); // another suite is work that stays
+  assert.equal(onlyCommand('npm run build', 'npm test'), false);
+});
+
+test('repeatedTests: what the file can tell apart is no candidate: other paths, another directory, a cd, another environment, a build beside, a matrix, two platforms, a condition', () => {
+  // The same runner on other paths, or after an export and a cd: two suites as far as the file can tell.
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node --test a/*.test.mjs b/*.test.mjs\n      - run: node --test a/*.test.mjs\n')), []);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node --test a/*.test.mjs\n      - run: |\n          node tools/export.mjs out\n          cd out\n          node --test a/*.test.mjs\n')), []);
+  // The same cd before the test and after it are two directories; two cds anywhere are no repeat.
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          npm test\n          cd packages/backend\n      - run: |\n          cd packages/backend\n          npm test\n')), []);
+  // Another environment is another result: a step env, a job env, a service.
+  const envs = doc(`on: push
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+        env:
+          DB_BACKEND: sqlite
+      - run: npm test
+        env:
+          DB_BACKEND: postgres
+  a:
+    runs-on: ubuntu-latest
+    env:
+      DB_BACKEND: sqlite
+    steps:
+      - run: npm test
+  b:
+    runs-on: ubuntu-latest
+    env:
+      DB_BACKEND: postgres
+    steps:
+      - run: npm test
+  c:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres
+    steps:
+      - run: npm test
+  d:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+`);
+  assert.deepEqual(repeatedTests(envs), []);
+  // The environment set inside the script is an environment too; a configuration written before the tests picks what they test.
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          export DB_BACKEND=sqlite\n          npm test\n      - run: |\n          export DB_BACKEND=postgres\n          npm test\n')), []);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          echo sqlite > backend.conf\n          npm test\n      - run: |\n          echo postgres > backend.conf\n          npm test\n')), []);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo postgres | npm test\n      - run: npm test\n')), []);
+  // Two runtimes are two results, in two jobs and within one; a step between two test steps can change what the second tests.
+  const runtimes = doc(`on: push
+jobs:
+  n20:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm test
+  n22:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+  same1:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+  within:
+    runs-on: ubuntu-latest
+    steps:
+      - name: A
+        run: npm test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: B
+        run: npm test
+      - name: C
+        run: npm test
+`);
+  assert.deepEqual(repeatedTests(runtimes).map(brief), [['job', ['within'], ['B', 'C']], ['workflow', ['n22', 'same1'], ['Run npm test', 'Run npm test']]]);
+  // Preparation that differs only in its directory, shell or inputs leads into different tests.
+  const prep = doc(`on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: cp backend.conf .
+        working-directory: fixtures/sqlite
+      - run: npm test
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - run: cp backend.conf .
+        working-directory: fixtures/postgres
+      - run: npm test
+`);
+  assert.deepEqual(repeatedTests(prep), []);
+  // A build or another suite beside the tests keeps work that must stay; two scripts of one runner are two suites.
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          npm test\n          npm run build:a\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          npm test\n          npm run build:b\n')), []);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: |\n          npm test\n          pytest tests\n      - name: B\n        run: npm test\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - name: C\n        run: pytest tests\n')), []);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run test:unit\n      - run: npm run test:e2e\n')), []);
+  // One run, a matrix, two platforms.
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm ci\n      - run: npm test\n')), []);
+  const matrix = doc(`on: push
+jobs:
+  t:
+    runs-on: \${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - run: npm test
+  u:
+    runs-on: \${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    steps:
+      - run: npm test
+`);
+  assert.deepEqual(repeatedTests(matrix), []);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  linux:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n  mac:\n    runs-on: macos-latest\n    steps:\n      - run: npm test\n')), []);
+  // Two jobs, or two steps, that never run in the same run; under one condition they are a candidate.
+  const gated = doc(`on: [push, pull_request]
+jobs:
+  onpush:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+  onpr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+  both:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+  both2:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+`);
+  assert.deepEqual(repeatedTests(gated).map((r) => r.jobs), [['both', 'both2']]);
+  const gatedSteps = doc(`on: [push, pull_request]
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - name: On push
+        if: github.event_name == 'push'
+        run: npm test
+      - name: On pull request
+        if: github.event_name == 'pull_request'
+        run: npm test
+      - name: A
+        if: github.event_name == 'push'
+        run: pytest tests
+      - name: B
+        if: github.event_name == 'push'
+        run: pytest tests
+`);
+  assert.deepEqual(repeatedTests(gatedSteps).map((r) => [r.steps, r.command]), [[['A', 'B'], 'pytest tests']]);
+  // A monorepo: the same command in two declared directories is two suites; the same directory twice is a candidate.
+  const monorepo = doc(`on: push
+defaults:
+  run:
+    working-directory: packages
+jobs:
+  one:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Front
+        run: npm test
+        working-directory: packages/frontend
+      - name: Also front
+        run: npm test
+        working-directory: packages/frontend
+      - name: Back
+        run: npm test
+        working-directory: packages/backend
+  two:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/api
+    steps:
+      - run: npm test
+  three:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+`);
+  assert.deepEqual(repeatedTests(monorepo).map(brief), [['job', ['one'], ['Front', 'Also front']]]);
+  // Two unnamed steps with the same command share a display name and are still two runs (shared says so); a third
+  // runner started twice beside them is its own candidate, and a step in one candidate is in no other.
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n      - run: npm test\n')), [{ scope: 'job', jobs: ['t'], steps: ['Run npm test', 'Run npm test'], headers: ['npm test', 'npm test'], shared: [true, true], command: 'npm test' }]);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: npm test\n      - name: B\n        run: npm test\n      - name: C\n        run: pytest tests\n')).map(brief), [['job', ['t'], ['A', 'B']]]);
+});
+
+const twiceFile = `on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests
+        run: npm test
+      - name: Tests again
+        run: npm test
+`;
+const TWICE = [['Set up job', 1], ['Run actions/checkout@v4', 2], ['Unit tests', 30], ['Tests again', 20], ['Complete job', 0]];
+const twiceLog = (first, second) => log([['actions/checkout@v4', `${STAMP}Syncing repository`], ['npm test', first], ['npm test', second]]);
+const testJob = (log_text, steps = TWICE) => ({ ...job({ steps }), name: 'test', ...(log_text === undefined ? {} : { log_text }) });
+
+test('tests run twice: fires when the newest sampled run\'s logs list the same tests by name in both steps, measured, the shorter run the saving', () => {
+  const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[testJob(twiceLog(tap(A), tap(A)))]], file: twiceFile }]);
+  const [f] = find(a, 'tests run twice');
+  assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
+  assert.equal(f.confidence, 'measured');
+  assert.equal(f.saving_min_week, 10); // 20 s x 30 runs / 60
+  assert.match(f.evidence, /job test runs the same test step twice, `npm test` in steps "Unit tests" and "Tests again" \(30 s and 20 s a run\); the newest sampled run's logs list the same 3 tests by name in both/);
+  assert.match(f.fix, /^run the suite once/);
+  assert.match(f.example, /if: github.event_name == 'push'/);
+  assert.match(f.tradeoff, /flaky test/);
+  assert.deepEqual(a.workflows[0].repeated_tests[0].same_tests, { same: true, by: 'name', count: 3 });
+});
+
+test('tests run twice: silent when the logs list different tests, when the log cannot be read, when the log shows no tests, and when only an older run has a log', () => {
+  const differ = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[testJob(twiceLog(tap(A), tap(B)))]], file: twiceFile }]);
+  assert.equal(find(differ, 'tests run twice').length, 0);
+  assert.deepEqual(differ.workflows[0].repeated_tests[0].same_tests, { same: false, by: 'name', count: 3 });
+  const unread = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[testJob()]], file: twiceFile }]);
+  assert.equal(find(unread, 'tests run twice').length, 0);
+  assert.equal(unread.workflows[0].repeated_tests[0].same_tests, null, 'the file alone is a candidate, not a finding');
+  const quiet = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[testJob(twiceLog(`${STAMP}> build`, `${STAMP}> build`))]], file: twiceFile }]);
+  assert.equal(find(quiet, 'tests run twice').length, 0);
+  // Only the newest sampled run's log counts: an older run's is not this run's record.
+  const older = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[testJob()], [testJob(twiceLog(tap(A), tap(A)))]], file: twiceFile }]);
+  assert.equal(find(older, 'tests run twice').length, 0);
+  // Two API jobs of one name (a job the file does not show as a matrix) are not one job's log.
+  const two = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[testJob(twiceLog(tap(A), tap(A))), testJob(twiceLog(tap(A), tap(A)))]], file: twiceFile }]);
+  assert.equal(find(two, 'tests run twice').length, 0);
+});
+
+test('tests run twice: by count when the runner lists no names, and the evidence says so', () => {
+  const pytestFile = twiceFile.replace(/npm test/g, 'pytest tests');
+  const dots = `${STAMP}............\n${STAMP}===== 12 passed in 0.3s =====`;
+  const pyLog = log([['actions/checkout@v4', ''], ['pytest tests', dots], ['pytest tests', dots]]);
+  const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[testJob(pyLog)]], file: pytestFile }]);
+  const [f] = find(a, 'tests run twice');
+  assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
+  assert.match(f.evidence, /report the same count, 12 tests, in both \(the runner lists no names\)/);
+  const eleven = log([['actions/checkout@v4', ''], ['pytest tests', dots], ['pytest tests', `${STAMP}===== 11 passed in 0.3s =====`]]);
+  assert.equal(find(audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[testJob(eleven)]], file: pytestFile }]), 'tests run twice').length, 0);
+});
+
+test('tests run twice: across two jobs, each job\'s own log and own timings; a job the sample never ran, or a step it never timed, adds nothing', () => {
+  const file = `on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pytest tests
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pytest tests
+`;
+  const section = (names) => log([['pytest tests', tap(names)]]);
+  const steps = (s) => [['Set up job', 1], ['Run pytest tests', s], ['Complete job', 0]];
+  const a = audit([{ name: 'CI', runs: runs(60), jobsPerRun: [[{ ...job({ steps: steps(10) }), name: 'a', log_text: section(A) }, { ...job({ steps: steps(100) }), name: 'b', log_text: section(A) }]], file }]);
+  const [f] = find(a, 'tests run twice');
+  assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
+  assert.equal(f.saving_min_week, 10); // the shorter, 10 s x 60 runs / 60
+  assert.match(f.evidence, /jobs a and b run the same test step, `pytest tests`, on the same runner, environment and directory, after the same steps \(10 s and 100 s a run\)/);
+  assert.deepEqual(a.workflows[0].repeated_tests.map((r) => [r.scope, r.jobs, r.seconds]), [['workflow', ['a', 'b'], [10, 100]]]);
+  const differ = audit([{ name: 'CI', runs: runs(60), jobsPerRun: [[{ ...job({ steps: steps(10) }), name: 'a', log_text: section(A) }, { ...job({ steps: steps(100) }), name: 'b', log_text: section(B) }]], file }]);
+  assert.equal(find(differ, 'tests run twice').length, 0);
+  const oneLog = audit([{ name: 'CI', runs: runs(60), jobsPerRun: [[{ ...job({ steps: steps(10) }), name: 'a', log_text: section(A) }, { ...job({ steps: steps(100) }), name: 'b' }]], file }]);
+  assert.equal(find(oneLog, 'tests run twice').length, 0);
+  // A second step the sample never timed adds nothing to the estimate: under the floor, no finding.
+  const untimed = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[testJob(twiceLog(tap(A), tap(A)), TWICE.filter(([n]) => n !== 'Tests again'))]], file: twiceFile }]);
+  assert.equal(find(untimed, 'tests run twice').length, 0);
+});
+
+test('tests run twice: two steps with one display name share a timing list and are priced at its minimum', () => {
+  const file = 'on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n      - run: npm test\n';
+  const steps = [['Set up job', 1], ['Run npm test', 30], ['Run npm test', 10], ['Complete job', 0]];
+  const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'test', log_text: log([['npm test', tap(A)], ['npm test', tap(A)]]) }]], file }]);
+  const [f] = find(a, 'tests run twice');
+  assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
+  assert.deepEqual(a.workflows[0].repeated_tests[0].seconds, [10, 10]);
+  assert.equal(f.saving_min_week, 5); // 10 s x 30 runs / 60, the lower of the two shared timings
+});
+
+test('duplicateUploads: a SARIF uploaded as an artifact and to code scanning; a release asset uploaded twice; a failure-only or globbed artifact is not a candidate', () => {
+  const scorecard = doc(`on: push
+jobs:
+  analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ossf/scorecard-action@v2
+        with:
+          results_file: results.sarif
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SARIF file
+          path: results.sarif
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+`);
+  assert.deepEqual(duplicateUploads(scorecard), [{ job: 'analysis', step: 'Upload artifact', path: 'results.sarif', name: 'SARIF file', alsoTo: ['code scanning'], after: true }]);
+  const release = doc(`on: release
+jobs:
+  r:
+    runs-on: ubuntu-latest
+    steps:
+      - run: tar czf dist.tar.gz dist
+      - uses: actions/upload-artifact@v4
+        with:
+          path: ./dist.tar.gz
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist.tar.gz
+            checksums.txt
+`);
+  assert.deepEqual(duplicateUploads(release), [{ job: 'r', step: 'Run actions/upload-artifact@v4', path: 'dist.tar.gz', name: 'artifact', alsoTo: ['the release'], after: true }]);
+  assert.equal(artifactNameOf({ with: { name: '${{ matrix.os }}-sarif' } }), null, 'a name set by an expression is not known');
+  assert.equal(artifactNameOf({ with: { name: ' report ' } }), 'report');
+  // A `gh release upload` in a script never counts: the shell's path to it and its directory are not the file's to establish.
+  const shell = doc(`on: release
+jobs:
+  r:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        with:
+          path: dist.tar.gz
+      - run: gh release upload "$TAG" dist.tar.gz --clobber
+      - run: test "$GITHUB_REF_TYPE" = tag || exit 0; gh release upload "$TAG" dist.tar.gz
+      - run: gh release upload v1 dist.tar.gz
+        working-directory: package
+`);
+  assert.deepEqual(duplicateUploads(shell), []);
+  // A release upload only on a tag leaves the artifact the only copy on every other run.
+  const tagOnly = doc(`on: push
+jobs:
+  r:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        with:
+          path: dist.tar.gz
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist.tar.gz
+`);
+  assert.deepEqual(duplicateUploads(tagOnly), []);
+  // A directory given to upload-sarif sends its SARIF files; the artifact keeps everything in it.
+  const directory = doc(`on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: reports
+      - uses: actions/upload-artifact@v4
+        with:
+          path: reports
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: reports/
+      - uses: actions/upload-artifact@v4
+        with:
+          path: reports/
+`);
+  assert.deepEqual(duplicateUploads(directory), []);
+  // The same condition on both steps is one path through the run: a candidate again.
+  const bothOnTag = doc(`on: push
+jobs:
+  r:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          path: dist.tar.gz
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist.tar.gz
+`);
+  assert.equal(duplicateUploads(bothOnTag).length, 1);
+  // An artifact kept after a failure beside a destination that runs on success alone: the artifact
+  // is the only copy of a failed run's file. Under always() on both, the destination can fail and
+  // the artifact still goes up: no candidate either.
+  const afterFailure = doc(`on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          path: results.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          path: results.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+`);
+  assert.deepEqual(duplicateUploads(afterFailure), []);
+  // A destination with no condition after the artifact counts only when it comes next: a step
+  // between them that fails skips it, and the artifact is the only copy of that run's file. With
+  // the destination first, a failure after it skips the artifact, never the destination.
+  const between = doc(`on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        with:
+          path: results.sarif
+      - run: exit 1
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+      - run: exit 1
+      - uses: actions/upload-artifact@v4
+        with:
+          path: results.sarif
+`);
+  assert.deepEqual(duplicateUploads(between).map((u) => [u.job, u.after]), [['b', false]]);
+  // Matching conditions still carry the implicit success(), so a failure between them skips the
+  // later destination; always() on both lets the destination fail with the artifact already up.
+  const betweenGuarded = doc(`on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          path: results.sarif
+      - run: exit 1
+      - uses: github/codeql-action/upload-sarif@v3
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          sarif_file: results.sarif
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          path: results.sarif
+      - run: exit 1
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+  c:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          path: results.sarif
+  d:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        if: always() && success()
+        with:
+          path: results.sarif
+      - run: exit 1
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always() && success()
+        with:
+          sarif_file: results.sarif
+  e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: results.sarif
+      - uses: actions/upload-artifact@v4
+        with:
+          path: results.sarif
+`);
+  assert.deepEqual(duplicateUploads(betweenGuarded), []);
+  assert.equal(survivesFailure('always()'), true);
+  assert.equal(survivesFailure('${{ !cancelled() }}'), true);
+  assert.equal(survivesFailure('always() && success()'), false);
+  assert.equal(survivesFailure(''), false);
+});
+
+const scorecardFile = (destinationFirst = false) => {
+  const artifact = `      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SARIF file
+          path: results.sarif
+`;
+  const destination = `      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+`;
+  return `on: push
+jobs:
+  analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run analysis
+        run: ./scan > results.sarif
+${destinationFirst ? destination + artifact : artifact + destination}`;
+};
+const SCORECARD = [['Set up job', 1], ['Run actions/checkout@v4', 2], ['Run analysis', 30], ['Upload artifact', 4], ['Upload to code scanning', 3], ['Complete job', 0]];
+const analysisJob = (run_artifacts) => ({ ...job({ steps: SCORECARD }), name: 'analysis', ...(run_artifacts === undefined ? {} : { run_artifacts }) });
+const sarif = (entries = [{ name: 'results.sarif', size: 71521 }], name = 'SARIF file') => [{ name, bytes: 16334, entries }];
+
+test('an artifact that duplicates another upload: fires when the newest sampled run\'s artifact holds that one file, measured, the artifact step\'s time the saving, at any size', () => {
+  const a = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[analysisJob(sarif())]], file: scorecardFile() }]);
+  const [f] = find(a, 'an artifact that duplicates another upload');
+  assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
+  assert.equal(f.confidence, 'measured');
+  assert.equal(f.saving_min_week, 2); // 4 s x 30 runs / 60
+  assert.match(f.evidence, /job analysis uploads results.sarif as the artifact "SARIF file" in "Upload artifact" \(4 s a run\) and sends the same file to code scanning, in a later step; the newest sampled run's artifact holds that one file \(16 KB zipped\)/);
+  // The destination comes after the artifact and can fail after it went up: the fix is the order and failure(), not a deletion.
+  assert.match(f.fix, /^move the artifact step after the upload it duplicates and give it `if: failure\(\)`/);
+  assert.match(f.example, /if: failure\(\)/);
+  assert.deepEqual(a.workflows[0].duplicate_uploads[0].artifact, { bytes: 16334, entries: 1, one_file: true });
+  // At one run a week the saving is under the noise floor; a duplicate upload stays all the same.
+  const rare = audit([{ name: 'Scorecard', runs: runs(1), jobsPerRun: [[analysisJob(sarif())]], file: scorecardFile() }]);
+  assert.equal(find(rare, 'an artifact that duplicates another upload').length, 1);
+  // The destination first: the artifact step is dropped.
+  const b = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[analysisJob(sarif())]], file: scorecardFile(true) }]);
+  const [g] = find(b, 'an artifact that duplicates another upload');
+  assert.ok(g, JSON.stringify(b.findings.map((x) => x.what)));
+  assert.match(g.fix, /^drop the artifact step/);
+  assert.match(g.example, /# remove/);
+  assert.ok(!/in a later step/.test(g.evidence));
+});
+
+test('an artifact that duplicates another upload: silent without the run\'s artifact, with an artifact of another name, with more than the one file, or with a directory the zip could not be read', () => {
+  const file = scorecardFile();
+  const none = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[analysisJob()]], file }]);
+  assert.equal(find(none, 'an artifact that duplicates another upload').length, 0);
+  assert.equal(none.workflows[0].duplicate_uploads[0].artifact, null, 'the file alone is a candidate, not a finding');
+  const other = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[analysisJob(sarif(undefined, 'coverage'))]], file }]);
+  assert.equal(find(other, 'an artifact that duplicates another upload').length, 0);
+  // A directory's worth of files: upload-sarif sent its SARIF files, the artifact keeps everything.
+  const many = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[analysisJob(sarif([{ name: 'results.sarif', size: 1 }, { name: 'notes.txt', size: 2 }]))]], file }]);
+  assert.equal(find(many, 'an artifact that duplicates another upload').length, 0);
+  assert.equal(many.workflows[0].duplicate_uploads[0].artifact.one_file, false);
+  const folder = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[analysisJob(sarif([{ name: 'results.sarif/', size: 0 }]))]], file }]);
+  assert.equal(find(folder, 'an artifact that duplicates another upload').length, 0);
+  const otherFile = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[analysisJob(sarif([{ name: 'summary.sarif', size: 9 }]))]], file }]);
+  assert.equal(find(otherFile, 'an artifact that duplicates another upload').length, 0);
+  const unread = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[analysisJob(sarif(null))]], file }]);
+  assert.equal(find(unread, 'an artifact that duplicates another upload').length, 0);
+  // Two artifacts of one name in the run (two jobs uploading alike) are not one step's.
+  const twice = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[analysisJob([...sarif(), ...sarif()])]], file }]);
+  assert.equal(find(twice, 'an artifact that duplicates another upload').length, 0);
+  // Only the newest sampled run's artifact counts.
+  const older = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[analysisJob()], [analysisJob(sarif())]], file }]);
+  assert.equal(find(older, 'an artifact that duplicates another upload').length, 0);
+});

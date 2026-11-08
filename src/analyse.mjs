@@ -6,7 +6,7 @@
 import { concurrencyGroupOf, categoryOf, forkReachableSelfHosted, allJobTimeouts, assignJobRuns, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, withParseCache, workflowFacts } from './workflow.mjs';
 import { countBy, fmtS, mean, median, pct, round, secs, sum } from './util.mjs';
 import { scanFindings } from './scans.mjs';
-import { selfHostedSetups, startsTests } from './trim.mjs';
+import { duplicateUploads, repeatedTests, sameTests, selfHostedSetups, signaturesOf, startsTests } from './trim.mjs';
 import { gateFindings } from './gates.mjs';
 import { CANCEL_OUTDATED, ONE_RUN_PER_COMMIT, cacheExample, checkoutAdvice, forkGuardExample, managerOf, triggerExample } from './advice.mjs';
 
@@ -202,13 +202,17 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
   const jobRuns = assignJobRuns(allJobTimeouts(doc).map((t) => ({ id: t.id, name: t.name, reusable: Boolean(t.reusable) })), [...timing.jobDurations.keys()]);
   // `each`: the median of one execution of the step; `perRun`: the mean over every sampled run of
   // what the step cost that run (0 for a run without it), every matrix leg of the job included.
-  const priced = (jobId, name, { selfHostedOnly = false } = {}) => {
+  // `low`: the minimum instead of the median, for a step whose display name another step of the
+  // job shares (two unnamed `run: npm test` steps are both "Run npm test"): the two steps' timings
+  // pool under one label, and the minimum is the conservative reading of the pooled list.
+  const priced = (jobId, name, { selfHostedOnly = false, low = false } = {}) => {
     const label = String(name).replace(/\s+/g, ' ').trim();
     // For the self-hosted rule only the job's runs that were not on GitHub's hosted runners count:
     // a label that resolved to a hosted runner in the sample is not the host's setup to drop.
     const apis = (jobRuns.get(jobId) || []).filter((api) => !selfHostedOnly || (timing.jobHosted.get(api) || 0) === 0);
     const xs = apis.flatMap((api) => timing.stepSeconds.get(`${api}\u0000${label}`) || []);
     if (!xs.length) return null;
+    if (low) return { each: round(Math.min(...xs), 1), perRun: null };
     const byRun = [];
     for (const api of apis) {
       const totals = timing.stepRunTotals.get(`${api}\u0000${label}`) || [];
@@ -221,6 +225,9 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     return { each: round(median(xs), 1), perRun: round(total / Math.max(1, sampledRuns.length), 1) };
   };
   const logBytes = sampledRuns.flat().map((j) => j.log_bytes).filter((b) => Number.isFinite(b) && b >= 0);
+  // The newest sampled run's record (its jobs' logs, its artifacts) for the two rules that would
+  // remove a step: collect reads it only where the file raised a candidate.
+  const { sameTestsOf, artifactOf } = evidenceOf(sampledRuns[0] || [], jobRuns);
   const sampledCount = sampledRuns.length;
   const medianRunSeconds = median(timing.jobSecondsPerRun);
   const successfulWalls = workflowRuns
@@ -322,11 +329,75 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
       const p = s.unique ? priced(s.job, s.step, { selfHostedOnly: true }) : null;
       return { ...s, seconds: p ? p.each : null, run_seconds: p ? p.perRun : null };
     }),
+    // The same test step twice and the duplicate upload, as the file shows them (trim.mjs), each
+    // with the newest sampled run's own record: same_tests, what the two steps' logs list (by name
+    // or by count), and artifact, what the run's artifact holds. Null is no record, and no finding.
+    // Each step is priced from the sample; a step whose display name another step of the job
+    // shares is priced at the pooled list's minimum.
+    repeated_tests: repeatedTests(doc).map((r) => ({
+      ...r,
+      seconds: r.steps.map((s, i) => {
+        const p = priced(r.jobs[r.scope === 'job' ? 0 : i], s, { low: r.shared[i] });
+        return p ? p.each : null;
+      }),
+      same_tests: sameTestsOf(r),
+    })),
+    duplicate_uploads: duplicateUploads(doc).map((u) => {
+      const p = priced(u.job, u.step);
+      return { ...u, seconds: p ? p.each : null, artifact: artifactOf(u) };
+    }),
     // A passing job's log size, median over the sampled jobs whose size was read (null when none was).
     log_bytes_p50: logBytes.length ? Math.round(median(logBytes)) : null,
     log_jobs_read: logBytes.length,
     starts_tests: startsTests(doc),
   };
+}
+
+/**
+ * The newest sampled run's record of what the file raised as a candidate. One API job per file
+ * job (a matrix leg, or a name two jobs share, is not one job's log), and one job of that name in
+ * the run; a record with any part missing is null, and the rule it serves stays silent.
+ */
+function evidenceOf(newest, jobRuns) {
+  const oneJob = (fileJob) => {
+    const names = jobRuns.get(fileJob) || [];
+    if (names.length !== 1) return null;
+    const js = newest.filter((j) => String(j.name || '') === names[0]);
+    return js.length === 1 ? js[0] : null;
+  };
+  // The steps' logs, read for the tests they list (trim.mjs signaturesOf): within a job the two
+  // sections the steps' headers open, across jobs one section from each job's own log. Same when
+  // every later step's tests are the first's, by name where both logs list names, else by count.
+  const sameTestsOf = (r) => {
+    let sigs;
+    if (r.scope === 'job') {
+      const j = oneJob(r.jobs[0]);
+      sigs = j && typeof j.log_text === 'string' ? signaturesOf(j.log_text, r.headers) : null;
+    } else {
+      sigs = r.jobs.map((id, i) => {
+        const j = oneJob(id);
+        const s = j && typeof j.log_text === 'string' ? signaturesOf(j.log_text, [r.headers[i]]) : null;
+        return s ? s[0] : null;
+      });
+    }
+    if (!sigs || sigs.some((s) => !s)) return null;
+    const cmp = sigs.slice(1).map((s) => sameTests(sigs[0], s));
+    if (cmp.some((c) => !c)) return null;
+    return { same: cmp.every((c) => c.same), by: cmp.every((c) => c.by === 'name') ? 'name' : 'count', count: cmp[0].count };
+  };
+  // The run's artifact of the step's name (collect.mjs run_artifacts): what it holds, from its
+  // zip's directory. One file, named as the path's last segment (upload-artifact keeps a single
+  // file at the artifact's root), is the duplicate; a directory's worth of files is not.
+  const artifactOf = (u) => {
+    const list = newest.map((j) => j.run_artifacts).find(Array.isArray);
+    if (!list || u.name === null) return null;
+    const hits = list.filter((a) => a && a.name === u.name);
+    if (hits.length !== 1 || !Array.isArray(hits[0].entries)) return null;
+    const a = hits[0];
+    const base = u.path.split('/').pop();
+    return { bytes: a.bytes, entries: a.entries.length, one_file: a.entries.length === 1 && !a.entries[0].name.endsWith('/') && a.entries[0].name === base };
+  };
+  return { sameTestsOf, artifactOf };
 }
 
 const T = THRESHOLDS;
@@ -450,6 +521,60 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
       example: 'run: node --test --test-reporter=dot --test-reporter-destination=stdout test/*.test.mjs',
       parts: null, brief: `${kb} KB a job`, size: w.log_bytes_p50, thin: w.thin_sample ? w.sampled_runs : null, log_mb_week: mbWeek,
     });
+  }
+
+  // Tests started twice: the file shows two one-command test steps alike in every way it can show
+  // (trim.mjs), and the newest sampled run's logs show the same tests in both. A candidate the
+  // logs do not confirm, or cannot be read for, is not reported. The second run is the saving (the
+  // shorter of the steps; a step the sample did not price adds nothing, and the evidence says so).
+  const repeats = (w.repeated_tests || []).filter((r) => r.same_tests && r.same_tests.same);
+  if (repeats.length) {
+    const secondsOf = (r) => {
+      const xs = r.seconds.filter((s) => s !== null);
+      return xs.length > 1 ? Math.min(...xs) * (xs.length - 1) : 0;
+    };
+    const saving = repeats.reduce((s, r) => s + secondsOf(r), 0) * w.runs_week / 60;
+    const describe = (r) => {
+      const steps = r.steps.map((s) => `"${s}"`).join(' and ');
+      const priced = r.seconds.every((s) => s !== null) ? ` (${r.seconds.map(fmtS).join(' and ')} a run)` : ' (not every step was timed in the sample)';
+      const proof = r.same_tests.by === 'name'
+        ? `the newest sampled run's logs list the same ${r.same_tests.count} tests by name in both`
+        : `the newest sampled run's logs report the same count, ${r.same_tests.count} tests, in both (the runner lists no names)`;
+      if (r.scope === 'job') return `job ${r.jobs[0]} runs the same test step twice, \`${r.command}\` in steps ${steps}${priced}; ${proof}`;
+      return `jobs ${r.jobs.join(' and ')} run the same test step, \`${r.command}\`, on the same runner, environment and directory, after the same steps${priced}; ${proof}`;
+    };
+    add(saving, 'tests run twice', repeats.slice(0, 3).map(describe).join('; ') + (repeats.length > 3 ? `; and ${repeats.length - 3} more` : ''),
+      'run the suite once; where the second run is wanted on one event (the push to the default branch, a release), keep it and gate it on that event',
+      {
+        confidence: 'measured',
+        tradeoff: 'a second run kept to catch a flaky test is the point of itself: keep it, and say so in the step name; gated, the second run happens after the merge instead of on the pull request',
+        example: `- name: Tests, second run\n  if: github.event_name == 'push'   # once, on main; the pull request ran them above\n  run: ${repeats[0].command}`,
+      });
+  }
+
+  // An artifact of a file another step already published: the file shows the two steps (trim.mjs),
+  // and the newest sampled run's artifact holds that one file. The artifact step's own time is the
+  // saving; the storage the artifact adds is named in the evidence.
+  const dupes = (w.duplicate_uploads || []).filter((u) => u.artifact && u.artifact.one_file);
+  if (dupes.length) {
+    const saving = dupes.reduce((s, u) => s + (u.seconds || 0), 0) * w.runs_week / 60;
+    const kb = (b) => `${Math.max(1, Math.round(b / 1024))} KB`;
+    const describe = (u) => `job ${u.job} uploads ${u.path} as the artifact "${u.name}" in "${u.step}"${u.seconds !== null ? ` (${fmtS(u.seconds)} a run)` : ''} and sends the same file to ${u.alsoTo.join(' and ')}${u.after ? ', in a later step' : ''}; the newest sampled run's artifact holds that one file (${kb(u.artifact.bytes)} zipped)`;
+    // A destination after the artifact step can fail after the artifact went up: the artifact
+    // then moves behind it under failure(), kept only on the run where the upload failed. A
+    // destination before it that fails fails the job before the artifact goes up: it is dropped.
+    const later = dupes.some((u) => u.after);
+    add(saving, 'an artifact that duplicates another upload', dupes.slice(0, 3).map(describe).join('; ') + (dupes.length > 3 ? `; and ${dupes.length - 3} more` : ''),
+      later
+        ? 'move the artifact step after the upload it duplicates and give it `if: failure()`, so the file is kept only on a run where that upload failed; where the upload comes first, drop the artifact step'
+        : 'drop the artifact step; the file is already where it is read',
+      {
+        confidence: 'measured',
+        tradeoff: 'none while the other destination is browsable (code scanning shows the SARIF, the release its assets); keep the artifact for a destination that is not',
+        example: later
+          ? `# after the step that sends ${dupes[0].path} to ${dupes[0].alsoTo[0]}\n- name: ${dupes[0].step}\n  if: failure()   # only when that upload failed\n  uses: actions/upload-artifact@...\n  with:\n    path: ${dupes[0].path}`
+          : `# remove\n- name: ${dupes[0].step}\n  uses: actions/upload-artifact@...\n  with:\n    path: ${dupes[0].path}`,
+      });
   }
 
   if (w.dup_commits_week >= T.duplicateCommitsWeek) {
@@ -788,8 +913,9 @@ function analyseParsed(repo, data) {
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
   const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === 'public' ? true : data.visibility ? 'private' : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || new Map()), ...scanFindings(data.scanFiles || new Map(), { repo }), ...gateFindings(data.gates, { scanFiles: data.scanFiles || new Map(), scanned: data.scanned, visibility: data.visibility })];
   // A finding that saves under a minute a week is noise next to the rest; one that saves developer
-  // wait has no minutes to compare and always stays.
-  const findings = groupFindings(raw).filter((f) => f.unit === 'wait' || f.unit === 'risk' || f.unit === 'guard' || f.unit === 'log' || f.saving >= T.minSavingWeek).map((f) => ({
+  // wait has no minutes to compare and always stays. A duplicate upload stays at any size: the run's
+  // artifact shows it, the fix is one step, and the artifact's storage is not in the minutes.
+  const findings = groupFindings(raw).filter((f) => f.unit === 'wait' || f.unit === 'risk' || f.unit === 'guard' || f.unit === 'log' || f.what === 'an artifact that duplicates another upload' || f.saving >= T.minSavingWeek).map((f) => ({
     saving_min_week: round(f.saving, 1), unit: f.unit || 'job', workflow: f.workflow, what: f.what, evidence: f.evidence,
     fix: f.fix, tradeoff: f.tradeoff || '', example: f.example || '', confidence: f.confidence,
     // A log finding's figure is megabytes a week, not minutes; it rides beside the saving.

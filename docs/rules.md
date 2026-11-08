@@ -161,6 +161,93 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   shows no list and no count of what ran; the failures stay in full, and a reporter that drops
   them is the wrong one.
 
+## tests run twice
+
+- **Fires when** two things agree. First the workflow file: the same test step twice, two steps
+  whose scripts are one and the same test command and nothing else (`set` and `echo` aside; a
+  `cd` is not aside, it moves the tests, an `export` is not aside, it changes their environment,
+  and a pipe anywhere feeds or captures them), under the same `if:`, in the same declared working
+  directory (the step's, else the job's, else the workflow's `defaults.run`), with the same step
+  `env:` and `shell:`. In one job, two such steps next to each other (a step between them, a
+  setup, a build or a write, can change what the second one tests); or in two jobs of the run that
+  also share `runs-on`, job `env:`, `container:`, `services:`, `defaults:`, `if:` and every step
+  before the test step, each with its inputs, environment, directory and shell (the same setup
+  leads into the same tests), with no matrix. Commands are compared with their reporting flags
+  removed (`--test-reporter`, `--reporter`, `-q`, `-v`, `--silent`): the same tests reported
+  differently are the same tests. Runners known: `node --test`, `npm/pnpm/yarn/bun test` and `run
+  test*`, jest, vitest, mocha, ava, tap, pytest, unittest, `go test`, `cargo test`, rspec, `dotnet
+  test`, mvn and gradle test, `make test`, ctest, phpunit, pest. Anything the file can tell apart
+  is no candidate: the same runner on other paths, in another directory or after an export,
+  against another environment or another runtime version, after a configuration written to a
+  file or piped in, beside a build or another suite, on another platform, or under another
+  condition. Two steps are two runs whatever their names, and a step is in one candidate at most.
+  Then the newest sampled successful run's own logs: the two steps' sections of the job's log (the
+  runner opens each step with `##[group]Run <first line of the script>`; across jobs, one section
+  from each job's log) must show the same tests, by name where the runner lists them (TAP as
+  `node --test` prints it, `go test -v`, `pytest -v`, the tick a jest, vitest or mocha listing
+  prints), else by the count the runner's summary line gives (jest, vitest, pytest, mocha, cargo,
+  maven, gradle, phpunit, rspec, dotnet). A log that lists different tests, shows no tests, could
+  not be read, opens a different number of sections for the step's header than the file has such
+  steps (a step's own output can print one), or belongs to a job the file's job does not map to
+  one-to-one (a matrix leg, a name two jobs share) confirms nothing, and the rule is silent. The
+  file alone never fires it: a workflow file cannot establish that the second copy is the first.
+- **Confidence** measured: the logs show the same tests, in steps the file shows alike in every
+  way it can show.
+- **Estimate** the shorter step's time (the second run), times runs a week, each step priced from
+  the sampled runs of its own job (the file's job matched to the API's job names as the timeout
+  rule matches them); two steps with one display name share a timing list and are priced at its
+  minimum. A step the sample never timed adds nothing, and the evidence says so.
+- **Fix** run the suite once. Where the second run is wanted on one event (the push to the default
+  branch, a release), keep it and gate it on that event. *Trade-off:* a second run kept to catch a
+  flaky test is the point of itself: keep it, and say so in the step name; gated, the second run
+  happens after the merge instead of on the pull request.
+- **Collection.** The logs are read only for the jobs a candidate names, in the newest sampled
+  successful run of that workflow: one API call each for the redirect, then the file from its
+  host (no token), up to 8 MB. `collect` takes `logs: false` to read neither sizes nor logs.
+
+## an artifact that duplicates another upload
+
+- **Fires when** two things agree. First the workflow file: a job's `actions/upload-artifact`
+  step has one literal path naming one file (no glob, no expression, one line, a file's extension
+  and no trailing slash) that another action step of the same job publishes with the same literal
+  input: a SARIF file sent to code scanning (`github/codeql-action/upload-sarif` with the same
+  `sarif_file`), or a file attached to the release (`softprops/action-gh-release` with it in
+  `files`). Both read their input against the workspace, as upload-artifact does. An artifact
+  step that runs after a failure (`failure()`, `always()`, `!cancelled()`) keeps a failed run's
+  file for a look and would be the only copy when the destination is what failed: never a
+  duplicate. A `gh release upload` in a run script is not read: whether the shell reaches it (a
+  `test … || exit 0`, an `if`, a here-document) and from which directory (`working-directory`, a
+  `cd`) is not the file's to establish. The other destination must run, and succeed, whenever
+  the artifact step runs: a release upload behind `if: startsWith(github.ref, 'refs/tags/')`
+  leaves the artifact the only copy on every other run, so a destination counts only under the
+  artifact step's own condition or with none, and never with `continue-on-error`, which lets it
+  fail and leave the artifact the only copy; and a destination after the artifact step counts
+  only when it is the next step, unless its own condition is exactly `always()` or
+  `!cancelled()`, since any other condition, `always() && success()` included, carries the
+  implicit success() and a step between them that fails would skip the destination after the
+  artifact already went up. Then the newest sampled successful run's record: its artifact of the
+  step's name (`name:` as written, else `artifact`; a name set by an expression is not known)
+  must exist, unexpired, once, and its zip's directory must list exactly one file, the path's
+  last segment (upload-artifact keeps a single file at the artifact's root). An artifact holding a
+  directory's worth of files, a zip that could not be read or is larger than 8 MB, no artifact of
+  that name, or two of it (two jobs uploading alike) confirms nothing, and the rule is silent.
+  The OSSF Scorecard starter workflow carries this pattern.
+- **Confidence** measured: the run's artifact holds the one file the file's other step sent
+  elsewhere.
+- **Estimate** the artifact step's time, times runs a week; the storage the artifact adds (its
+  zipped size, in the evidence) and its retention are not costed. The finding stays under the
+  noise floor: the run shows it and the fix is one step.
+- **Fix** when the other upload comes first, drop the artifact step: an upload that fails fails
+  the job before the artifact goes up. When the artifact step comes first, the other upload can
+  fail after the artifact went up, so the fix is the order: move the artifact step behind that
+  upload under `if: failure()`, kept only on a run where the upload failed. *Trade-off:* none while
+  the other destination is browsable (code scanning shows the SARIF, the release its assets); keep
+  the artifact for one that is not.
+- **Collection.** Only where the file raises a candidate, and only for the newest sampled
+  successful run: the run's artifact listing (one API call), then each candidate artifact's zip
+  (one API call for the redirect, the file from its host, no token, up to 8 MB), read for the
+  names in its directory and never opened. `collect` takes `artifacts: false` to skip it.
+
 ## the same commit runs twice
 
 - **Fires when** 3 or more commits a week ran the workflow on both a push and a pull request
