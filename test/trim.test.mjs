@@ -126,6 +126,26 @@ jobs:
         run: make build
 `);
   assert.deepEqual(selfHostedSetups(nodeVersions).map((s) => [s.job, s.unique]), [['v6off', true], ['v4', true], ['twins', false]]);
+  // Names compare as GitHub shows them, and a name with an expression is never this step's alone.
+  const shown = doc(`on: push
+jobs:
+  spaced:
+    runs-on: [self-hosted, x]
+    steps:
+      - name: "Prepare   runtime"
+        uses: actions/setup-python@v5
+      - name: Prepare runtime
+        run: make
+  expr:
+    runs-on: [self-hosted, x]
+    strategy:
+      matrix:
+        v: ['3.12']
+    steps:
+      - name: Python \${{ matrix.v }}
+        uses: actions/setup-python@v5
+`);
+  assert.deepEqual(selfHostedSetups(shown).map((s) => [s.job, s.unique]), [['spaced', false], ['expr', false]]);
 });
 
 const setupFile = (runsOn) => `on: push
@@ -179,6 +199,30 @@ jobs:
   assert.equal(mf[0].saving_min_week, 20); // 4 legs x 30 s = 120 s a run x 10 runs / 60
   assert.match(mf[0].evidence, /setup-node in job test, 30 s a leg, 2.0 min a run/);
   assert.doesNotMatch(mf[0].evidence, /per job/); // nothing left for the general rule
+  // One setup above the threshold and one below: the one above is priced on its own, the one below is
+  // the general rule's, and neither hides the other.
+  const twoFile = `on: push
+jobs:
+  test:
+    runs-on: [self-hosted, box]
+    steps:
+      - uses: actions/setup-node@v4
+      - uses: actions/setup-python@v5
+      - name: Run tests
+        run: npm test
+`;
+  const two = audit([{ name: 'CI', runs: runs(40), jobsPerRun: [[{ ...job({ steps: [['Set up job', 1], ['Run actions/setup-node@v4', 30], ['Run actions/setup-python@v5', 1], ['Run tests', 30], ['Complete job', 0]], selfHosted: true }), name: 'test' }]], file: twoFile }]);
+  const tf = find(two, 'toolchain setup');
+  assert.equal(tf.length, 1);
+  assert.match(tf[0].evidence, /takes 30 s a run \(setup-node in job test, 30 s\)/);
+  assert.equal(tf[0].saving_min_week, 20); // 30 s x 40 / 60; the 1 s step is under its threshold and under the general rule's too
+  // A step whose cost varies run to run: the mean over the sampled runs is what is priced and what
+  // leaves the toolchain total, so the general rule has nothing left of the same step.
+  const varying = audit([{ name: 'CI', runs: runs(40), jobsPerRun: [[{ ...job({ steps: SETUP(3), selfHosted: true }), name: 'test' }], [{ ...job({ steps: SETUP(3), selfHosted: true }), name: 'test' }], [{ ...job({ steps: SETUP(120), selfHosted: true }), name: 'test' }]], file: setupFile('[self-hosted, box]') }]);
+  const vf = find(varying, 'toolchain setup');
+  assert.equal(vf.length, 1);
+  assert.equal(vf[0].saving_min_week, 28); // mean 42 s a run x 40 / 60
+  assert.doesNotMatch(vf[0].evidence, /per job/);
   // A step name another step of the job shares is not priced: a setup and a build both named Prepare.
   const twinsFile = `on: push
 jobs:

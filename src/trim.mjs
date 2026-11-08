@@ -102,7 +102,10 @@ export function selfHostedSetups(doc) {
       // A step name that another step of the job shares cannot be priced from the sample (the
       // timings of both would pool): `unique` says the name is this step's alone.
       const name = stepName(st, i);
-      const unique = stepsOf(job).filter((x, k) => stepName(x, k) === name).length === 1;
+      // Names compare as GitHub shows them (whitespace collapsed), and a name with an expression
+      // reaches the API expanded, so it is never established as this step's alone.
+      const shown = (x) => String(x).replace(/\s+/g, ' ').trim();
+      const unique = !name.includes('${{') && stepsOf(job).filter((x, k) => shown(stepName(x, k)) === shown(name)).length === 1;
       found.push({ job: id, step: name, action: `setup-${m[1]}`, unique });
     });
   }

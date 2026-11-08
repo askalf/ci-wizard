@@ -212,7 +212,11 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
       const totals = timing.stepRunTotals.get(`${api}\u0000${label}`) || [];
       totals.forEach((v, r) => { if (v !== undefined) byRun[r] = (byRun[r] || 0) + v; });
     }
-    return { each: round(median(xs), 1), perRun: round(median(byRun.filter((v) => v !== undefined)), 1) };
+    // perRun is a mean over every sampled run (a run without the step counts 0), the same measure
+    // as cats_secs_per_run, so what the self-hosted rule prices is exactly what it takes from the
+    // general rule's toolchain total.
+    const total = byRun.reduce((s, v) => s + (v || 0), 0);
+    return { each: round(median(xs), 1), perRun: round(total / Math.max(1, sampledRuns.length), 1) };
   };
   const logBytes = sampledRuns.flat().map((j) => j.log_bytes).filter((b) => Number.isFinite(b) && b >= 0);
   const sampledCount = sampledRuns.length;
@@ -408,10 +412,12 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
   // runner the step restates a version the host can carry itself (a tool-cache hit still costs
   // the step, a cold row downloads the runtime again), so the whole step is the saving. The
   // general rule below judges the rest of the toolchain time, hosted jobs' included.
-  const selfSetups = (w.selfhosted_setups || []).filter((s) => s.seconds !== null && s.seconds !== undefined);
-  // The threshold is per execution; the saving is what the steps cost a run, matrix legs included.
+  // Each self-hosted setup step qualifies on its own, by its per-execution median; the saving, and
+  // what leaves the general rule's total, is what the qualifying steps cost a run (a mean over the
+  // sampled runs, matrix legs included, the same measure as the toolchain total).
+  const selfSetups = (w.selfhosted_setups || []).filter((s) => s.seconds !== null && s.seconds !== undefined && s.seconds >= T.toolchainPerJobSelfHosted);
   const selfSecs = selfSetups.reduce((s, x) => s + (x.run_seconds ?? x.seconds), 0);
-  if (selfSetups.length && selfSetups.every((s) => s.seconds >= T.toolchainPerJobSelfHosted)) {
+  if (selfSetups.length) {
     const names = selfSetups.slice(0, 4).map((s) => `${s.action} in job ${s.job}, ${fmtS(s.seconds)}${s.run_seconds !== null && s.run_seconds !== s.seconds ? ` a leg, ${fmtS(s.run_seconds)} a run` : ''}`);
     add(selfSecs * w.runs_week / 60, 'toolchain setup', `toolchain setup on self-hosted runners takes ${fmtS(selfSecs)} a run (${names.join('; ')}${selfSetups.length > 4 ? '; and more' : ''}), where the host can carry the runtime, so the step only restates its version`,
       'use the runtime the host has, pin its version in the host image, and drop the setup step',

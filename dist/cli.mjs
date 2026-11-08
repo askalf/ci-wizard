@@ -9146,7 +9146,8 @@ function selfHostedSetups(doc) {
       const major = /@v(\d+)(\.|$)/.exec(String(st.uses));
       if (m[1] === "node" && !(major && Number(major[1]) <= 5) && !off("package-manager-cache")) return;
       const name = stepName(st, i);
-      const unique = stepsOf2(job).filter((x, k) => stepName(x, k) === name).length === 1;
+      const shown = (x) => String(x).replace(/\s+/g, " ").trim();
+      const unique = !name.includes("${{") && stepsOf2(job).filter((x, k) => shown(stepName(x, k)) === shown(name)).length === 1;
       found.push({ job: id, step: name, action: `setup-${m[1]}`, unique });
     });
   }
@@ -9643,7 +9644,8 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
         if (v !== void 0) byRun[r] = (byRun[r] || 0) + v;
       });
     }
-    return { each: round(median(xs), 1), perRun: round(median(byRun.filter((v) => v !== void 0)), 1) };
+    const total = byRun.reduce((s, v) => s + (v || 0), 0);
+    return { each: round(median(xs), 1), perRun: round(total / Math.max(1, sampledRuns.length), 1) };
   };
   const logBytes = sampledRuns.flat().map((j) => j.log_bytes).filter((b) => Number.isFinite(b) && b >= 0);
   const sampledCount = sampledRuns.length;
@@ -9833,9 +9835,9 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
     }
   }
   const tc = perRun.toolchain || 0;
-  const selfSetups = (w.selfhosted_setups || []).filter((s) => s.seconds !== null && s.seconds !== void 0);
+  const selfSetups = (w.selfhosted_setups || []).filter((s) => s.seconds !== null && s.seconds !== void 0 && s.seconds >= T.toolchainPerJobSelfHosted);
   const selfSecs = selfSetups.reduce((s, x) => s + (x.run_seconds ?? x.seconds), 0);
-  if (selfSetups.length && selfSetups.every((s) => s.seconds >= T.toolchainPerJobSelfHosted)) {
+  if (selfSetups.length) {
     const names = selfSetups.slice(0, 4).map((s) => `${s.action} in job ${s.job}, ${fmtS(s.seconds)}${s.run_seconds !== null && s.run_seconds !== s.seconds ? ` a leg, ${fmtS(s.run_seconds)} a run` : ""}`);
     add(
       selfSecs * w.runs_week / 60,

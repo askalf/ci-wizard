@@ -124,10 +124,12 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   not `setup-go`, which caches by default, unless it says `cache: false`; and not `setup-node` from
   v6, which caches the package manager's store by itself, or at a version the file does not show
   as v5 or earlier (a SHA pin), unless it says `package-manager-cache: false`: dropping such a
-  step would lose that work), each such step priced from its own job's sampled runs: the 2 s
-  threshold is per execution, the saving is what the step costs a run with every matrix leg of
-  the job, and a step whose name another step of the job shares is not priced, since the sample
-  cannot tell their timings apart. The host can carry the runtime,
+  step would lose that work), each such step priced from its own job's sampled runs: each step
+  qualifies on its own at 2 s per execution (the median); the saving is what the qualifying steps
+  cost a run, a mean over the sampled runs with every matrix leg of the job, the same measure as
+  the toolchain total it is taken from, so the 15 s rule never prices the same step again; and a
+  step whose name another step of the job shares, or carries an expression, is not priced, since
+  the sample cannot tell their timings apart. The host can carry the runtime,
   so the step only restates a version: a tool-cache hit still costs the step, and a cold row
   downloads the runtime again. **Estimate** those steps' time, times runs a week; the rest of the
   workflow's toolchain time (hosted jobs' included) is judged by the 15 s rule above on its own. **Fix** the runtime the host has, its
