@@ -9107,21 +9107,24 @@ function survivesFailure(condition) {
   return /^(\$\{\{\s*)?(always\(\)|!\s*cancelled\(\))(\s*\}\})?$/.test(String(condition ?? "").trim());
 }
 var HARMLESS = /* @__PURE__ */ new Set(["set", "cd", "export", "echo", "true", ":", "pwd"]);
-function onlyTests(script) {
+function onlyCommand(script, command2) {
   const commands = shellCommands(script);
   if (!commands.length) return false;
-  let tests = 0;
+  let hits = 0;
   for (const words of commands) {
     const ws = [...words];
     while (ws.length && KEYWORDS.has(ws[0])) ws.shift();
     if (!ws.length) continue;
-    if (TEST_RUNNERS.some((rx) => rx.test(ws.join(" ")))) {
-      tests++;
+    let cmd = ws.join(" ");
+    if (TEST_RUNNERS.some((rx) => rx.test(cmd))) {
+      for (const rx of REPORTING) cmd = cmd.replace(rx, "");
+      if (cmd.replace(/\s+/g, " ").replace(/\s--$/, "").trim() !== command2) return false;
+      hits++;
       continue;
     }
     if (!HARMLESS.has(ws[0])) return false;
   }
-  return tests > 0;
+  return hits > 0;
 }
 var KEYWORDS = /* @__PURE__ */ new Set(["then", "do", "else", "elif", "{", "(", "!", "time", "exec"]);
 function testCommands(script) {
@@ -9157,32 +9160,33 @@ function repeatedTests(doc) {
   const byCommand = /* @__PURE__ */ new Map();
   const used = /* @__PURE__ */ new Set();
   const key = (job, index) => `${job}\0${index}`;
+  const cond = (x) => String(x?.if ?? "").replace(/\s+/g, " ").trim();
   for (const [id, job] of jobsOf2(doc)) {
     const inJob = /* @__PURE__ */ new Map();
     const byRunner = /* @__PURE__ */ new Map();
     stepsOf2(job).forEach((st, i) => {
       if (st.run === void 0) return;
       const name = stepName(st, i);
-      const pure = onlyTests(st.run);
       for (const command2 of new Set(testCommands(st.run))) {
         if (!inJob.has(command2)) inJob.set(command2, []);
-        inJob.get(command2).push({ index: i, name, pure });
+        inJob.get(command2).push({ index: i, name, run: st.run, when: cond(st) });
         const runner = runnerOf(command2);
         if (!byRunner.has(runner)) byRunner.set(runner, []);
-        byRunner.get(runner).push({ index: i, name, command: command2, pure });
+        byRunner.get(runner).push({ index: i, name, command: command2, run: st.run });
       }
     });
     for (const [command2, steps] of inJob) {
       if (!byCommand.has(command2)) byCommand.set(command2, []);
-      byCommand.get(command2).push({ job: id, step: steps[0].name, index: steps[0].index, pure: steps[0].pure, runsOn: JSON.stringify(job["runs-on"] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
+      byCommand.get(command2).push({ job: id, step: steps[0].name, index: steps[0].index, run: steps[0].run, when: `${cond(job)}\0${steps[0].when}`, runsOn: JSON.stringify(job["runs-on"] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
     for (const [runner, occurrences] of byRunner) {
       const byIndex = /* @__PURE__ */ new Map();
       for (const o of occurrences) if (!byIndex.has(o.index) && !used.has(key(id, o.index))) byIndex.set(o.index, o);
-      const steps = [...byIndex.values()].map((o) => o.name);
+      const taken = [...byIndex.values()];
       const commands = [...new Set(occurrences.filter((o) => byIndex.has(o.index)).map((o) => o.command))];
-      if (steps.length > 1) {
-        found.push({ scope: "job", jobs: [id], steps, pure: [...byIndex.values()].map((o) => o.pure), command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
+      if (taken.length > 1) {
+        const same = commands.length === 1;
+        found.push({ scope: "job", jobs: [id], steps: taken.map((o) => o.name), pure: taken.map((o) => same && onlyCommand(o.run, commands[0])), command: same ? commands[0] : runner, same });
         for (const i of byIndex.keys()) used.add(key(id, i));
       }
     }
@@ -9191,12 +9195,13 @@ function repeatedTests(doc) {
     const groups = /* @__PURE__ */ new Map();
     for (const w of where2) {
       if (w.matrix || used.has(key(w.job, w.index))) continue;
-      if (!groups.has(w.runsOn)) groups.set(w.runsOn, []);
-      groups.get(w.runsOn).push(w);
+      const g = `${w.runsOn}\0${w.when}`;
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(w);
     }
     for (const ws of groups.values()) {
       if (ws.length > 1) {
-        found.push({ scope: "workflow", jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), pure: ws.map((w) => w.pure), command: command2, same: true });
+        found.push({ scope: "workflow", jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), pure: ws.map((w) => onlyCommand(w.run, command2)), command: command2, same: true });
         for (const w of ws) used.add(key(w.job, w.index));
       }
     }
@@ -9222,6 +9227,7 @@ function duplicateUploads(doc) {
       steps.forEach((other, j) => {
         if (j === i) return;
         if (guard(other) !== mine && (guard(other) !== "" || afterFailure)) return;
+        if (other["continue-on-error"] !== void 0 && String(other["continue-on-error"]).trim().toLowerCase() !== "false") return;
         if (j > i + 1 && !survivesFailure(guard(other))) return;
         const uses = String(other.uses || "");
         const w = other.with && typeof other.with === "object" ? other.with : {};

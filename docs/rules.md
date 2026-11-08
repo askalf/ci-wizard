@@ -135,7 +135,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   command (`npm test` twice) or the same runner on other paths or in another directory (`node
   --test` on the checkout, then on an exported tree); or in two jobs of the run, the same command
   on the same kind of runner with no matrix. A matrix leg is one job to GitHub, and the same
-  tests on two platforms are two results, so neither counts; a job already counted within itself
+  tests on two platforms are two results, so neither counts; two jobs or steps under different
+  conditions (`push` against `pull_request`) never run in the same run, and are no repeat; a job already counted within itself
   is left out of the cross-job scope, so no run is counted twice. Two steps are two runs whatever their names: two unnamed `run: npm test` steps are both
   "Run npm test", and are priced at the lower of their shared timings; one step that starts two
   suites of one runner is one step, and a step is priced once: a step in a within-job finding is
@@ -149,9 +150,11 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   commands in one job, since the file cannot say they are the same tests.
 - **Estimate** the shorter step's time (the second run), times runs a week, each step priced from
   the sampled runs of its own job (the file's job matched to the API's job names as the timeout
-  rule matches them), and only when the step does nothing but run tests (`set`, `cd`, `export`
-  and `echo` aside): a step with a build or an export beside its tests is matched, not priced,
-  since only the tests would go and the timing covers the whole step. A step the sample never
+  rule matches them), and only when the step runs the repeated command and nothing else (`set`, `cd`,
+  `export` and `echo` aside): a step with another suite, a build or an export beside it is
+  matched, not priced, since only the repeated tests would go and the timing covers the whole
+  step; two different commands of one runner in one job are two suites as far as the file can
+  tell, and are not priced either. A step the sample never
   timed adds nothing either, and the evidence says which.
 - **Fix** run the suite once. Where the second run checks a transformed tree (an export, a built
   package), keep it and gate it on the event that needs it, such as the push to the default
@@ -171,7 +174,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   other run, and a destination with no condition runs only on success, so an artifact step with
   `if: always()` or `!cancelled()` keeps the only copy of a failed run's file; a destination counts
   only under the artifact step's own condition, or with none when the artifact step runs on
-  success alone; and a destination after the artifact step counts only when it is the next step,
+  success alone, and never with `continue-on-error`, which lets it fail and leave the artifact the
+  only copy; and a destination after the artifact step counts only when it is the next step,
   unless its own condition is exactly `always()` or `!cancelled()`, since any other condition,
   `always() && success()` included, carries the implicit success() and a step between them that
   fails would skip the destination after the artifact already went up. An upload that runs only on failure (`if: failure()`) is a crash's files kept for

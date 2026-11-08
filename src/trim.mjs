@@ -40,22 +40,28 @@ export function survivesFailure(condition) {
 const HARMLESS = new Set(['set', 'cd', 'export', 'echo', 'true', ':', 'pwd']);
 
 /**
- * Whether a script does nothing but run tests: every command is a test command, or one of the
- * harmless few (set, cd, export, echo). A step with a build or an export beside its tests is not
- * priced as a whole, since only the tests would go.
+ * Whether a script runs the one test command and nothing else (set, cd, export and echo aside):
+ * only such a step is priced as a whole when that command is the repeat. A step with another
+ * suite, a build or an export beside it keeps work that must stay.
  */
-export function onlyTests(script) {
+export function onlyCommand(script, command) {
   const commands = shellCommands(script);
   if (!commands.length) return false;
-  let tests = 0;
+  let hits = 0;
   for (const words of commands) {
     const ws = [...words];
     while (ws.length && KEYWORDS.has(ws[0])) ws.shift();
     if (!ws.length) continue;
-    if (TEST_RUNNERS.some((rx) => rx.test(ws.join(' ')))) { tests++; continue; }
+    let cmd = ws.join(' ');
+    if (TEST_RUNNERS.some((rx) => rx.test(cmd))) {
+      for (const rx of REPORTING) cmd = cmd.replace(rx, '');
+      if (cmd.replace(/\s+/g, ' ').replace(/\s--$/, '').trim() !== command) return false;
+      hits++;
+      continue;
+    }
     if (!HARMLESS.has(ws[0])) return false;
   }
-  return tests > 0;
+  return hits > 0;
 }
 
 /** Words a shell reads as structure before the command: a command after one is still that command. */
@@ -116,37 +122,42 @@ export function repeatedTests(doc) {
   // cross-job match, under any command, and a step in one cross-job finding is out of the next.
   const used = new Set();
   const key = (job, index) => `${job}\u0000${index}`;
+  const cond = (x) => String(x?.if ?? '').replace(/\s+/g, ' ').trim();
   for (const [id, job] of jobsOf(doc)) {
     const inJob = new Map();
     const byRunner = new Map();
     stepsOf(job).forEach((st, i) => {
       if (st.run === undefined) return;
       const name = stepName(st, i);
-      const pure = onlyTests(st.run);
       for (const command of new Set(testCommands(st.run))) {
         if (!inJob.has(command)) inJob.set(command, []);
-        inJob.get(command).push({ index: i, name, pure });
+        inJob.get(command).push({ index: i, name, run: st.run, when: cond(st) });
         // Occurrences by step, not by display name: two unnamed `run: npm test` steps are both
         // "Run npm test", and are two runs.
         const runner = runnerOf(command);
         if (!byRunner.has(runner)) byRunner.set(runner, []);
-        byRunner.get(runner).push({ index: i, name, command, pure });
+        byRunner.get(runner).push({ index: i, name, command, run: st.run });
       }
     });
     for (const [command, steps] of inJob) {
       if (!byCommand.has(command)) byCommand.set(command, []);
-      byCommand.get(command).push({ job: id, step: steps[0].name, index: steps[0].index, pure: steps[0].pure, runsOn: JSON.stringify(job['runs-on'] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
+      // A job's and a step's own conditions travel with the match: two jobs that never run in the
+      // same run (push against pull_request) are not a repeat.
+      byCommand.get(command).push({ job: id, step: steps[0].name, index: steps[0].index, run: steps[0].run, when: `${cond(job)}\u0000${steps[0].when}`, runsOn: JSON.stringify(job['runs-on'] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
     for (const [runner, occurrences] of byRunner) {
       // One step that starts two suites of one runner is one step: distinct steps by index, each
       // named once, and none that an earlier runner's finding already took.
       const byIndex = new Map();
       for (const o of occurrences) if (!byIndex.has(o.index) && !used.has(key(id, o.index))) byIndex.set(o.index, o);
-      const steps = [...byIndex.values()].map((o) => o.name);
+      const taken = [...byIndex.values()];
       const commands = [...new Set(occurrences.filter((o) => byIndex.has(o.index)).map((o) => o.command))];
       // Two steps of this runner: the same command in both, or two commands (other paths, another directory).
-      if (steps.length > 1) {
-        found.push({ scope: 'job', jobs: [id], steps, pure: [...byIndex.values()].map((o) => o.pure), command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
+      if (taken.length > 1) {
+        const same = commands.length === 1;
+        // Priced only when each step is that one command and nothing else; two different commands
+        // (other paths, another directory) are two suites as far as the file can tell.
+        found.push({ scope: 'job', jobs: [id], steps: taken.map((o) => o.name), pure: taken.map((o) => same && onlyCommand(o.run, commands[0])), command: same ? commands[0] : runner, same });
         for (const i of byIndex.keys()) used.add(key(id, i));
       }
     }
@@ -155,12 +166,13 @@ export function repeatedTests(doc) {
     const groups = new Map();
     for (const w of where) {
       if (w.matrix || used.has(key(w.job, w.index))) continue;
-      if (!groups.has(w.runsOn)) groups.set(w.runsOn, []);
-      groups.get(w.runsOn).push(w);
+      const g = `${w.runsOn}\u0000${w.when}`;
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(w);
     }
     for (const ws of groups.values()) {
       if (ws.length > 1) {
-        found.push({ scope: 'workflow', jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), pure: ws.map((w) => w.pure), command, same: true });
+        found.push({ scope: 'workflow', jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), pure: ws.map((w) => onlyCommand(w.run, command)), command, same: true });
         for (const w of ws) used.add(key(w.job, w.index));
       }
     }
@@ -205,6 +217,8 @@ export function duplicateUploads(doc) {
       steps.forEach((other, j) => {
         if (j === i) return;
         if (guard(other) !== mine && (guard(other) !== '' || afterFailure)) return;
+        // A destination allowed to fail (continue-on-error) can leave the artifact the only copy.
+        if (other['continue-on-error'] !== undefined && String(other['continue-on-error']).trim().toLowerCase() !== 'false') return;
         if (j > i + 1 && !survivesFailure(guard(other))) return;
         const uses = String(other.uses || '');
         const w = other.with && typeof other.with === 'object' ? other.with : {};
