@@ -102,6 +102,7 @@ const guardsAgainst = (f) => GUARDS[f.what] || null;
 
 export function savingText(f) {
   if (isRisk(f)) return 'a security and stability risk, not minutes';
+  if (f.unit === 'log') return num(f.log_mb_week) ? `about ${f.log_mb_week} MB of log a week (measured), not minutes` : 'log volume, not minutes';
   if (isGuard(f)) return guardsAgainst(f) ? `a guard against ${guardsAgainst(f)}, not minutes` : 'a guard, not minutes';
   if (isWait(f)) return 'saves developer wait, not job minutes';
   const unit = f.unit === 'billed' ? 'billed' : 'job';

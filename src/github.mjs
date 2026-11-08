@@ -130,7 +130,7 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
   // no token. It says which budget an audit drew on, and so whether a larger one is available.
   let limit = null;
 
-  async function request(path, { raw = false } = {}) {
+  async function request(path, { raw = false, redirect = false } = {}) {
     const headers = {
       Accept: raw ? 'application/vnd.github.raw' : 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
@@ -149,7 +149,7 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
         calls++;
         // Each attempt has its own deadline, the body's reading included, so a server that stops
         // answering cannot hold the audit (and, in the action, the runner) indefinitely.
-        res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+        res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs), ...(redirect ? { redirect: 'manual' } : {}) });
       } catch (err) {
         inFlight--;
         // No answer means no new count, but GitHub may have received and charged the request: count
@@ -183,6 +183,9 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
       const reset = res.headers.get('x-ratelimit-reset');
       const resetAt = reset ? new Date(Number(reset) * 1000) : null;
       if (res.status === 404) return null;
+      // An endpoint that answers with a redirect to a file (a job's log): the file's address is the
+      // answer, and the file itself is not read here.
+      if (redirect && (res.status === 301 || res.status === 302 || res.status === 307)) return res.headers.get('location');
       if ((res.status === 403 || res.status === 429) && (remaining === 0 || res.headers.get('retry-after'))) {
         throw new RateLimitError(remaining ?? 0, resetAt, limit);
       }
@@ -227,9 +230,28 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
     }
   }
 
+  /**
+   * The size in bytes of the file an endpoint redirects to (a job's log), from a HEAD of the file's
+   * address; null when there is no redirect, no size, or the file's host does not answer. The
+   * redirect costs one API call; the HEAD goes to the file's host, outside the API and its budget,
+   * and carries no token.
+   */
+  async function sizeOf(path) {
+    const location = await limited(path, { redirect: true });
+    if (typeof location !== 'string' || !/^https:\/\//.test(location)) return null;
+    try {
+      const head = await fetchImpl(location, { method: 'HEAD', signal: AbortSignal.timeout(timeoutMs) });
+      const n = Number(head.headers.get('content-length'));
+      return head.ok && Number.isFinite(n) && n >= 0 ? n : null;
+    } catch {
+      return null;
+    }
+  }
+
   return {
     get: (path) => limited(path),
     getRaw: (path) => limited(path, { raw: true }),
+    sizeOf,
     get calls() {
       return calls;
     },

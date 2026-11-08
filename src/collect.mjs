@@ -50,7 +50,7 @@ export function groupRuns(runs, names = new Map()) {
  * @param {string} repo owner/name
  * @param {{ days?: number, perWorkflow?: number, perOutcome?: number, workflows?: number, only?: string[], now?: Date, maxPages?: number, onProgress?: (msg: string) => void }} [o]
  */
-export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2, workflows = 8, only = [], now = new Date(), maxPages = 5, maxScanFiles = 30, onProgress = () => {} } = {}) {
+export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2, workflows = 8, only = [], now = new Date(), maxPages = 5, maxScanFiles = 30, logs = true, onProgress = () => {} } = {}) {
   const since = new Date(now.getTime() - days * 86400e3).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const runs = [];
   let truncated = false;
@@ -197,6 +197,18 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
   for (const [wf, jobsPerRun, byOutcome] of timed) {
     samples.set(wf, jobsPerRun);
     outcomeSamples.set(wf, byOutcome);
+  }
+  // How much log a passing job writes: the size of each job's log in the newest sampled successful
+  // run of each workflow (one API call per job for the redirect; the size comes from the file's
+  // host). A size that cannot be read is left off, and the rule counts the jobs it read.
+  if (logs && typeof client.sizeOf === 'function') {
+    onProgress('reading log sizes');
+    const newest = [...samples.values()].flatMap((jobsPerRun) => jobsPerRun[0] || []).filter((j) => j && j.id != null);
+    const sizes = await Promise.all(newest.map((j) => settle(client.sizeOf(`repos/${repo}/actions/jobs/${j.id}/logs`))));
+    newest.forEach((j, i) => {
+      const s = sizes[i];
+      if (s && Number.isFinite(s.value)) j.log_bytes = s.value;
+    });
   }
   onProgress('reading workflow files');
   const files = new Map();

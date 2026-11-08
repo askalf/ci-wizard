@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+Work done twice, shipped twice, and logs nobody reads. Found by hand on askalf/pitlane-box on
+2026-11-08 (an 80 s job with a 471 KB log, cut to 17 s and 41 KB), now rules:
+
+- **tests run twice:** the same test runner started in two steps of a job or two jobs of a run,
+  priced from the shorter step's sampled time.
+- **an artifact that duplicates another upload:** an `upload-artifact` of a file the job already
+  sends to code scanning or the release (the Scorecard starter's SARIF artifact).
+- **toolchain setup** on self-hosted runners fires at 2 s a job when the file has a setup action
+  there: the host can carry the runtime, and the whole step is the saving.
+- **test output floods the log:** a passing job's log of 100 KB or more, in megabytes a week.
+  Read from one new endpoint, the job-logs redirect, followed by a HEAD for the size; the log is
+  never downloaded. `collect` takes `logs: false` to skip it.
+
 ## 0.3.0
 
 Merge gates: what stands between a pull request and the default branch.

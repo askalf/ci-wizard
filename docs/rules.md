@@ -117,6 +117,63 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **Estimate** 50% of setup time, times runs a week.
 - **Fix** runtime versions the runner image already has, or an image with the toolchain baked in.
   *Trade-off:* pinning to the image's version ties the job to the image's update schedule.
+- **On self-hosted runners** the rule fires at 2 s per job, when the workflow file has a
+  `actions/setup-*` step (node, python, go, java, dotnet, ruby) on a job that runs on self-hosted
+  runners and most of the sampled jobs ran there. The host can carry the runtime, so the step only
+  restates a version: a tool-cache hit still costs the step, and a cold row downloads the runtime
+  again. **Estimate** the whole setup time, times runs a week. **Fix** the runtime the host has, its
+  version pinned in the host image, and no setup step. *Trade-off:* the job follows the host image's
+  update schedule, and a job that needs another version keeps its step.
+
+## tests run twice
+
+- **Fires when** the workflow file starts a test runner twice: in two steps of one job, the same
+  command (`npm test` twice) or the same runner on other paths or in another directory (`node
+  --test` on the checkout, then on an exported tree); or in two jobs of the run, the same command
+  on the same kind of runner with no matrix. A matrix leg is one job to GitHub, and the same
+  tests on two platforms are two results, so neither counts. Commands are compared with their
+  reporting flags removed (`--test-reporter`, `--reporter`, `-q`, `-v`, `--silent`): the same tests
+  reported differently are the same tests. Runners known: `node --test`, `npm/pnpm/yarn/bun test`
+  and `run test*`, jest, vitest, mocha, ava, tap, pytest, unittest, `go test`, `cargo test`, rspec,
+  `dotnet test`, mvn and gradle test, `make test`, ctest, phpunit, pest.
+- **Confidence** confirmed when the command is the same; inferred when one runner starts two
+  commands in one job, since the file cannot say they are the same tests.
+- **Estimate** the shorter step's time (the second run), times runs a week, each step priced from
+  its sampled runs by name. A step the sample never timed adds nothing, and the evidence says so.
+- **Fix** run the suite once. Where the second run checks a transformed tree (an export, a built
+  package), keep it and gate it on the event that needs it, such as the push to the default
+  branch. *Trade-off:* gated, that check runs after the merge instead of on the pull request.
+
+## an artifact that duplicates another upload
+
+- **Fires when** a job's `actions/upload-artifact` step has one literal path (no glob, no
+  expression, one line) that another step of the same job already publishes: a SARIF file sent to
+  code scanning (`github/codeql-action/upload-sarif` with the same `sarif_file`), or a file
+  uploaded to the release (`gh release upload` naming it, or `softprops/action-gh-release` with it
+  in `files`). An upload that runs only on failure (`if: failure()`) is a crash's files kept for a
+  look, not a duplicate. The OSSF Scorecard starter workflow carries this pattern.
+- **Confidence** confirmed.
+- **Estimate** the artifact step's time, times runs a week; the retention it adds is not costed.
+  The finding stays under the noise floor: the file shows it and the fix is one deleted step.
+- **Fix** drop the artifact step. *Trade-off:* none while the other destination is browsable (code
+  scanning shows the SARIF, the release its assets); keep the artifact for one that is not.
+
+## test output floods the log
+
+- **Fires when** the median log of the sampled jobs in a workflow's newest successful run is 100
+  KB or more, and the workflow file starts a test runner (the runners the rule above knows) or
+  most of the sampled jobs ran on self-hosted runners. A tool's own output on a hosted runner
+  (CodeQL, a fuzzer, Dependabot) is not the workflow's to quiet and costs it nothing. The size is read without the log: the job-logs endpoint answers with a redirect to
+  the file, and a HEAD of that address (no token) gives its length, one API call a job. A log that
+  size on a passing job is a test runner naming every test that passed. The runner streams every
+  line to GitHub as the job runs and uploads each step's log before it reports done; on a
+  self-hosted runner that upload is the wrap-up tail.
+- **Confidence** measured. Reported in megabytes a week (unit `log`), not minutes; it always
+  stays, like a queue wait.
+- **Estimate** the median log size, times jobs a run, times runs a week.
+- **Fix** a quiet reporter that prints one character a test and the failures in full: `node
+  --test --test-reporter=dot`, `pytest -q`, `jest --silent`, `cargo test -q`, `go test` without
+  `-v`. *Trade-off:* a passing run shows no list of what ran; the count and the failures remain.
 
 ## the same commit runs twice
 

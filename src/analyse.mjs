@@ -6,6 +6,7 @@
 import { concurrencyGroupOf, categoryOf, forkReachableSelfHosted, allJobTimeouts, assignJobRuns, parseWorkflow, pushBranchesOf, stepCommands, triggersOf, withParseCache, workflowFacts } from './workflow.mjs';
 import { countBy, fmtS, mean, median, pct, round, secs, sum } from './util.mjs';
 import { scanFindings } from './scans.mjs';
+import { duplicateUploads, repeatedTests, selfHostedSetups, startsTests } from './trim.mjs';
 import { gateFindings } from './gates.mjs';
 import { CANCEL_OUTDATED, ONE_RUN_PER_COMMIT, cacheExample, checkoutAdvice, forkGuardExample, managerOf, triggerExample } from './advice.mjs';
 
@@ -15,6 +16,11 @@ export const THRESHOLDS = {
   depsPerJobWithCache: 45,
   checkoutPerJob: 12,
   toolchainPerJob: 15,
+  // On a self-hosted runner the host can carry the runtime, so a setup step that only restates a
+  // version is worth dropping at a far lower cost than on a hosted image.
+  toolchainPerJobSelfHosted: 2,
+  // A passing job's log over this is a test runner naming what passed, not information.
+  logBytesPerJob: 100 * 1024,
   duplicateCommitsWeek: 3,
   supersededWeek: 2,
   matrixJobs: 8,
@@ -75,7 +81,7 @@ export function timeJobs(sampledRuns, commands) {
   const t = {
     secondsByCategory: {}, workStepSeconds: new Map(), jobSecondsPerRun: [], queueWaits: [], tails: [], heads: [],
     jobLengths: [], stepsPerJob: [], hostedJobs: 0, jobCount: 0, sawCacheStep: false, billedPerRun: [], jobDurations: new Map(),
-    jobHosted: new Map(),
+    jobHosted: new Map(), stepSeconds: new Map(),
   };
   for (const jobs of sampledRuns) {
     let runSeconds = 0;
@@ -105,6 +111,10 @@ export function timeJobs(sampledRuns, commands) {
         const seconds = secs(step.started_at, step.completed_at);
         t.secondsByCategory[kind] = (t.secondsByCategory[kind] || 0) + seconds;
         if (kind === 'cache') t.sawCacheStep = true;
+        // Every step by the name GitHub shows, so a rule that names a step in the file can price it.
+        const label = String(step.name).replace(/\s+/g, ' ').trim();
+        if (!t.stepSeconds.has(label)) t.stepSeconds.set(label, []);
+        t.stepSeconds.get(label).push(seconds);
         if (kind === 'work') {
           const name = String(step.name).replace(/\s+/g, ' ').slice(0, 60);
           if (!t.workStepSeconds.has(name)) t.workStepSeconds.set(name, []);
@@ -179,6 +189,13 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
   const facts = workflowFacts(doc);
   const timing = timeJobs(sampledRuns, stepCommands(doc));
   const shares = timeShares(timing);
+  // A step the file names, priced from its sampled runs (median seconds), or null when no sampled
+  // job ran a step of that name (a renamed step, a job the sample never ran).
+  const priced = (name) => {
+    const xs = timing.stepSeconds.get(String(name).replace(/\s+/g, ' ').trim());
+    return xs && xs.length ? round(median(xs), 1) : null;
+  };
+  const logBytes = sampledRuns.flat().map((j) => j.log_bytes).filter((b) => Number.isFinite(b) && b >= 0);
   const sampledCount = sampledRuns.length;
   const medianRunSeconds = median(timing.jobSecondsPerRun);
   const successfulWalls = workflowRuns
@@ -274,6 +291,14 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     job_timeouts: allJobTimeouts(doc),
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3),
+    // Work done twice or shipped twice, as the file shows it, each step priced from the sample.
+    repeated_tests: repeatedTests(doc).map((r) => ({ ...r, seconds: r.steps.map(priced) })),
+    duplicate_uploads: duplicateUploads(doc).map((u) => ({ ...u, seconds: priced(u.step) })),
+    selfhosted_setups: selfHostedSetups(doc).map((s) => ({ ...s, seconds: priced(s.step) })),
+    // A passing job's log size, median over the sampled jobs whose size was read (null when none was).
+    log_bytes_p50: logBytes.length ? Math.round(median(logBytes)) : null,
+    log_jobs_read: logBytes.length,
+    starts_tests: startsTests(doc),
   };
 }
 
@@ -358,11 +383,74 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
   }
 
   const tc = perRun.toolchain || 0;
-  if (tc / jobs >= T.toolchainPerJob) {
+  const selfSetups = w.selfhosted_setups || [];
+  if (selfSetups.length && w.hosted_share < 0.5 && tc / jobs >= T.toolchainPerJobSelfHosted) {
+    // On a self-hosted runner the setup step restates a version the host can carry itself: a tool
+    // cache hit still costs the step, and a cold row downloads the runtime again. The whole step
+    // goes, so the saving is all of it.
+    const names = [...new Set(selfSetups.map((s) => `${s.action} in job ${s.job}`))];
+    add(tc * w.runs_week / 60, 'toolchain setup', `toolchain setup takes ${fmtS(tc / jobs)} per job on self-hosted runners (${names.slice(0, 4).join(', ')}${names.length > 4 ? ' and more' : ''}), where the host can carry the runtime, so the step only restates its version`,
+      'use the runtime the host has, pin its version in the host image, and drop the setup step',
+      { confidence: 'inferred', tradeoff: "the job follows the host image's update schedule, and a job that needs another version keeps its step", brief: `${fmtS(tc / jobs)} on self-hosted runners` });
+  } else if (tc / jobs >= T.toolchainPerJob) {
     const note = w.setup_cache ? ' (this includes restoring the dependency cache, which the setup step does)' : '';
     add(0.5 * tc * w.runs_week / 60, 'toolchain setup', `toolchain setup takes ${fmtS(tc / jobs)} per job${note}`,
       'use runtime versions the runner image already has, or an image with the toolchain baked in',
       { confidence: 'inferred', tradeoff: "pinning to the image's version ties the job to the image's update schedule", brief: `${fmtS(tc / jobs)}${w.setup_cache ? ' (with its dependency cache restore)' : ''}` });
+  }
+
+  // Tests started twice: the second run is the saving (the shorter of the two steps; a step the
+  // sample did not price adds nothing, and the evidence says so).
+  const repeats = w.repeated_tests || [];
+  if (repeats.length) {
+    const secondsOf = (r) => {
+      const xs = r.seconds.filter((s) => s !== null);
+      return xs.length > 1 ? Math.min(...xs) * (xs.length - 1) : 0;
+    };
+    const saving = repeats.reduce((s, r) => s + secondsOf(r), 0) * w.runs_week / 60;
+    const describe = (r) => {
+      const steps = r.steps.map((s) => `"${s}"`).join(' and ');
+      const priced = r.seconds.every((s) => s !== null) ? ` (${r.seconds.map(fmtS).join(' and ')} a run)` : ' (not every step was timed in the sample)';
+      if (r.scope === 'job') return `job ${r.jobs[0]} starts \`${r.command}\` in steps ${steps}${r.same ? '' : ', on other paths or in another directory'}${priced}`;
+      return `jobs ${r.jobs.join(' and ')} both run \`${r.command}\` on the same kind of runner${priced}`;
+    };
+    add(saving, 'tests run twice', repeats.slice(0, 3).map(describe).join('; ') + (repeats.length > 3 ? `; and ${repeats.length - 3} more` : ''),
+      'run the suite once; where the second run checks a transformed tree (an export, a built package), keep it and gate it on the event that needs it, such as the push to the default branch',
+      {
+        confidence: repeats.some((r) => r.same) ? 'confirmed' : 'inferred',
+        tradeoff: 'a second run on a transformed tree checks that transform; gated, it checks it after the merge instead of on the pull request',
+        example: `- name: Tests on the built tree\n  if: github.event_name == 'push'   # once, on main; the pull request ran them above\n  run: ${repeats[0].command}${repeats[0].same ? '' : ' ...'}`,
+      });
+  }
+
+  // An artifact of a file another step already published: the upload step goes, and with it the
+  // artifact's storage. Only the artifact step's own time is counted.
+  const dupes = w.duplicate_uploads || [];
+  if (dupes.length) {
+    const saving = dupes.reduce((s, u) => s + (u.seconds || 0), 0) * w.runs_week / 60;
+    const describe = (u) => `job ${u.job} uploads ${u.path} as an artifact in "${u.step}"${u.seconds !== null ? ` (${fmtS(u.seconds)} a run)` : ''} and sends the same file to ${u.alsoTo.join(' and ')}`;
+    add(saving, 'an artifact that duplicates another upload', dupes.slice(0, 3).map(describe).join('; '),
+      'drop the artifact step; the file is already where it is read',
+      { confidence: 'confirmed', tradeoff: 'none while the other destination is browsable (code scanning shows the SARIF, the release its assets); keep the artifact for a destination that is not', example: `# remove\n- name: ${dupes[0].step}\n  uses: actions/upload-artifact@...\n  with:\n    path: ${dupes[0].path}` });
+  }
+
+  // A passing job's log the size of a test listing: streamed to GitHub as the job runs, uploaded
+  // step by step before the job reports done (on a self-hosted runner that upload is the wrap-up
+  // tail), and read by nobody. Reported in megabytes a week, not minutes.
+  // A tool's own output on a hosted runner (CodeQL, a fuzzer, Dependabot) is not the workflow's to
+  // quiet and costs it nothing: the rule needs a test runner in the file, or self-hosted runners,
+  // where every byte is uploaded from the host before the job reports done.
+  if (w.log_bytes_p50 !== null && w.log_bytes_p50 !== undefined && w.log_bytes_p50 >= T.logBytesPerJob && (w.starts_tests || w.hosted_share < 0.5)) {
+    const kb = Math.round(w.log_bytes_p50 / 1024);
+    const mbWeek = round((w.log_bytes_p50 * jobs * w.runs_week) / 1048576, 1);
+    F.push({
+      saving: 0, unit: 'log', confidence: 'measured', what: 'test output floods the log', workflow: w.workflow,
+      evidence: `a passing job's log is ${kb} KB (median of ${w.log_jobs_read} sampled job${w.log_jobs_read === 1 ? '' : 's'}), about ${mbWeek} MB a week over ${jobs} job${jobs === 1 ? '' : 's'} a run and ${Math.round(w.runs_week)} runs${w.starts_tests ? ', most of it a test runner naming what passed' : ''}; the runner streams every line to GitHub as the job runs and uploads each step's log before it reports done${w.hosted_share < 0.5 ? ', from a self-hosted runner' : ''}` + thin,
+      fix: 'a quiet reporter that prints one character a test and the failures in full: node --test --test-reporter=dot, pytest -q, jest --silent, cargo test -q, go test without -v',
+      tradeoff: 'a passing run shows no list of what ran; the count and the failures remain',
+      example: 'run: node --test --test-reporter=dot --test-reporter-destination=stdout test/*.test.mjs',
+      parts: null, brief: `${kb} KB a job`, size: w.log_bytes_p50, thin: w.thin_sample ? w.sampled_runs : null, log_mb_week: mbWeek,
+    });
   }
 
   if (w.dup_commits_week >= T.duplicateCommitsWeek) {
@@ -702,9 +790,13 @@ function analyseParsed(repo, data) {
   const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === 'public' ? true : data.visibility ? 'private' : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || new Map()), ...scanFindings(data.scanFiles || new Map(), { repo }), ...gateFindings(data.gates, { scanFiles: data.scanFiles || new Map(), scanned: data.scanned, visibility: data.visibility })];
   // A finding that saves under a minute a week is noise next to the rest; one that saves developer
   // wait has no minutes to compare and always stays.
-  const findings = groupFindings(raw).filter((f) => f.unit === 'wait' || f.unit === 'risk' || f.unit === 'guard' || f.saving >= T.minSavingWeek).map((f) => ({
+  // A duplicate upload stays at any size: the file shows it, the fix is one deleted step, and the
+  // artifact's storage is not in the minutes.
+  const findings = groupFindings(raw).filter((f) => f.unit === 'wait' || f.unit === 'risk' || f.unit === 'guard' || f.unit === 'log' || f.what === 'an artifact that duplicates another upload' || f.saving >= T.minSavingWeek).map((f) => ({
     saving_min_week: round(f.saving, 1), unit: f.unit || 'job', workflow: f.workflow, what: f.what, evidence: f.evidence,
     fix: f.fix, tradeoff: f.tradeoff || '', example: f.example || '', confidence: f.confidence,
+    // A log finding's figure is megabytes a week, not minutes; it rides beside the saving.
+    ...(f.unit === 'log' ? { log_mb_week: f.log_mb_week } : {}),
   }));
   return {
     repo,

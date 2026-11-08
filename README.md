@@ -157,7 +157,9 @@ doesn't, such as a checkout step whose depth is set by an expression:
 | Finding | |
 | --- | --- |
 | cache dependencies, dependency installs dominate | installs that run uncached, or dominate the job |
-| slow checkout, toolchain setup | full history, LFS, submodules, a setup that could be cached |
+| slow checkout, toolchain setup | full history, LFS, submodules, a setup that could be cached, or a runtime setup on a self-hosted runner that has the runtime |
+| tests run twice, an artifact that duplicates another upload | the same test runner started twice in a job or a run; an artifact of a file another step already published |
+| test output floods the log | a passing job's log the size of a test listing, in megabytes a week |
 | the same commit runs twice, outdated runs keep going | push and pull request both firing; no cancel-in-progress |
 | runs far more often than code changes, many small scheduled jobs | fixed cost paid on every run |
 | short hosted jobs bill a whole minute, many short jobs, matrix size | GitHub rounds each hosted job up to a minute |
@@ -174,6 +176,9 @@ one that has a hostile contributor.
 - **What it reads.** Through the API only, these endpoints:
   - `GET /repos/{repo}/actions/runs` (up to 500 runs), `/actions/runs/{id}/jobs` and
     `/actions/workflows`;
+  - `/actions/jobs/{id}/logs` for the jobs of each sampled workflow's newest successful run: only
+    the redirect it answers with, then a HEAD of the log file's address (no token) for its size.
+    The log itself is never downloaded;
   - `/contents/.github/workflows`, the workflow files (up to 30), the root listing (to see which
     lockfile is committed) and the `.github` listing (for Dependabot's configuration);
   - `/repos/{repo}` (default branch and visibility);
