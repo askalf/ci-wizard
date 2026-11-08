@@ -131,38 +131,29 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 
 ## tests run twice
 
-- **Fires when** the workflow file starts a test runner twice: in two steps of one job, the same
-  command (`npm test` twice) or the same runner on other paths or in another directory (`node
-  --test` on the checkout, then on an exported tree); or in two jobs of the run, the same command
-  on the same kind of runner with no matrix. A matrix leg is one job to GitHub, and the same
-  tests on two platforms are two results, so neither counts; two jobs, or two steps of one job, under
-  different conditions (`push` against `pull_request`) never run in the same run, and are no
-  repeat; the same command in two directories (a step's `working-directory`, the job's or the
-  workflow's default, a `cd` in the script) is two suites, a monorepo's packages, and no repeat; a job already counted within itself
-  is left out of the cross-job scope, so no run is counted twice. Two steps are two runs whatever their names: two unnamed `run: npm test` steps are both
-  "Run npm test", and are priced at the lower of their shared timings; one step that starts two
-  suites of one runner is one step, and a step is priced once: a step in a within-job finding is
-  out of every cross-job match under any command, and a step in one cross-job finding is out of
-  the next. Commands are compared with their
-  reporting flags removed (`--test-reporter`, `--reporter`, `-q`, `-v`, `--silent`): the same tests
-  reported differently are the same tests. Runners known: `node --test`, `npm/pnpm/yarn/bun test`
-  and `run test*`, jest, vitest, mocha, ava, tap, pytest, unittest, `go test`, `cargo test`, rspec,
-  `dotnet test`, mvn and gradle test, `make test`, ctest, phpunit, pest.
-- **Confidence** confirmed when the command is the same; inferred when one runner starts two
-  commands in one job, since the file cannot say they are the same tests.
+- **Fires when** the workflow file has the same test step twice: two steps whose scripts are one
+  and the same test command and nothing else (`set`, `export` and `echo` aside; a `cd` is not
+  aside, it moves the tests), under the same `if:`, in the same declared working directory (the
+  step's, else the job's, else the workflow's `defaults.run`), with the same step `env:` and
+  `shell:`. In one job (two such steps), or in two jobs of the run that also share `runs-on`, job
+  `env:`, `container:`, `services:`, `defaults:` and `if:`, with no matrix. Commands are compared
+  with their reporting flags removed (`--test-reporter`, `--reporter`, `-q`, `-v`, `--silent`):
+  the same tests reported differently are the same tests. Runners known: `node --test`,
+  `npm/pnpm/yarn/bun test` and `run test*`, jest, vitest, mocha, ava, tap, pytest, unittest, `go
+  test`, `cargo test`, rspec, `dotnet test`, mvn and gradle test, `make test`, ctest, phpunit,
+  pest. Anything the file can tell apart is no repeat: the same runner on other paths, in another
+  directory or after an export, against another environment, beside a build or another suite, on
+  another platform, or under another condition. Two steps are two runs whatever their names (two
+  unnamed `run: npm test` steps are both "Run npm test"), and a step is in one finding at most.
+- **Confidence** confirmed: the file shows the same step twice.
 - **Estimate** the shorter step's time (the second run), times runs a week, each step priced from
   the sampled runs of its own job (the file's job matched to the API's job names as the timeout
-  rule matches them), and only when the step runs the repeated command and nothing else (`set`, `cd`,
-  `export` and `echo` aside): a step with another suite, a build or an export beside it is
-  matched, not priced, since only the repeated tests would go and the timing covers the whole
-  step; two different commands of one runner in one job are two suites as far as the file can
-  tell, and are not priced either. A step the sample never
-  timed adds nothing either, and the evidence says which.
-- **Fix** run the suite once. Where the second run checks a transformed tree (an export, a built
-  package), keep it and gate it on the event that needs it, such as the push to the default
-  branch. *Trade-off:* gated, that check runs after the merge instead of on the pull request.
+  rule matches them); two steps with one display name share a timing list and are priced at its
+  minimum. A step the sample never timed adds nothing, and the evidence says so.
+- **Fix** run the suite once. Where the second run is wanted on one event (the push to the default
+  branch, a release), keep it and gate it on that event. *Trade-off:* gated, that run happens after
+  the merge instead of on the pull request.
 
-## an artifact that duplicates another upload
 
 - **Fires when** a job's `actions/upload-artifact` step has one literal path (no glob, no
   expression, one line) that another action step of the same job already publishes with the same

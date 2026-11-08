@@ -9090,7 +9090,7 @@ var REPORTING = [
 function survivesFailure(condition) {
   return /^(\$\{\{\s*)?(always\(\)|!\s*cancelled\(\))(\s*\}\})?$/.test(String(condition ?? "").trim());
 }
-var HARMLESS = /* @__PURE__ */ new Set(["set", "cd", "export", "echo", "true", ":", "pwd"]);
+var HARMLESS = /* @__PURE__ */ new Set(["set", "export", "echo", "true", ":", "pwd"]);
 function onlyCommand(script, command) {
   const commands = shellCommands(script);
   if (!commands.length) return false;
@@ -9123,10 +9123,6 @@ function testCommands(script) {
   }
   return out;
 }
-function runnerOf(command) {
-  const m = TEST_RUNNERS.map((rx) => rx.exec(command)).find(Boolean);
-  return m ? m[0] : command.split(" ")[0];
-}
 function jobsOf2(doc) {
   return Object.entries(doc.jobs || {}).filter(([, j]) => j && typeof j === "object");
 }
@@ -9144,56 +9140,36 @@ function repeatedTests(doc) {
   const byCommand = /* @__PURE__ */ new Map();
   const used = /* @__PURE__ */ new Set();
   const key = (job, index) => `${job}\0${index}`;
+  const text = (x) => JSON.stringify(x ?? null);
   const cond = (x) => String(x?.if ?? "").replace(/\s+/g, " ").trim();
-  const dirOf = (st, job) => {
-    const declared = st["working-directory"] ?? job.defaults?.run?.["working-directory"] ?? doc.defaults?.run?.["working-directory"] ?? "";
-    const cds = shellCommands(st.run).filter((ws) => ws[0] === "cd").map((ws) => ws.slice(1).join(" "));
-    return [String(declared).trim(), ...cds].join("/");
-  };
+  const dirOf = (st, job) => String(st["working-directory"] ?? job.defaults?.run?.["working-directory"] ?? doc.defaults?.run?.["working-directory"] ?? "").trim();
   for (const [id, job] of jobsOf2(doc)) {
     const inJob = /* @__PURE__ */ new Map();
-    const byRunner = /* @__PURE__ */ new Map();
     stepsOf2(job).forEach((st, i) => {
       if (st.run === void 0) return;
-      const name = stepName(st, i);
-      const dir = dirOf(st, job);
-      for (const command of new Set(testCommands(st.run))) {
-        if (!inJob.has(command)) inJob.set(command, []);
-        inJob.get(command).push({ index: i, name, run: st.run, when: `${cond(st)}\0${dir}` });
-        const runner = `${runnerOf(command)}\0${cond(st)}\0${dir}`;
-        if (!byRunner.has(runner)) byRunner.set(runner, []);
-        byRunner.get(runner).push({ index: i, name, command, run: st.run });
-      }
+      const commands = new Set(testCommands(st.run));
+      if (commands.size !== 1) return;
+      const [command] = commands;
+      if (!onlyCommand(st.run, command)) return;
+      const stepKey = [command, cond(st), dirOf(st, job), text(st.env), text(st.shell)].join("\0");
+      if (!inJob.has(stepKey)) inJob.set(stepKey, []);
+      inJob.get(stepKey).push({ index: i, name: stepName(st, i), command });
     });
-    for (const [command, steps] of inJob) {
-      if (!byCommand.has(command)) byCommand.set(command, []);
-      byCommand.get(command).push({ job: id, step: steps[0].name, index: steps[0].index, run: steps[0].run, when: `${cond(job)}\0${steps[0].when}`, runsOn: JSON.stringify(job["runs-on"] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
-    }
-    for (const [runner, occurrences] of byRunner) {
-      const byIndex = /* @__PURE__ */ new Map();
-      for (const o of occurrences) if (!byIndex.has(o.index) && !used.has(key(id, o.index))) byIndex.set(o.index, o);
-      const taken = [...byIndex.values()];
-      const commands = [...new Set(occurrences.filter((o) => byIndex.has(o.index)).map((o) => o.command))];
-      if (taken.length > 1) {
-        const same = commands.length === 1;
-        found.push({ scope: "job", jobs: [id], steps: taken.map((o) => o.name), pure: taken.map((o) => same && onlyCommand(o.run, commands[0])), command: same ? commands[0] : runner.split("\0")[0], same });
-        for (const i of byIndex.keys()) used.add(key(id, i));
+    for (const [stepKey, steps] of inJob) {
+      if (steps.length > 1) {
+        found.push({ scope: "job", jobs: [id], steps: steps.map((o) => o.name), command: steps[0].command, same: true });
+        for (const o of steps) used.add(key(id, o.index));
       }
+      const jobKey = [stepKey, text(job["runs-on"]), text(job.env), text(job.container), text(job.services), text(job.defaults), cond(job)].join("\0");
+      if (!byCommand.has(jobKey)) byCommand.set(jobKey, []);
+      byCommand.get(jobKey).push({ job: id, step: steps[0].name, index: steps[0].index, command: steps[0].command, matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
   }
-  for (const [command, where2] of byCommand) {
-    const groups = /* @__PURE__ */ new Map();
-    for (const w of where2) {
-      if (w.matrix || used.has(key(w.job, w.index))) continue;
-      const g = `${w.runsOn}\0${w.when}`;
-      if (!groups.has(g)) groups.set(g, []);
-      groups.get(g).push(w);
-    }
-    for (const ws of groups.values()) {
-      if (ws.length > 1) {
-        found.push({ scope: "workflow", jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), pure: ws.map((w) => onlyCommand(w.run, command)), command, same: true });
-        for (const w of ws) used.add(key(w.job, w.index));
-      }
+  for (const where2 of byCommand.values()) {
+    const ws = where2.filter((w) => !w.matrix && !used.has(key(w.job, w.index)));
+    if (ws.length > 1) {
+      found.push({ scope: "workflow", jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), command: ws[0].command, same: true });
+      for (const w of ws) used.add(key(w.job, w.index));
     }
   }
   return found;
@@ -9825,7 +9801,7 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     // Two steps with one display name ("Run npm test" twice) share one timing list; each is then
     // priced at that list's minimum, the conservative reading of an ambiguous match.
     repeated_tests: repeatedTests(doc).map((r) => {
-      return { ...r, seconds: r.steps.map((s, i) => r.pure[i] ? priced(r.jobs[r.scope === "job" ? 0 : i], s, { low: new Set(r.steps).size !== r.steps.length }) : null) };
+      return { ...r, seconds: r.steps.map((s, i) => priced(r.jobs[r.scope === "job" ? 0 : i], s, { low: new Set(r.steps).size !== r.steps.length })) };
     }),
     duplicate_uploads: duplicateUploads(doc).map((u) => ({ ...u, seconds: priced(u.job, u.step) })),
     selfhosted_setups: selfHostedSetups(doc).map((s) => ({ ...s, seconds: priced(s.job, s.step) })),
@@ -9951,9 +9927,9 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
     const saving = repeats.reduce((s, r) => s + secondsOf(r), 0) * w.runs_week / 60;
     const describe = (r) => {
       const steps = r.steps.map((s) => `"${s}"`).join(" and ");
-      const priced = r.seconds.every((s) => s !== null) ? ` (${r.seconds.map(fmtS).join(" and ")} a run)` : r.pure.every(Boolean) ? " (not every step was timed in the sample)" : " (not priced: a step does other work beside the tests, and only the tests would go)";
-      if (r.scope === "job") return `job ${r.jobs[0]} starts \`${r.command}\` in steps ${steps}${r.same ? "" : ", on other paths or in another directory"}${priced}`;
-      return `jobs ${r.jobs.join(" and ")} both run \`${r.command}\` on the same kind of runner${priced}`;
+      const priced = r.seconds.every((s) => s !== null) ? ` (${r.seconds.map(fmtS).join(" and ")} a run)` : " (not every step was timed in the sample)";
+      if (r.scope === "job") return `job ${r.jobs[0]} runs the same test step twice, \`${r.command}\` in steps ${steps}${priced}`;
+      return `jobs ${r.jobs.join(" and ")} run the same test step, \`${r.command}\`, on the same runner, environment and directory${priced}`;
     };
     add(
       saving,
@@ -9961,11 +9937,11 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
       repeats.slice(0, 3).map(describe).join("; ") + (repeats.length > 3 ? `; and ${repeats.length - 3} more` : ""),
       "run the suite once; where the second run checks a transformed tree (an export, a built package), keep it and gate it on the event that needs it, such as the push to the default branch",
       {
-        confidence: repeats.some((r) => r.same) ? "confirmed" : "inferred",
+        confidence: "confirmed",
         tradeoff: "a second run on a transformed tree checks that transform; gated, it checks it after the merge instead of on the pull request",
-        example: `- name: Tests on the built tree
+        example: `- name: Tests, second run
   if: github.event_name == 'push'   # once, on main; the pull request ran them above
-  run: ${repeats[0].command}${repeats[0].same ? "" : " ..."}`
+  run: ${repeats[0].command}`
       }
     );
   }

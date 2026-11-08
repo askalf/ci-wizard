@@ -37,12 +37,12 @@ export function survivesFailure(condition) {
 }
 
 /** Shell commands a test step may carry beside its tests without doing other work. */
-const HARMLESS = new Set(['set', 'cd', 'export', 'echo', 'true', ':', 'pwd']);
+const HARMLESS = new Set(['set', 'export', 'echo', 'true', ':', 'pwd']);
 
 /**
- * Whether a script runs the one test command and nothing else (set, cd, export and echo aside):
- * only such a step is priced as a whole when that command is the repeat. A step with another
- * suite, a build or an export beside it keeps work that must stay.
+ * Whether a script runs the one test command and nothing else (set, export and echo aside; a cd
+ * moves the tests to another directory and is not aside). Only such a step is a repeat of another
+ * such step: a step with another suite, a build or an export beside it keeps work that must stay.
  */
 export function onlyCommand(script, command) {
   const commands = shellCommands(script);
@@ -108,84 +108,51 @@ export function stepName(st, i = 0) {
 }
 
 /**
- * Tests started twice. In one job (scope "job"): two steps each start the same test runner, the
- * same command (`same: true`) or the runner on other paths or in another directory (`same:
- * false`, an exported or built tree). Across the workflow (scope "workflow"): two jobs start the
- * same command on the same kind of runner with no matrix. A matrix leg is one job to GitHub, and
- * the same tests on two runners are two results, so neither counts. `pure` says, per step,
- * whether the step does nothing but run tests: only such a step is priced as a whole.
+ * The same test step twice: two steps whose scripts are one and the same test command and
+ * nothing else, under the same condition, in the same declared working directory, with the same
+ * step environment. In one job (scope "job"), or in two jobs of the run (scope "workflow") that
+ * also share runs-on, job environment, container, services and run defaults, with no matrix. A
+ * matrix leg is one job to GitHub; the same tests on two runners, in two directories, against
+ * two environments, or under two conditions are two results, and nothing else the file could
+ * tell apart is called a repeat.
  */
 export function repeatedTests(doc) {
   const found = [];
   const byCommand = new Map();
-  // A step is priced once, whatever took it: the steps in a within-job finding are out of every
-  // cross-job match, under any command, and a step in one cross-job finding is out of the next.
   const used = new Set();
   const key = (job, index) => `${job}\u0000${index}`;
+  const text = (x) => JSON.stringify(x ?? null);
   const cond = (x) => String(x?.if ?? '').replace(/\s+/g, ' ').trim();
-  // Where a step's command runs: its working-directory, else the job's, else the workflow's, plus
-  // every `cd` in its script. The same command in two directories is two suites (a monorepo's
-  // packages), so the directory is part of every match.
-  const dirOf = (st, job) => {
-    const declared = st['working-directory'] ?? job.defaults?.run?.['working-directory'] ?? doc.defaults?.run?.['working-directory'] ?? '';
-    const cds = shellCommands(st.run).filter((ws) => ws[0] === 'cd').map((ws) => ws.slice(1).join(' '));
-    return [String(declared).trim(), ...cds].join('/');
-  };
+  const dirOf = (st, job) => String(st['working-directory'] ?? job.defaults?.run?.['working-directory'] ?? doc.defaults?.run?.['working-directory'] ?? '').trim();
   for (const [id, job] of jobsOf(doc)) {
     const inJob = new Map();
-    const byRunner = new Map();
     stepsOf(job).forEach((st, i) => {
       if (st.run === undefined) return;
-      const name = stepName(st, i);
-      const dir = dirOf(st, job);
-      for (const command of new Set(testCommands(st.run))) {
-        if (!inJob.has(command)) inJob.set(command, []);
-        inJob.get(command).push({ index: i, name, run: st.run, when: `${cond(st)}\u0000${dir}` });
-        // Occurrences by step, not by display name: two unnamed `run: npm test` steps are both
-        // "Run npm test", and are two runs.
-        // Grouped by the step's condition too: two steps gated apart (push against pull_request)
-        // never run in the same run, and are no repeat.
-        const runner = `${runnerOf(command)}\u0000${cond(st)}\u0000${dir}`;
-        if (!byRunner.has(runner)) byRunner.set(runner, []);
-        byRunner.get(runner).push({ index: i, name, command, run: st.run });
-      }
+      const commands = new Set(testCommands(st.run));
+      if (commands.size !== 1) return;
+      const [command] = commands;
+      if (!onlyCommand(st.run, command)) return;
+      // Everything the file says about where and how the step runs is part of its identity.
+      const stepKey = [command, cond(st), dirOf(st, job), text(st.env), text(st.shell)].join('\u0000');
+      if (!inJob.has(stepKey)) inJob.set(stepKey, []);
+      inJob.get(stepKey).push({ index: i, name: stepName(st, i), command });
     });
-    for (const [command, steps] of inJob) {
-      if (!byCommand.has(command)) byCommand.set(command, []);
-      // A job's and a step's own conditions travel with the match: two jobs that never run in the
-      // same run (push against pull_request) are not a repeat.
-      byCommand.get(command).push({ job: id, step: steps[0].name, index: steps[0].index, run: steps[0].run, when: `${cond(job)}\u0000${steps[0].when}`, runsOn: JSON.stringify(job['runs-on'] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
-    }
-    for (const [runner, occurrences] of byRunner) {
-      // One step that starts two suites of one runner is one step: distinct steps by index, each
-      // named once, and none that an earlier runner's finding already took.
-      const byIndex = new Map();
-      for (const o of occurrences) if (!byIndex.has(o.index) && !used.has(key(id, o.index))) byIndex.set(o.index, o);
-      const taken = [...byIndex.values()];
-      const commands = [...new Set(occurrences.filter((o) => byIndex.has(o.index)).map((o) => o.command))];
-      // Two steps of this runner: the same command in both, or two commands (other paths, another directory).
-      if (taken.length > 1) {
-        const same = commands.length === 1;
-        // Priced only when each step is that one command and nothing else; two different commands
-        // (other paths, another directory) are two suites as far as the file can tell.
-        found.push({ scope: 'job', jobs: [id], steps: taken.map((o) => o.name), pure: taken.map((o) => same && onlyCommand(o.run, commands[0])), command: same ? commands[0] : runner.split('\u0000')[0], same });
-        for (const i of byIndex.keys()) used.add(key(id, i));
+    for (const [stepKey, steps] of inJob) {
+      if (steps.length > 1) {
+        found.push({ scope: 'job', jobs: [id], steps: steps.map((o) => o.name), command: steps[0].command, same: true });
+        for (const o of steps) used.add(key(id, o.index));
       }
+      // The job's own identity joins the step's for the cross-job scope.
+      const jobKey = [stepKey, text(job['runs-on']), text(job.env), text(job.container), text(job.services), text(job.defaults), cond(job)].join('\u0000');
+      if (!byCommand.has(jobKey)) byCommand.set(jobKey, []);
+      byCommand.get(jobKey).push({ job: id, step: steps[0].name, index: steps[0].index, command: steps[0].command, matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
   }
-  for (const [command, where] of byCommand) {
-    const groups = new Map();
-    for (const w of where) {
-      if (w.matrix || used.has(key(w.job, w.index))) continue;
-      const g = `${w.runsOn}\u0000${w.when}`;
-      if (!groups.has(g)) groups.set(g, []);
-      groups.get(g).push(w);
-    }
-    for (const ws of groups.values()) {
-      if (ws.length > 1) {
-        found.push({ scope: 'workflow', jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), pure: ws.map((w) => onlyCommand(w.run, command)), command, same: true });
-        for (const w of ws) used.add(key(w.job, w.index));
-      }
+  for (const where of byCommand.values()) {
+    const ws = where.filter((w) => !w.matrix && !used.has(key(w.job, w.index)));
+    if (ws.length > 1) {
+      found.push({ scope: 'workflow', jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), command: ws[0].command, same: true });
+      for (const w of ws) used.add(key(w.job, w.index));
     }
   }
   return found;

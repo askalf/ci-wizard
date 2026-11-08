@@ -301,9 +301,9 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     // Two steps with one display name ("Run npm test" twice) share one timing list; each is then
     // priced at that list's minimum, the conservative reading of an ambiguous match.
     repeated_tests: repeatedTests(doc).map((r) => {
-      // A step that does other work beside its tests (a build, an export) is not priced: only the
-      // tests would go, and the timing covers the whole step.
-      return { ...r, seconds: r.steps.map((s, i) => (r.pure[i] ? priced(r.jobs[r.scope === 'job' ? 0 : i], s, { low: new Set(r.steps).size !== r.steps.length }) : null)) };
+      // Each matched step is that one test command and nothing else (trim.mjs), so the whole step
+      // is the repeat and its timing prices it.
+      return { ...r, seconds: r.steps.map((s, i) => priced(r.jobs[r.scope === 'job' ? 0 : i], s, { low: new Set(r.steps).size !== r.steps.length })) };
     }),
     duplicate_uploads: duplicateUploads(doc).map((u) => ({ ...u, seconds: priced(u.job, u.step) })),
     selfhosted_setups: selfHostedSetups(doc).map((s) => ({ ...s, seconds: priced(s.job, s.step) })),
@@ -426,16 +426,16 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
     const saving = repeats.reduce((s, r) => s + secondsOf(r), 0) * w.runs_week / 60;
     const describe = (r) => {
       const steps = r.steps.map((s) => `"${s}"`).join(' and ');
-      const priced = r.seconds.every((s) => s !== null) ? ` (${r.seconds.map(fmtS).join(' and ')} a run)` : r.pure.every(Boolean) ? ' (not every step was timed in the sample)' : ' (not priced: a step does other work beside the tests, and only the tests would go)';
-      if (r.scope === 'job') return `job ${r.jobs[0]} starts \`${r.command}\` in steps ${steps}${r.same ? '' : ', on other paths or in another directory'}${priced}`;
-      return `jobs ${r.jobs.join(' and ')} both run \`${r.command}\` on the same kind of runner${priced}`;
+      const priced = r.seconds.every((s) => s !== null) ? ` (${r.seconds.map(fmtS).join(' and ')} a run)` : ' (not every step was timed in the sample)';
+      if (r.scope === 'job') return `job ${r.jobs[0]} runs the same test step twice, \`${r.command}\` in steps ${steps}${priced}`;
+      return `jobs ${r.jobs.join(' and ')} run the same test step, \`${r.command}\`, on the same runner, environment and directory${priced}`;
     };
     add(saving, 'tests run twice', repeats.slice(0, 3).map(describe).join('; ') + (repeats.length > 3 ? `; and ${repeats.length - 3} more` : ''),
       'run the suite once; where the second run checks a transformed tree (an export, a built package), keep it and gate it on the event that needs it, such as the push to the default branch',
       {
-        confidence: repeats.some((r) => r.same) ? 'confirmed' : 'inferred',
+        confidence: 'confirmed',
         tradeoff: 'a second run on a transformed tree checks that transform; gated, it checks it after the merge instead of on the pull request',
-        example: `- name: Tests on the built tree\n  if: github.event_name == 'push'   # once, on main; the pull request ran them above\n  run: ${repeats[0].command}${repeats[0].same ? '' : ' ...'}`,
+        example: `- name: Tests, second run\n  if: github.event_name == 'push'   # once, on main; the pull request ran them above\n  run: ${repeats[0].command}`,
       });
   }
 

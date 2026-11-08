@@ -27,7 +27,7 @@ test('testCommands: test runners are found behind shell keywords and a cd, repor
   assert.equal(stepName({}, 2), 'step 3');
 });
 
-test('repeatedTests: the same runner in two steps of one job, the same command or another path; two jobs with the same command on one kind of runner', () => {
+test('repeatedTests: the same one-command test step twice, in one job or in two jobs alike in every way the file shows', () => {
   const same = doc(`on: push
 jobs:
   test:
@@ -38,39 +38,7 @@ jobs:
       - name: Again
         run: npm test -- --silent
 `);
-  assert.deepEqual(repeatedTests(same), [{ scope: 'job', jobs: ['test'], steps: ['Unit tests', 'Again'], pure: [true, true], command: 'npm test', same: true }]);
-  const exported = doc(`on: push
-jobs:
-  test:
-    runs-on: [self-hosted, x]
-    steps:
-      - name: Unit tests
-        run: node --test a/*.test.mjs b/*.test.mjs
-      - name: Public edition
-        run: |
-          node tools/export.mjs "$RUNNER_TEMP/out"
-          cd "$RUNNER_TEMP/out"
-          node --test a/*.test.mjs
-`);
-  // The second run is in another directory (the cd): two suites as far as the file can tell, no repeat.
-  assert.deepEqual(repeatedTests(exported), []);
-  // The same runner on other paths in the same directory: a repeat the file cannot price.
-  const otherPaths = doc(`on: push
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: All
-        run: node --test a/*.test.mjs b/*.test.mjs
-      - name: Some
-        run: node --test a/*.test.mjs
-`);
-  const [r] = repeatedTests(otherPaths);
-  assert.equal(r.scope, 'job');
-  assert.equal(r.same, false);
-  assert.deepEqual(r.steps, ['All', 'Some']);
-  assert.equal(r.command, 'node --test');
-  assert.deepEqual(r.pure, [false, false]); // two different commands: two suites as far as the file can tell
+  assert.deepEqual(repeatedTests(same), [{ scope: 'job', jobs: ['test'], steps: ['Unit tests', 'Again'], command: 'npm test', same: true }]);
   const across = doc(`on: push
 jobs:
   unit:
@@ -82,12 +50,84 @@ jobs:
     steps:
       - run: pytest -q tests
 `);
-  assert.deepEqual(repeatedTests(across), [{ scope: 'workflow', jobs: ['unit', 'coverage'], steps: ['Run pytest tests', 'Run pytest -q tests'], pure: [true, true], command: 'pytest tests', same: true }]);
-  assert.equal(onlyCommand('set -euo pipefail\ncd pkg\nnpm test -- --silent', 'npm test'), true);
+  assert.deepEqual(repeatedTests(across), [{ scope: 'workflow', jobs: ['unit', 'coverage'], steps: ['Run pytest tests', 'Run pytest -q tests'], command: 'pytest tests', same: true }]);
+  assert.equal(onlyCommand('set -euo pipefail\nnpm test -- --silent', 'npm test'), true);
+  assert.equal(onlyCommand('cd pkg\nnpm test', 'npm test'), false); // a cd moves the tests: not the same step
   assert.equal(onlyCommand('npm test\nnpm run build', 'npm test'), false);
   assert.equal(onlyCommand('npm test\npytest tests/a', 'npm test'), false); // another suite is work that stays
   assert.equal(onlyCommand('npm run build', 'npm test'), false);
-  // Two jobs that never run in the same run are not a repeat; two steps gated apart neither.
+});
+
+test('repeatedTests: what the file can tell apart is no repeat: other paths, another directory, a cd, another environment, a build beside, a matrix, two platforms, a condition', () => {
+  // The same runner on other paths, or after an export and a cd: two suites as far as the file can tell.
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node --test a/*.test.mjs b/*.test.mjs\n      - run: node --test a/*.test.mjs\n')), []);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node --test a/*.test.mjs\n      - run: |\n          node tools/export.mjs out\n          cd out\n          node --test a/*.test.mjs\n')), []);
+  // The same cd before the test and after it are two directories; two cds anywhere are no repeat.
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          npm test\n          cd packages/backend\n      - run: |\n          cd packages/backend\n          npm test\n')), []);
+  // Another environment is another result.
+  const envs = doc(`on: push
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+        env:
+          DB_BACKEND: sqlite
+      - run: npm test
+        env:
+          DB_BACKEND: postgres
+  a:
+    runs-on: ubuntu-latest
+    env:
+      DB_BACKEND: sqlite
+    steps:
+      - run: npm test
+  b:
+    runs-on: ubuntu-latest
+    env:
+      DB_BACKEND: postgres
+    steps:
+      - run: npm test
+  c:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres
+    steps:
+      - run: npm test
+  d:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+`);
+  assert.deepEqual(repeatedTests(envs), []);
+  // A build or another suite beside the tests keeps work that must stay.
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          npm test\n          npm run build:a\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          npm test\n          npm run build:b\n')), []);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: |\n          npm test\n          pytest tests\n      - name: B\n        run: npm test\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - name: C\n        run: pytest tests\n')), []);
+  // Two scripts of one runner, one run each, are two suites.
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run test:unit\n      - run: npm run test:e2e\n')), []);
+  // One run, a matrix, two platforms.
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm ci\n      - run: npm test\n')), []);
+  const matrix = doc(`on: push
+jobs:
+  t:
+    runs-on: \${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - run: npm test
+  u:
+    runs-on: \${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    steps:
+      - run: npm test
+`);
+  assert.deepEqual(repeatedTests(matrix), []);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  linux:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n  mac:\n    runs-on: macos-latest\n    steps:\n      - run: npm test\n')), []);
+  // Two jobs, or two steps, that never run in the same run; under one condition they are a repeat.
   const gated = doc(`on: [push, pull_request]
 jobs:
   onpush:
@@ -110,38 +150,26 @@ jobs:
       - run: npm test
 `);
   assert.deepEqual(repeatedTests(gated).map((r) => r.jobs), [['both', 'both2']]);
-});
-
-test('repeatedTests: near misses stay quiet: one run, a matrix, two platforms, and two different suites', () => {
-  const once = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm ci\n      - run: npm test\n');
-  assert.deepEqual(repeatedTests(once), []);
-  const matrix = doc(`on: push
+  const gatedSteps = doc(`on: [push, pull_request]
 jobs:
   t:
-    runs-on: \${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+    runs-on: ubuntu-latest
     steps:
-      - run: npm test
-  u:
-    runs-on: \${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    steps:
-      - run: npm test
+      - name: On push
+        if: github.event_name == 'push'
+        run: npm test
+      - name: On pull request
+        if: github.event_name == 'pull_request'
+        run: npm test
+      - name: A
+        if: github.event_name == 'push'
+        run: pytest tests
+      - name: B
+        if: github.event_name == 'push'
+        run: pytest tests
 `);
-  assert.deepEqual(repeatedTests(matrix), []);
-  const platforms = doc('on: push\njobs:\n  linux:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n  mac:\n    runs-on: macos-latest\n    steps:\n      - run: npm test\n');
-  assert.deepEqual(repeatedTests(platforms), []);
-  const suites = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run test:unit\n      - run: npm run test:e2e\n');
-  // Two scripts of one runner in one job: the file cannot say they are the same tests, and the finding says so.
-  assert.deepEqual(repeatedTests(suites).map((r) => [r.scope, r.same, r.command]), [['job', false, 'npm run test']]);
-  // One step that starts two suites of one runner is one step, not a repeat.
-  const multiline = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Suites\n        run: |\n          pytest tests/unit\n          pytest tests/integration\n');
-  assert.deepEqual(repeatedTests(multiline), []);
-  // The same command in two directories is two suites: a monorepo's packages, within a job and across jobs.
+  assert.deepEqual(repeatedTests(gatedSteps).map((r) => [r.steps, r.command]), [[['A', 'B'], 'pytest tests']]);
+  // A monorepo: the same command in two declared directories is two suites; the same directory twice is a repeat.
   const monorepo = doc(`on: push
 defaults:
   run:
@@ -170,23 +198,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: npm test
-  four:
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          cd packages/web
-          npm test
 `);
   assert.deepEqual(repeatedTests(monorepo).map((r) => [r.scope, r.jobs, r.steps]), [['job', ['one'], ['Front', 'Also front']]]);
-  // Two steps of one job gated apart never run together; under one condition they are a repeat.
-  const gatedSteps = doc('on: [push, pull_request]\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: On push\n        if: github.event_name == \'push\'\n        run: npm test\n      - name: On pull request\n        if: github.event_name == \'pull_request\'\n        run: npm test\n      - name: A\n        if: github.event_name == \'push\'\n        run: pytest tests\n      - name: B\n        if: github.event_name == \'push\'\n        run: pytest tests\n');
-  assert.deepEqual(repeatedTests(gatedSteps).map((r) => [r.steps, r.command]), [[['A', 'B'], 'pytest tests']]);
-  // Two unnamed steps with the same command share a display name and are still two runs.
-  const unnamed = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n      - run: npm test\n');
-  assert.deepEqual(repeatedTests(unnamed), [{ scope: 'job', jobs: ['t'], steps: ['Run npm test', 'Run npm test'], pure: [true, true], command: 'npm test', same: true }]);
-  // Two runners in one job: the one started twice is found, the one started once is not.
-  const mixed = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: npm test\n      - name: B\n        run: npm test\n      - name: C\n        run: pytest tests\n');
-  assert.deepEqual(repeatedTests(mixed), [{ scope: 'job', jobs: ['t'], steps: ['A', 'B'], pure: [true, true], command: 'npm test', same: true }]);
+  // Two unnamed steps with the same command share a display name and are still two runs; a third runner
+  // started twice beside them is its own repeat, and a step in one finding is in no other.
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n      - run: npm test\n')), [{ scope: 'job', jobs: ['t'], steps: ['Run npm test', 'Run npm test'], command: 'npm test', same: true }]);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: npm test\n      - name: B\n        run: npm test\n      - name: C\n        run: pytest tests\n')), [{ scope: 'job', jobs: ['t'], steps: ['A', 'B'], command: 'npm test', same: true }]);
 });
 
 test('duplicateUploads: a SARIF uploaded as an artifact and to code scanning; a release asset uploaded twice; a failure-only or globbed artifact is not a duplicate', () => {
@@ -496,7 +513,7 @@ test('tests run twice: the shorter run is the saving, priced from the sample, co
   assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
   assert.equal(f.confidence, 'confirmed');
   assert.equal(f.saving_min_week, 10); // 20 s x 30 runs / 60
-  assert.match(f.evidence, /job test starts `npm test` in steps "Unit tests" and "Tests again" \(30 s and 20 s a run\)/);
+  assert.match(f.evidence, /job test runs the same test step twice, `npm test` in steps "Unit tests" and "Tests again" \(30 s and 20 s a run\)/);
   assert.match(f.example, /if: github.event_name == 'push'/);
   assert.match(f.tradeoff, /transformed tree/);
 });
@@ -535,65 +552,6 @@ jobs:
   // An API job no file job claims prices nothing.
   const unnamed = audit([{ name: 'CI', runs: runs(60), jobsPerRun: [[job({ steps: stepsOf(10) })]], file }]);
   assert.equal(find(unnamed, 'tests run twice').length, 0);
-});
-
-test('tests run twice: two jobs with one identical two-suite step are one cross-job finding, consumed once and not priced', () => {
-  const file = `on: push
-jobs:
-  a:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Suites
-        run: |
-          pytest tests/unit
-          pytest tests/integration
-  b:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Suites
-        run: |
-          pytest tests/unit
-          pytest tests/integration
-`;
-  const steps = [['Set up job', 1], ['Suites', 60], ['Complete job', 0]];
-  const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'a' }, { ...job({ steps }), name: 'b' }]], file }]);
-  // One cross-job finding, the steps consumed once. The step holds two suites and the match is one
-  // of them, so the step is not priced: the file cannot say the whole step would go.
-  assert.deepEqual(a.workflows[0].repeated_tests.map((r) => [r.scope, r.jobs, r.command, r.pure, r.seconds]), [['workflow', ['a', 'b'], 'pytest tests/unit', [false, false], [null, null]]]);
-  assert.equal(find(a, 'tests run twice').length, 0);
-  // A shared test beside distinct work in each step: the steps are matched, not priced, and the finding says why.
-  const builds = `on: push
-jobs:
-  a:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Test and build
-        run: |
-          npm test
-          npm run build:a
-  b:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Test and build
-        run: |
-          npm test
-          npm run build:b
-`;
-  const heavy = [['Set up job', 1], ['Test and build', 120], ['Complete job', 0]];
-  const h = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: heavy }), name: 'a' }, { ...job({ steps: heavy }), name: 'b' }]], file: builds }]);
-  assert.deepEqual(h.workflows[0].repeated_tests.map((r) => [r.pure, r.seconds]), [[[false, false], [null, null]]]);
-  assert.equal(find(h, 'tests run twice').length, 0); // nothing priced, nothing claimed
-  // The other work is another suite: still not priced.
-  const suites = builds.replace('npm run build:a', 'pytest tests/a').replace('npm run build:b', 'pytest tests/b');
-  const s = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: heavy }), name: 'a' }, { ...job({ steps: heavy }), name: 'b' }]], file: suites }]);
-  assert.deepEqual(s.workflows[0].repeated_tests.map((r) => [r.command, r.pure, r.seconds]), [['npm test', [false, false], [null, null]]]);
-  assert.equal(find(s, 'tests run twice').length, 0);
-  // A step in a within-job finding is out of every cross-job match, under any command.
-  const shared = doc('on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: |\n          npm test\n          pytest tests\n      - name: B\n        run: npm test\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - name: C\n        run: pytest tests\n');
-  assert.deepEqual(repeatedTests(shared).map((r) => [r.scope, r.steps, r.command]), [['job', ['A', 'B'], 'npm test']]);
-  // One step of two runners beside another such step: one finding, each step priced once.
-  const twoRunners = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: |\n          npm test\n          pytest tests\n      - name: B\n        run: |\n          npm test\n          pytest tests\n');
-  assert.deepEqual(repeatedTests(twoRunners).map((r) => [r.steps, r.command]), [[['A', 'B'], 'npm test']]);
 });
 
 test('tests run twice: two steps with one display name share a timing list and are priced at its minimum', () => {
