@@ -120,9 +120,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **On self-hosted runners** the rule fires at 2 s per step, when the workflow file has a
   `actions/setup-*` step (node, python, go, java, dotnet, ruby) on a job that runs on self-hosted
   runners and the step sets up the runtime and nothing else (no `cache`, `cache-dependency-path`,
-  `bundler-cache`, `registry-url` or other input that restores a cache or signs in to a registry:
-  dropping such a step would lose that work), each such step priced from its own job's sampled
-  runs. The host can carry the runtime,
+  `bundler-cache`, `registry-url` or other input that restores a cache or signs in to a registry,
+  and not `setup-go`, which caches by default, unless it says `cache: false`: dropping such a step
+  would lose that work), each such step priced from its own job's sampled runs. The host can carry the runtime,
   so the step only restates a version: a tool-cache hit still costs the step, and a cold row
   downloads the runtime again. **Estimate** those steps' time, times runs a week; the rest of the
   workflow's toolchain time (hosted jobs' included) is judged by the 15 s rule above on its own. **Fix** the runtime the host has, its
@@ -168,8 +168,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   other run, and a destination with no condition runs only on success, so an artifact step with
   `if: always()` or `!cancelled()` keeps the only copy of a failed run's file; a destination counts
   only under the artifact step's own condition, or with none when the artifact step runs on
-  success alone and the destination comes before it or right after it (a step between them that
-  fails would skip the destination after the artifact already went up). An upload that runs only on failure (`if: failure()`) is a crash's files kept for
+  success alone; and a destination after the artifact step counts only when it is the next step,
+  unless its own condition survives a failure (`always()`, `!cancelled()`), since any other
+  condition carries the implicit success() and a step between them that fails would skip the
+  destination after the artifact already went up. An upload that runs only on failure (`if: failure()`) is a crash's files kept for
   a look, not a duplicate. The OSSF Scorecard starter workflow carries this pattern.
 - **Confidence** confirmed.
 - **Estimate** the artifact step's time, times runs a week; the retention it adds is not costed.

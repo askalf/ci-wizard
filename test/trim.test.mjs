@@ -244,6 +244,36 @@ jobs:
 `);
   // In b the destination went first: a failure after it skips the artifact, never the destination.
   assert.deepEqual(duplicateUploads(between).map((u) => u.job), ['b']);
+  // The same with matching conditions: a tag condition still carries the implicit success(), so a
+  // failure between them skips the later destination; always() on the destination survives it.
+  const betweenGuarded = doc(`on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          path: results.sarif
+      - run: exit 1
+      - uses: github/codeql-action/upload-sarif@v3
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          sarif_file: results.sarif
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          path: results.sarif
+      - run: exit 1
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+`);
+  assert.deepEqual(duplicateUploads(betweenGuarded).map((u) => u.job), ['b']);
 });
 
 test('selfHostedSetups: a setup action on a self-hosted job, not on a hosted one', () => {
@@ -287,6 +317,30 @@ jobs:
           python-version: '3.12'
 `);
   assert.deepEqual(selfHostedSetups(more).map((s) => s.job), ['plain']);
+  // setup-go caches by default: only an explicit cache: false makes it runtime-only.
+  const go = doc(`on: push
+jobs:
+  cached:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+  plain:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+  node:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          cache: false
+`);
+  assert.deepEqual(selfHostedSetups(go).map((s) => s.job), ['plain', 'node']);
 });
 
 const twiceFile = `on: push

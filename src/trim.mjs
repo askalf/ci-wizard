@@ -169,12 +169,14 @@ export function duplicateUploads(doc) {
       // artifact step that runs after a failure too (always(), !cancelled()) then keeps the only
       // copy of a failed run's file, so such a destination counts only under the same condition.
       const afterFailure = /always\(\)|cancelled\(\)/.test(mine);
-      // A destination with no condition that comes later counts only when it comes next: a step
-      // between them that fails skips it (implicit success()) after the artifact already went up.
+      // A destination that comes later counts only when it comes next, unless its own condition
+      // survives a failure (always(), !cancelled()): any other condition, or none, carries the
+      // implicit success(), and a step between them that fails skips the destination after the
+      // artifact already went up.
       steps.forEach((other, j) => {
         if (j === i) return;
         if (guard(other) !== mine && (guard(other) !== '' || afterFailure)) return;
-        if (guard(other) === '' && j > i + 1) return;
+        if (j > i + 1 && !/always\(\)|cancelled\(\)/.test(guard(other))) return;
         const uses = String(other.uses || '');
         const w = other.with && typeof other.with === 'object' ? other.with : {};
         if (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) alsoTo.add('code scanning');
@@ -204,8 +206,11 @@ export function selfHostedSetups(doc) {
       if (!m) return;
       // A setup that also restores a dependency cache or signs the job in to a registry does more
       // than state a version: dropping it would lose that work, so it is not this rule's.
-      const inputs = st.with && typeof st.with === 'object' ? Object.keys(st.with) : [];
-      if (inputs.some((k) => /^(cache|cache-dependency-path|bundler-cache|registry-url|scope|always-auth|server-id|server-username|server-password|gpg-private-key|source-url)$/.test(k))) return;
+      const w = st.with && typeof st.with === 'object' ? st.with : {};
+      if (Object.keys(w).some((k) => /^(cache|cache-dependency-path|bundler-cache|registry-url|scope|always-auth|server-id|server-username|server-password|gpg-private-key|source-url)$/.test(k) && !(k === 'cache' && String(w[k]).trim().toLowerCase() === 'false'))) return;
+      // setup-go caches by default (v4 and later; the version is not checked, which only ever
+      // keeps a step): only an explicit `cache: false` makes it a runtime-only setup.
+      if (m[1] === 'go' && String(w.cache ?? '').trim().toLowerCase() !== 'false') return;
       found.push({ job: id, step: stepName(st, i), action: `setup-${m[1]}` });
     });
   }

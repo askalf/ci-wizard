@@ -9202,7 +9202,7 @@ function duplicateUploads(doc) {
       steps.forEach((other, j) => {
         if (j === i) return;
         if (guard(other) !== mine && (guard(other) !== "" || afterFailure)) return;
-        if (guard(other) === "" && j > i + 1) return;
+        if (j > i + 1 && !/always\(\)|cancelled\(\)/.test(guard(other))) return;
         const uses = String(other.uses || "");
         const w = other.with && typeof other.with === "object" ? other.with : {};
         if (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) alsoTo.add("code scanning");
@@ -9223,8 +9223,9 @@ function selfHostedSetups(doc) {
     stepsOf2(job).forEach((st, i) => {
       const m = /^actions\/setup-(node|python|go|java|dotnet|ruby)@/.exec(String(st.uses || ""));
       if (!m) return;
-      const inputs = st.with && typeof st.with === "object" ? Object.keys(st.with) : [];
-      if (inputs.some((k) => /^(cache|cache-dependency-path|bundler-cache|registry-url|scope|always-auth|server-id|server-username|server-password|gpg-private-key|source-url)$/.test(k))) return;
+      const w = st.with && typeof st.with === "object" ? st.with : {};
+      if (Object.keys(w).some((k) => /^(cache|cache-dependency-path|bundler-cache|registry-url|scope|always-auth|server-id|server-username|server-password|gpg-private-key|source-url)$/.test(k) && !(k === "cache" && String(w[k]).trim().toLowerCase() === "false"))) return;
+      if (m[1] === "go" && String(w.cache ?? "").trim().toLowerCase() !== "false") return;
       found.push({ job: id, step: stepName(st, i), action: `setup-${m[1]}` });
     });
   }
