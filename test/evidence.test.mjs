@@ -9,6 +9,7 @@ import { analyse } from '../src/analyse.mjs';
 import { artifactNameOf, duplicateUploads, onlyCommand, repeatedTests, sameTests, signaturesOf, stepSections, survivesFailure, testSignature } from '../src/trim.mjs';
 import { parseWorkflow } from '../src/workflow.mjs';
 import { data, find, job, runs } from './helpers.mjs';
+import { parse as parseYaml } from 'yaml';
 
 const audit = (workflows, o = {}) => analyse('owner/repo', data({ workflows, ...o }));
 const doc = (text) => parseWorkflow(text);
@@ -116,6 +117,25 @@ jobs:
   assert.equal(onlyCommand('echo "$(cp fixtures/postgres.conf backend.conf)"\nnpm test', 'npm test'), false);
   assert.equal(onlyCommand('echo `cp fixtures/postgres.conf backend.conf`\nnpm test', 'npm test'), false);
   assert.equal(onlyCommand('npm test <(cat args)', 'npm test <(cat args)'), false);
+  // An expression in a step's env, directory, shell or condition reads alike on two steps and can resolve apart once the first has run.
+  const seeded = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - id: first\n        run: npm test\n        env:\n          SEED: ${{ steps.first.outputs.seed || \'initial\' }}\n      - run: npm test\n        env:\n          SEED: ${{ steps.first.outputs.seed || \'initial\' }}\n';
+  assert.deepEqual(repeatedTests(doc(seeded)), []);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n        working-directory: ${{ env.DIR }}\n      - run: npm test\n        working-directory: ${{ env.DIR }}\n')), []);
+  const seedSteps = [['Set up job', 1], ['Run npm test', 30], ['Run npm test', 30], ['Complete job', 0]];
+  const seedLog = log([['npm test', tap(A)], ['npm test', tap(A)]]);
+  const sd = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: seedSteps }), name: 't', log_text: seedLog }]], file: seeded }]);
+  assert.equal(find(sd, 'tests run twice').length, 0, 'identical listings under a seed the first run published are two results');
+  // Quotes decide whether a brace, glob or tilde expands: two files against one file named test/{a,b}.mjs.
+  assert.equal(onlyCommand("node --test 'test/{a,b}.mjs'", 'node --test test/{a,b}.mjs'), false);
+  assert.equal(onlyCommand('node --test "test/*.mjs"', 'node --test test/*.mjs'), false);
+  assert.equal(onlyCommand('node --test test/{a,b}.mjs', 'node --test test/{a,b}.mjs'), true, 'unquoted, the words are the shell\'s own');
+  assert.equal(onlyCommand('node --test "test/a b.mjs"', 'node --test test/a b.mjs'), true, 'quoted without an expanding character: the boundary is the only effect, and the key keeps it');
+  const braces = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node --test test/{a,b}.mjs\n      - run: node --test \'test/{a,b}.mjs\'\n';
+  assert.deepEqual(repeatedTests(doc(braces)), []);
+  const bSteps = [['Set up job', 1], ['Run node --test test/{a,b}.mjs', 30], ["Run node --test 'test/{a,b}.mjs'", 30], ['Complete job', 0]];
+  const bLog = log([['node --test test/{a,b}.mjs', tap(['A', 'B'])], ["node --test 'test/{a,b}.mjs'", tap(['A', 'B'])]]);
+  const bb = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: bSteps }), name: 't', log_text: bLog }]], file: braces }]);
+  assert.equal(find(bb, 'tests run twice').length, 0);
   // A `$` anywhere: quotes are gone by the time the words compare, so '$FILE' (a file of that name) and "$FILE" (the file FILE names) would read alike.
   assert.equal(onlyCommand("node --test '$FILE'", "node --test $FILE"), false);
   assert.equal(onlyCommand('node --test "$FILE"', 'node --test $FILE'), false);
@@ -145,8 +165,16 @@ jobs:
   const sq = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: sqSteps }), name: 't', log_text: sqLog }]], file: sameQuoted }]);
   const [sqf] = find(sq, 'tests run twice');
   assert.ok(sqf, JSON.stringify(sq.findings.map((x) => x.what)));
-  assert.match(sqf.example, /\n  run: node --test "test\/a b.mjs"$/);
+  assert.match(sqf.example, /\n  run: \|\n    node --test "test\/a b.mjs"$/, 'always a block scalar, the script as written');
   assert.match(sqf.evidence, /`node --test test\/a b.mjs`/, 'the label is the command as a line');
+  // The example parses as workflow YAML and gives the script back, a colon and space in a file name included.
+  const colon = sameQuoted.replace(/test\/a b\.mjs/g, 'test/a: b.mjs');
+  const cLog = log([['node --test "test/a: b.mjs"', tap(['A', 'B'])], ['set -e', tap(['A', 'B'])]]);
+  const [cf] = find(audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: sqSteps }), name: 't', log_text: cLog }]], file: colon }]), 'tests run twice');
+  assert.ok(cf, 'a colon in the file name is no obstacle to the match');
+  const parsed = parseYaml(cf.example);
+  assert.equal(parsed[0].run, 'node --test "test/a: b.mjs"\n');
+  assert.equal(parsed[0].if, "github.event_name == 'push' && github.ref == 'refs/heads/<default branch>'");
   // A multi-line script is repeated as a block.
   const multi = sameQuoted.replace('      - name: A\n        run: node --test "test/a b.mjs"\n', '      - name: A\n        run: |\n          set -e\n          node --test "test/a b.mjs"\n');
   const mLog = log([['set -e', tap(['A', 'B'])], ['set -e', tap(['A', 'B'])]]);

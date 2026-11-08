@@ -8556,6 +8556,7 @@ function testCommandKeys(script) {
 }
 function onlyCommand(script, command2) {
   if (/\||\$|`|<|>\(/.test(String(script))) return false;
+  if (/['"]/.test(String(script)) && /[{}*?[\]~]/.test(String(script))) return false;
   const commands = shellCommands(script);
   if (!commands.length) return false;
   let hits = 0;
@@ -8613,6 +8614,7 @@ function repeatedTests(doc) {
       const [key2] = keys;
       if (!onlyCommand(st.run, key2)) return;
       const stepKey = [key2, cond(st), dirOf(st, job), text(st.env), text(st.shell)].join("\0");
+      if (stepKey.includes("${{")) return;
       if (!inJob.has(stepKey)) inJob.set(stepKey, []);
       const name = stepName(st, i);
       const shared = name.includes("${{") || all.filter((x, k) => shown(stepName(x, k)) === shown(name)).length > 1;
@@ -10334,11 +10336,12 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
         tradeoff: "a second run kept to catch a flaky test is the point of itself: keep it, and say so in the step name; gated, the second run happens after the merge instead of on the pull request",
         // The gate names the event and the default branch both: `push` alone would keep the second
         // run on every branch's pushes. The step's script is repeated as written (quoting and all),
-        // never rebuilt from the command's words.
+        // never rebuilt from the command's words, and always as a block scalar: a plain scalar would
+        // read `node --test "test/a: b.mjs"` as a mapping.
         example: `- name: Tests, second run
   if: github.event_name == 'push' && github.ref == 'refs/heads/${defaultBranch || "<default branch>"}'   # once, after the merge; the pull request ran them above
-  run: ${repeats[0].script.includes("\n") ? `|
-    ${repeats[0].script.split("\n").join("\n    ")}` : repeats[0].script}`
+  run: |
+    ${repeats[0].script.split("\n").join("\n    ")}`
       }
     );
   }

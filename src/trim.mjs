@@ -137,6 +137,10 @@ export function onlyCommand(script, command) {
   // `node --test '$FILE'` (a file named $FILE) and `node --test "$FILE"` (the file FILE names)
   // would read alike.
   if (/\||\$|`|<|>\(/.test(String(script))) return false;
+  // Quotes decide whether a brace, glob or tilde expands: `node --test test/{a,b}.mjs` runs two
+  // files and `node --test 'test/{a,b}.mjs'` one, and the words read alike once the quotes are
+  // gone. A script with both a quote and such a character is not established as one command.
+  if (/['"]/.test(String(script)) && /[{}*?[\]~]/.test(String(script))) return false;
   const commands = shellCommands(script);
   if (!commands.length) return false;
   let hits = 0;
@@ -223,8 +227,11 @@ export function repeatedTests(doc) {
       if (keys.size !== 1) return;
       const [key] = keys;
       if (!onlyCommand(st.run, key)) return;
-      // Everything the file says about where and how the step runs is part of its identity.
+      // Everything the file says about where and how the step runs is part of its identity, and
+      // none of it may be an expression: `env: SEED: ${{ steps.first.outputs.seed || 'initial' }}`
+      // reads alike on two steps and resolves apart once the first has run.
       const stepKey = [key, cond(st), dirOf(st, job), text(st.env), text(st.shell)].join('\u0000');
+      if (stepKey.includes('${{')) return;
       if (!inJob.has(stepKey)) inJob.set(stepKey, []);
       const name = stepName(st, i);
       const shared = name.includes('${{') || all.filter((x, k) => shown(stepName(x, k)) === shown(name)).length > 1;

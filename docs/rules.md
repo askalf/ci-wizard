@@ -171,10 +171,13 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   args` assigns what a following `pytest "$@"`
   reads, a `cd` moves the tests, an `export` changes their environment, a pipe anywhere feeds or
   captures them, an input redirection of any kind feeds them (a here-document, a here-string, a
-  file), and a command or process substitution anywhere, an echo's argument included, runs a
-  command of its own: none of those is aside), under the same `if:`, in the same declared working
-  directory (the step's, else the job's, else the workflow's `defaults.run`), with the same step
-  `env:` and `shell:`. In one job, two such steps next to each other (a step between them, a
+  file), a command or process substitution anywhere, an echo's argument included, runs a command
+  of its own, and a quote beside a brace, glob or tilde decides whether it expands, `node --test
+  'test/{a,b}.mjs'` being one file where the unquoted line is two: none of those is aside),
+  under the same `if:`, in the same declared working directory (the step's, else the job's, else
+  the workflow's `defaults.run`), with the same step `env:` and `shell:`, and with no expression
+  in any of those (`env: SEED: ${{ steps.first.outputs.seed || 'initial' }}` reads alike on two
+  steps and resolves apart once the first has run). In one job, two such steps next to each other (a step between them, a
   setup, a build or a write, can change what the second one tests); or in two jobs of the run that
   also share `runs-on`, `environment:` (staging against production resolves the same secret to two
   endpoints), job `env:`, `container:`, `services:`, `defaults:`, `if:` and every step before the
@@ -213,7 +216,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   minimum. A step the sample never timed adds nothing, and the evidence says so.
 - **Fix** run the suite once. Where the second run is wanted on one event (the push to the default
   branch, a release), keep it and gate it on that event; the example gates on `push` to the
-  repository's default branch and repeats the step's own script as written, quoting and all.
+  repository's default branch and repeats the step's own script as written, quoting and all, as
+  a YAML block scalar (a plain scalar would read a `: ` inside the script as a mapping).
   *Trade-off:* a second run kept to catch a
   flaky test is the point of itself: keep it, and say so in the step name; gated, the second run
   happens after the merge instead of on the pull request.
