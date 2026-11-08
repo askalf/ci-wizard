@@ -149,7 +149,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   commands in one job, since the file cannot say they are the same tests.
 - **Estimate** the shorter step's time (the second run), times runs a week, each step priced from
   the sampled runs of its own job (the file's job matched to the API's job names as the timeout
-  rule matches them). A step the sample never timed adds nothing, and the evidence says so.
+  rule matches them), and only when the step does nothing but run tests (`set`, `cd`, `export`
+  and `echo` aside): a step with a build or an export beside its tests is matched, not priced,
+  since only the tests would go and the timing covers the whole step. A step the sample never
+  timed adds nothing either, and the evidence says which.
 - **Fix** run the suite once. Where the second run checks a transformed tree (an export, a built
   package), keep it and gate it on the event that needs it, such as the push to the default
   branch. *Trade-off:* gated, that check runs after the merge instead of on the pull request.
@@ -169,9 +172,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   `if: always()` or `!cancelled()` keeps the only copy of a failed run's file; a destination counts
   only under the artifact step's own condition, or with none when the artifact step runs on
   success alone; and a destination after the artifact step counts only when it is the next step,
-  unless its own condition survives a failure (`always()`, `!cancelled()`), since any other
-  condition carries the implicit success() and a step between them that fails would skip the
-  destination after the artifact already went up. An upload that runs only on failure (`if: failure()`) is a crash's files kept for
+  unless its own condition is exactly `always()` or `!cancelled()`, since any other condition,
+  `always() && success()` included, carries the implicit success() and a step between them that
+  fails would skip the destination after the artifact already went up. An upload that runs only on failure (`if: failure()`) is a crash's files kept for
   a look, not a duplicate. The OSSF Scorecard starter workflow carries this pattern.
 - **Confidence** confirmed.
 - **Estimate** the artifact step's time, times runs a week; the retention it adds is not costed.

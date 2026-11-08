@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { analyse } from '../src/analyse.mjs';
 import { createClient } from '../src/github.mjs';
 import { savingText } from '../src/report.mjs';
-import { duplicateUploads, repeatedTests, runnerOf, selfHostedSetups, stepName, testCommands } from '../src/trim.mjs';
+import { duplicateUploads, onlyTests, repeatedTests, runnerOf, selfHostedSetups, stepName, survivesFailure, testCommands } from '../src/trim.mjs';
 import { parseWorkflow } from '../src/workflow.mjs';
 import { data, find, job, runs } from './helpers.mjs';
 
@@ -38,7 +38,7 @@ jobs:
       - name: Again
         run: npm test -- --silent
 `);
-  assert.deepEqual(repeatedTests(same), [{ scope: 'job', jobs: ['test'], steps: ['Unit tests', 'Again'], command: 'npm test', same: true }]);
+  assert.deepEqual(repeatedTests(same), [{ scope: 'job', jobs: ['test'], steps: ['Unit tests', 'Again'], pure: [true, true], command: 'npm test', same: true }]);
   const exported = doc(`on: push
 jobs:
   test:
@@ -57,6 +57,7 @@ jobs:
   assert.equal(r.same, false);
   assert.deepEqual(r.steps, ['Unit tests', 'Public edition']);
   assert.equal(r.command, 'node --test');
+  assert.deepEqual(r.pure, [true, false]); // the export step does other work beside its tests
   const across = doc(`on: push
 jobs:
   unit:
@@ -68,7 +69,10 @@ jobs:
     steps:
       - run: pytest -q tests
 `);
-  assert.deepEqual(repeatedTests(across), [{ scope: 'workflow', jobs: ['unit', 'coverage'], steps: ['Run pytest tests', 'Run pytest -q tests'], command: 'pytest tests', same: true }]);
+  assert.deepEqual(repeatedTests(across), [{ scope: 'workflow', jobs: ['unit', 'coverage'], steps: ['Run pytest tests', 'Run pytest -q tests'], pure: [true, true], command: 'pytest tests', same: true }]);
+  assert.equal(onlyTests('set -euo pipefail\ncd pkg\nnpm test'), true);
+  assert.equal(onlyTests('npm test\nnpm run build'), false);
+  assert.equal(onlyTests('npm run build'), false);
 });
 
 test('repeatedTests: near misses stay quiet: one run, a matrix, two platforms, and two different suites', () => {
@@ -102,10 +106,10 @@ jobs:
   assert.deepEqual(repeatedTests(multiline), []);
   // Two unnamed steps with the same command share a display name and are still two runs.
   const unnamed = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n      - run: npm test\n');
-  assert.deepEqual(repeatedTests(unnamed), [{ scope: 'job', jobs: ['t'], steps: ['Run npm test', 'Run npm test'], command: 'npm test', same: true }]);
+  assert.deepEqual(repeatedTests(unnamed), [{ scope: 'job', jobs: ['t'], steps: ['Run npm test', 'Run npm test'], pure: [true, true], command: 'npm test', same: true }]);
   // Two runners in one job: the one started twice is found, the one started once is not.
   const mixed = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: npm test\n      - name: B\n        run: npm test\n      - name: C\n        run: pytest tests\n');
-  assert.deepEqual(repeatedTests(mixed), [{ scope: 'job', jobs: ['t'], steps: ['A', 'B'], command: 'npm test', same: true }]);
+  assert.deepEqual(repeatedTests(mixed), [{ scope: 'job', jobs: ['t'], steps: ['A', 'B'], pure: [true, true], command: 'npm test', same: true }]);
 });
 
 test('duplicateUploads: a SARIF uploaded as an artifact and to code scanning; a release asset uploaded twice; a failure-only or globbed artifact is not a duplicate', () => {
@@ -274,6 +278,27 @@ jobs:
           sarif_file: results.sarif
 `);
   assert.deepEqual(duplicateUploads(betweenGuarded).map((u) => u.job), ['b']);
+  // A compound condition that mentions always() still carries success(): it does not survive the failure.
+  const compound = doc(betweenGuarded === null ? '' : `on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        if: always() && success()
+        with:
+          path: results.sarif
+      - run: exit 1
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always() && success()
+        with:
+          sarif_file: results.sarif
+`);
+  assert.deepEqual(duplicateUploads(compound), []);
+  assert.equal(survivesFailure('always()'), true);
+  assert.equal(survivesFailure('${{ !cancelled() }}'), true);
+  assert.equal(survivesFailure('always() && success()'), false);
+  assert.equal(survivesFailure(''), false);
 });
 
 test('selfHostedSetups: a setup action on a self-hosted job, not on a hosted one', () => {
@@ -425,6 +450,28 @@ jobs:
   const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'a' }, { ...job({ steps }), name: 'b' }]], file }]);
   assert.deepEqual(a.workflows[0].repeated_tests.map((r) => [r.scope, r.jobs, r.command]), [['workflow', ['a', 'b'], 'pytest tests/unit']]);
   assert.equal(find(a, 'tests run twice')[0].saving_min_week, 30); // one 60 s step x 30 runs / 60, not two
+  // A shared test beside distinct work in each step: the steps are matched, not priced, and the finding says why.
+  const builds = `on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test and build
+        run: |
+          npm test
+          npm run build:a
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test and build
+        run: |
+          npm test
+          npm run build:b
+`;
+  const heavy = [['Set up job', 1], ['Test and build', 120], ['Complete job', 0]];
+  const h = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: heavy }), name: 'a' }, { ...job({ steps: heavy }), name: 'b' }]], file: builds }]);
+  assert.deepEqual(h.workflows[0].repeated_tests.map((r) => [r.pure, r.seconds]), [[[false, false], [null, null]]]);
+  assert.equal(find(h, 'tests run twice').length, 0); // nothing priced, nothing claimed
   // A step in a within-job finding is out of every cross-job match, under any command.
   const shared = doc('on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: |\n          npm test\n          pytest tests\n      - name: B\n        run: npm test\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - name: C\n        run: pytest tests\n');
   assert.deepEqual(repeatedTests(shared).map((r) => [r.scope, r.steps, r.command]), [['job', ['A', 'B'], 'npm test']]);

@@ -31,6 +31,33 @@ const REPORTING = [
   /\s-(q|v|vv)\b/g,
 ];
 
+/** A condition that runs the step after an earlier failure: exactly always() or !cancelled(), nothing compound (always() && success() does not). */
+export function survivesFailure(condition) {
+  return /^(\$\{\{\s*)?(always\(\)|!\s*cancelled\(\))(\s*\}\})?$/.test(String(condition ?? '').trim());
+}
+
+/** Shell commands a test step may carry beside its tests without doing other work. */
+const HARMLESS = new Set(['set', 'cd', 'export', 'echo', 'true', ':', 'pwd']);
+
+/**
+ * Whether a script does nothing but run tests: every command is a test command, or one of the
+ * harmless few (set, cd, export, echo). A step with a build or an export beside its tests is not
+ * priced as a whole, since only the tests would go.
+ */
+export function onlyTests(script) {
+  const commands = shellCommands(script);
+  if (!commands.length) return false;
+  let tests = 0;
+  for (const words of commands) {
+    const ws = [...words];
+    while (ws.length && KEYWORDS.has(ws[0])) ws.shift();
+    if (!ws.length) continue;
+    if (TEST_RUNNERS.some((rx) => rx.test(ws.join(' ')))) { tests++; continue; }
+    if (!HARMLESS.has(ws[0])) return false;
+  }
+  return tests > 0;
+}
+
 /** Words a shell reads as structure before the command: a command after one is still that command. */
 const KEYWORDS = new Set(['then', 'do', 'else', 'elif', '{', '(', '!', 'time', 'exec']);
 
@@ -79,7 +106,8 @@ export function stepName(st, i = 0) {
  * same command (`same: true`) or the runner on other paths or in another directory (`same:
  * false`, an exported or built tree). Across the workflow (scope "workflow"): two jobs start the
  * same command on the same kind of runner with no matrix. A matrix leg is one job to GitHub, and
- * the same tests on two runners are two results, so neither counts.
+ * the same tests on two runners are two results, so neither counts. `pure` says, per step,
+ * whether the step does nothing but run tests: only such a step is priced as a whole.
  */
 export function repeatedTests(doc) {
   const found = [];
@@ -94,30 +122,31 @@ export function repeatedTests(doc) {
     stepsOf(job).forEach((st, i) => {
       if (st.run === undefined) return;
       const name = stepName(st, i);
+      const pure = onlyTests(st.run);
       for (const command of new Set(testCommands(st.run))) {
         if (!inJob.has(command)) inJob.set(command, []);
-        inJob.get(command).push({ index: i, name });
+        inJob.get(command).push({ index: i, name, pure });
         // Occurrences by step, not by display name: two unnamed `run: npm test` steps are both
         // "Run npm test", and are two runs.
         const runner = runnerOf(command);
         if (!byRunner.has(runner)) byRunner.set(runner, []);
-        byRunner.get(runner).push({ index: i, name, command });
+        byRunner.get(runner).push({ index: i, name, command, pure });
       }
     });
     for (const [command, steps] of inJob) {
       if (!byCommand.has(command)) byCommand.set(command, []);
-      byCommand.get(command).push({ job: id, step: steps[0].name, index: steps[0].index, runsOn: JSON.stringify(job['runs-on'] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
+      byCommand.get(command).push({ job: id, step: steps[0].name, index: steps[0].index, pure: steps[0].pure, runsOn: JSON.stringify(job['runs-on'] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
     for (const [runner, occurrences] of byRunner) {
       // One step that starts two suites of one runner is one step: distinct steps by index, each
       // named once, and none that an earlier runner's finding already took.
       const byIndex = new Map();
-      for (const o of occurrences) if (!byIndex.has(o.index) && !used.has(key(id, o.index))) byIndex.set(o.index, o.name);
-      const steps = [...byIndex.values()];
+      for (const o of occurrences) if (!byIndex.has(o.index) && !used.has(key(id, o.index))) byIndex.set(o.index, o);
+      const steps = [...byIndex.values()].map((o) => o.name);
       const commands = [...new Set(occurrences.filter((o) => byIndex.has(o.index)).map((o) => o.command))];
       // Two steps of this runner: the same command in both, or two commands (other paths, another directory).
       if (steps.length > 1) {
-        found.push({ scope: 'job', jobs: [id], steps, command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
+        found.push({ scope: 'job', jobs: [id], steps, pure: [...byIndex.values()].map((o) => o.pure), command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
         for (const i of byIndex.keys()) used.add(key(id, i));
       }
     }
@@ -131,7 +160,7 @@ export function repeatedTests(doc) {
     }
     for (const ws of groups.values()) {
       if (ws.length > 1) {
-        found.push({ scope: 'workflow', jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), command, same: true });
+        found.push({ scope: 'workflow', jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), pure: ws.map((w) => w.pure), command, same: true });
         for (const w of ws) used.add(key(w.job, w.index));
       }
     }
@@ -176,7 +205,7 @@ export function duplicateUploads(doc) {
       steps.forEach((other, j) => {
         if (j === i) return;
         if (guard(other) !== mine && (guard(other) !== '' || afterFailure)) return;
-        if (j > i + 1 && !/always\(\)|cancelled\(\)/.test(guard(other))) return;
+        if (j > i + 1 && !survivesFailure(guard(other))) return;
         const uses = String(other.uses || '');
         const w = other.with && typeof other.with === 'object' ? other.with : {};
         if (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) alsoTo.add('code scanning');

@@ -9087,6 +9087,26 @@ var REPORTING = [
   /\s--(quiet|verbose|silent|no-color|color)\b/g,
   /\s-(q|v|vv)\b/g
 ];
+function survivesFailure(condition) {
+  return /^(\$\{\{\s*)?(always\(\)|!\s*cancelled\(\))(\s*\}\})?$/.test(String(condition ?? "").trim());
+}
+var HARMLESS = /* @__PURE__ */ new Set(["set", "cd", "export", "echo", "true", ":", "pwd"]);
+function onlyTests(script) {
+  const commands = shellCommands(script);
+  if (!commands.length) return false;
+  let tests = 0;
+  for (const words of commands) {
+    const ws = [...words];
+    while (ws.length && KEYWORDS.has(ws[0])) ws.shift();
+    if (!ws.length) continue;
+    if (TEST_RUNNERS.some((rx) => rx.test(ws.join(" ")))) {
+      tests++;
+      continue;
+    }
+    if (!HARMLESS.has(ws[0])) return false;
+  }
+  return tests > 0;
+}
 var KEYWORDS = /* @__PURE__ */ new Set(["then", "do", "else", "elif", "{", "(", "!", "time", "exec"]);
 function testCommands(script) {
   const out = [];
@@ -9127,25 +9147,26 @@ function repeatedTests(doc) {
     stepsOf2(job).forEach((st, i) => {
       if (st.run === void 0) return;
       const name = stepName(st, i);
+      const pure = onlyTests(st.run);
       for (const command of new Set(testCommands(st.run))) {
         if (!inJob.has(command)) inJob.set(command, []);
-        inJob.get(command).push({ index: i, name });
+        inJob.get(command).push({ index: i, name, pure });
         const runner = runnerOf(command);
         if (!byRunner.has(runner)) byRunner.set(runner, []);
-        byRunner.get(runner).push({ index: i, name, command });
+        byRunner.get(runner).push({ index: i, name, command, pure });
       }
     });
     for (const [command, steps] of inJob) {
       if (!byCommand.has(command)) byCommand.set(command, []);
-      byCommand.get(command).push({ job: id, step: steps[0].name, index: steps[0].index, runsOn: JSON.stringify(job["runs-on"] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
+      byCommand.get(command).push({ job: id, step: steps[0].name, index: steps[0].index, pure: steps[0].pure, runsOn: JSON.stringify(job["runs-on"] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
     for (const [runner, occurrences] of byRunner) {
       const byIndex = /* @__PURE__ */ new Map();
-      for (const o of occurrences) if (!byIndex.has(o.index) && !used.has(key(id, o.index))) byIndex.set(o.index, o.name);
-      const steps = [...byIndex.values()];
+      for (const o of occurrences) if (!byIndex.has(o.index) && !used.has(key(id, o.index))) byIndex.set(o.index, o);
+      const steps = [...byIndex.values()].map((o) => o.name);
       const commands = [...new Set(occurrences.filter((o) => byIndex.has(o.index)).map((o) => o.command))];
       if (steps.length > 1) {
-        found.push({ scope: "job", jobs: [id], steps, command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
+        found.push({ scope: "job", jobs: [id], steps, pure: [...byIndex.values()].map((o) => o.pure), command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
         for (const i of byIndex.keys()) used.add(key(id, i));
       }
     }
@@ -9159,7 +9180,7 @@ function repeatedTests(doc) {
     }
     for (const ws of groups.values()) {
       if (ws.length > 1) {
-        found.push({ scope: "workflow", jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), command, same: true });
+        found.push({ scope: "workflow", jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), pure: ws.map((w) => w.pure), command, same: true });
         for (const w of ws) used.add(key(w.job, w.index));
       }
     }
@@ -9185,7 +9206,7 @@ function duplicateUploads(doc) {
       steps.forEach((other, j) => {
         if (j === i) return;
         if (guard(other) !== mine && (guard(other) !== "" || afterFailure)) return;
-        if (j > i + 1 && !/always\(\)|cancelled\(\)/.test(guard(other))) return;
+        if (j > i + 1 && !survivesFailure(guard(other))) return;
         const uses = String(other.uses || "");
         const w = other.with && typeof other.with === "object" ? other.with : {};
         if (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) alsoTo.add("code scanning");
@@ -9790,7 +9811,7 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     // Two steps with one display name ("Run npm test" twice) share one timing list; each is then
     // priced at that list's minimum, the conservative reading of an ambiguous match.
     repeated_tests: repeatedTests(doc).map((r) => {
-      return { ...r, seconds: r.steps.map((s, i) => priced(r.jobs[r.scope === "job" ? 0 : i], s, { low: new Set(r.steps).size !== r.steps.length })) };
+      return { ...r, seconds: r.steps.map((s, i) => r.pure[i] ? priced(r.jobs[r.scope === "job" ? 0 : i], s, { low: new Set(r.steps).size !== r.steps.length }) : null) };
     }),
     duplicate_uploads: duplicateUploads(doc).map((u) => ({ ...u, seconds: priced(u.job, u.step) })),
     selfhosted_setups: selfHostedSetups(doc).map((s) => ({ ...s, seconds: priced(s.job, s.step) })),
@@ -9916,7 +9937,7 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
     const saving = repeats.reduce((s, r) => s + secondsOf(r), 0) * w.runs_week / 60;
     const describe = (r) => {
       const steps = r.steps.map((s) => `"${s}"`).join(" and ");
-      const priced = r.seconds.every((s) => s !== null) ? ` (${r.seconds.map(fmtS).join(" and ")} a run)` : " (not every step was timed in the sample)";
+      const priced = r.seconds.every((s) => s !== null) ? ` (${r.seconds.map(fmtS).join(" and ")} a run)` : r.pure.every(Boolean) ? " (not every step was timed in the sample)" : " (not priced: a step does other work beside the tests, and only the tests would go)";
       if (r.scope === "job") return `job ${r.jobs[0]} starts \`${r.command}\` in steps ${steps}${r.same ? "" : ", on other paths or in another directory"}${priced}`;
       return `jobs ${r.jobs.join(" and ")} both run \`${r.command}\` on the same kind of runner${priced}`;
     };

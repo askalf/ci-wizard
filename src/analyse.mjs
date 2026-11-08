@@ -301,7 +301,9 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     // Two steps with one display name ("Run npm test" twice) share one timing list; each is then
     // priced at that list's minimum, the conservative reading of an ambiguous match.
     repeated_tests: repeatedTests(doc).map((r) => {
-      return { ...r, seconds: r.steps.map((s, i) => priced(r.jobs[r.scope === 'job' ? 0 : i], s, { low: new Set(r.steps).size !== r.steps.length })) };
+      // A step that does other work beside its tests (a build, an export) is not priced: only the
+      // tests would go, and the timing covers the whole step.
+      return { ...r, seconds: r.steps.map((s, i) => (r.pure[i] ? priced(r.jobs[r.scope === 'job' ? 0 : i], s, { low: new Set(r.steps).size !== r.steps.length }) : null)) };
     }),
     duplicate_uploads: duplicateUploads(doc).map((u) => ({ ...u, seconds: priced(u.job, u.step) })),
     selfhosted_setups: selfHostedSetups(doc).map((s) => ({ ...s, seconds: priced(s.job, s.step) })),
@@ -424,7 +426,7 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
     const saving = repeats.reduce((s, r) => s + secondsOf(r), 0) * w.runs_week / 60;
     const describe = (r) => {
       const steps = r.steps.map((s) => `"${s}"`).join(' and ');
-      const priced = r.seconds.every((s) => s !== null) ? ` (${r.seconds.map(fmtS).join(' and ')} a run)` : ' (not every step was timed in the sample)';
+      const priced = r.seconds.every((s) => s !== null) ? ` (${r.seconds.map(fmtS).join(' and ')} a run)` : r.pure.every(Boolean) ? ' (not every step was timed in the sample)' : ' (not priced: a step does other work beside the tests, and only the tests would go)';
       if (r.scope === 'job') return `job ${r.jobs[0]} starts \`${r.command}\` in steps ${steps}${r.same ? '' : ', on other paths or in another directory'}${priced}`;
       return `jobs ${r.jobs.join(' and ')} both run \`${r.command}\` on the same kind of runner${priced}`;
     };
