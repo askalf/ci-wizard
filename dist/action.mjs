@@ -8530,7 +8530,17 @@ var HARMLESS = /* @__PURE__ */ new Set(["echo", "true", ":", "pwd"]);
 function setsOptionsOnly(words) {
   const rest = words.slice(1);
   if (!rest.length) return false;
-  return rest.every((w, k) => /^[-+][a-zA-Z]+$/.test(w) || /^[-+][a-zA-Z]*o$/.test(rest[k - 1] ?? "") && /^[a-z]+$/.test(w));
+  for (let k = 0; k < rest.length; k++) {
+    const w = rest[k];
+    if (/^[-+][eux]+$/.test(w)) continue;
+    if (/^[-+][eux]*o$/.test(w)) {
+      if (!/^(pipefail|errexit|nounset|xtrace)$/.test(rest[k + 1] ?? "")) return false;
+      k++;
+      continue;
+    }
+    return false;
+  }
+  return true;
 }
 var KEYWORDS = /* @__PURE__ */ new Set(["then", "do", "else", "elif", "{", "(", "!", "time", "exec"]);
 function testCommands(script) {
@@ -8545,7 +8555,7 @@ function testCommandKeys(script) {
   return out;
 }
 function onlyCommand(script, command2) {
-  if (/\||\$\(|`|<|>\(/.test(String(script))) return false;
+  if (/\||\$|`|<|>\(/.test(String(script))) return false;
   const commands = shellCommands(script);
   if (!commands.length) return false;
   let hits = 0;
@@ -8606,7 +8616,7 @@ function repeatedTests(doc) {
       if (!inJob.has(stepKey)) inJob.set(stepKey, []);
       const name = stepName(st, i);
       const shared = name.includes("${{") || all.filter((x, k) => shown(stepName(x, k)) === shown(name)).length > 1;
-      inJob.get(stepKey).push({ index: i, name, header: logHeader(st), command: commandOfKey(key2), shared });
+      inJob.get(stepKey).push({ index: i, name, header: logHeader(st), command: commandOfKey(key2), script: String(st.run).trim(), shared });
     });
     for (const [stepKey, steps] of inJob) {
       const runs = [];
@@ -8617,7 +8627,7 @@ function repeatedTests(doc) {
       }
       for (const run2 of runs) {
         if (run2.length > 1) {
-          found.push({ scope: "job", jobs: [id], steps: run2.map((o) => o.name), headers: run2.map((o) => o.header), shared: run2.map((o) => o.shared), command: run2[0].command });
+          found.push({ scope: "job", jobs: [id], steps: run2.map((o) => o.name), headers: run2.map((o) => o.header), shared: run2.map((o) => o.shared), command: run2[0].command, script: run2[0].script });
           for (const o of run2) used.add(key(id, o.index));
         }
       }
@@ -8626,13 +8636,13 @@ function repeatedTests(doc) {
       const jobKey = [stepKey, text(job["runs-on"]), text(job.environment), text(job.env), text(job.container), text(job.services), text(job.defaults), cond(job), before].join("\0");
       if (jobKey.includes("${{")) continue;
       if (!byCommand.has(jobKey)) byCommand.set(jobKey, []);
-      byCommand.get(jobKey).push({ job: id, step: first.name, header: first.header, shared: first.shared, index: first.index, command: first.command, matrix: Boolean(job.strategy && job.strategy.matrix) });
+      byCommand.get(jobKey).push({ job: id, step: first.name, header: first.header, shared: first.shared, index: first.index, command: first.command, script: first.script, matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
   }
   for (const where2 of byCommand.values()) {
     const ws = where2.filter((w) => !w.matrix && !used.has(key(w.job, w.index)));
     if (ws.length > 1) {
-      found.push({ scope: "workflow", jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), headers: ws.map((w) => w.header), shared: ws.map((w) => w.shared), command: ws[0].command });
+      found.push({ scope: "workflow", jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), headers: ws.map((w) => w.header), shared: ws.map((w) => w.shared), command: ws[0].command, script: ws[0].script });
       for (const w of ws) used.add(key(w.job, w.index));
     }
   }
@@ -10323,10 +10333,12 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
         confidence: "measured",
         tradeoff: "a second run kept to catch a flaky test is the point of itself: keep it, and say so in the step name; gated, the second run happens after the merge instead of on the pull request",
         // The gate names the event and the default branch both: `push` alone would keep the second
-        // run on every branch's pushes.
+        // run on every branch's pushes. The step's script is repeated as written (quoting and all),
+        // never rebuilt from the command's words.
         example: `- name: Tests, second run
   if: github.event_name == 'push' && github.ref == 'refs/heads/${defaultBranch || "<default branch>"}'   # once, after the merge; the pull request ran them above
-  run: ${repeats[0].command}`
+  run: ${repeats[0].script.includes("\n") ? `|
+    ${repeats[0].script.split("\n").join("\n    ")}` : repeats[0].script}`
       }
     );
   }

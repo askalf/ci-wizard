@@ -83,7 +83,20 @@ const HARMLESS = new Set(['echo', 'true', ':', 'pwd']);
 function setsOptionsOnly(words) {
   const rest = words.slice(1);
   if (!rest.length) return false;
-  return rest.every((w, k) => /^[-+][a-zA-Z]+$/.test(w) || (/^[-+][a-zA-Z]*o$/.test(rest[k - 1] ?? '') && /^[a-z]+$/.test(w)));
+  // Only the options that stop or trace the script (e, u, x; pipefail, errexit, nounset, xtrace):
+  // `set -f` turns globbing off and changes what `node --test test/*.mjs` receives, and the rest
+  // are not known not to.
+  for (let k = 0; k < rest.length; k++) {
+    const w = rest[k];
+    if (/^[-+][eux]+$/.test(w)) continue;
+    if (/^[-+][eux]*o$/.test(w)) {
+      if (!/^(pipefail|errexit|nounset|xtrace)$/.test(rest[k + 1] ?? '')) return false;
+      k++;
+      continue;
+    }
+    return false;
+  }
+  return true;
 }
 
 /** Words a shell reads as structure before the command: a command after one is still that command. */
@@ -120,8 +133,10 @@ export function onlyCommand(script, command) {
   // backend.conf)"` picks the backend), and an input redirection of any kind feeds the tests
   // (`npm test <<EOF` with the backend in the here-document, `npm test < input`, a here-string):
   // shellCommands keeps none of them apart, so the script is read for them, and a script with any
-  // of them is not one command.
-  if (/\||\$\(|`|<|>\(/.test(String(script))) return false;
+  // of them is not one command. Nor is one with any `$`: shellCommands drops the quotes, and
+  // `node --test '$FILE'` (a file named $FILE) and `node --test "$FILE"` (the file FILE names)
+  // would read alike.
+  if (/\||\$|`|<|>\(/.test(String(script))) return false;
   const commands = shellCommands(script);
   if (!commands.length) return false;
   let hits = 0;
@@ -213,7 +228,9 @@ export function repeatedTests(doc) {
       if (!inJob.has(stepKey)) inJob.set(stepKey, []);
       const name = stepName(st, i);
       const shared = name.includes('${{') || all.filter((x, k) => shown(stepName(x, k)) === shown(name)).length > 1;
-      inJob.get(stepKey).push({ index: i, name, header: logHeader(st), command: commandOfKey(key), shared });
+      // The step's own script travels with the match: the report's example repeats it as written,
+      // quoting and all, never a line rebuilt from the key's words.
+      inJob.get(stepKey).push({ index: i, name, header: logHeader(st), command: commandOfKey(key), script: String(st.run).trim(), shared });
     });
     for (const [stepKey, steps] of inJob) {
       // Within the job only steps next to each other: a step between two test steps (a setup, a
@@ -226,7 +243,7 @@ export function repeatedTests(doc) {
       }
       for (const run of runs) {
         if (run.length > 1) {
-          found.push({ scope: 'job', jobs: [id], steps: run.map((o) => o.name), headers: run.map((o) => o.header), shared: run.map((o) => o.shared), command: run[0].command });
+          found.push({ scope: 'job', jobs: [id], steps: run.map((o) => o.name), headers: run.map((o) => o.header), shared: run.map((o) => o.shared), command: run[0].command, script: run[0].script });
           for (const o of run) used.add(key(id, o.index));
         }
       }
@@ -246,13 +263,13 @@ export function repeatedTests(doc) {
       // one, and the job's own two steps still compare.
       if (jobKey.includes('${{')) continue;
       if (!byCommand.has(jobKey)) byCommand.set(jobKey, []);
-      byCommand.get(jobKey).push({ job: id, step: first.name, header: first.header, shared: first.shared, index: first.index, command: first.command, matrix: Boolean(job.strategy && job.strategy.matrix) });
+      byCommand.get(jobKey).push({ job: id, step: first.name, header: first.header, shared: first.shared, index: first.index, command: first.command, script: first.script, matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
   }
   for (const where of byCommand.values()) {
     const ws = where.filter((w) => !w.matrix && !used.has(key(w.job, w.index)));
     if (ws.length > 1) {
-      found.push({ scope: 'workflow', jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), headers: ws.map((w) => w.header), shared: ws.map((w) => w.shared), command: ws[0].command });
+      found.push({ scope: 'workflow', jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), headers: ws.map((w) => w.header), shared: ws.map((w) => w.shared), command: ws[0].command, script: ws[0].script });
       for (const w of ws) used.add(key(w.job, w.index));
     }
   }

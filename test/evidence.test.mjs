@@ -91,7 +91,7 @@ jobs:
       - name: Again
         run: npm test -- --silent
 `);
-  assert.deepEqual(repeatedTests(same), [{ scope: 'job', jobs: ['test'], steps: ['Unit tests', 'Again'], headers: ['npm test', 'npm test -- --silent'], shared: [false, false], command: 'npm test' }]);
+  assert.deepEqual(repeatedTests(same), [{ scope: 'job', jobs: ['test'], steps: ['Unit tests', 'Again'], headers: ['npm test', 'npm test -- --silent'], shared: [false, false], command: 'npm test', script: 'npm test' }]);
   const across = doc(`on: push
 jobs:
   unit:
@@ -103,7 +103,7 @@ jobs:
     steps:
       - run: pytest -q tests
 `);
-  assert.deepEqual(repeatedTests(across), [{ scope: 'workflow', jobs: ['unit', 'coverage'], steps: ['Run pytest tests', 'Run pytest -q tests'], headers: ['pytest tests', 'pytest -q tests'], shared: [false, false], command: 'pytest tests' }]);
+  assert.deepEqual(repeatedTests(across), [{ scope: 'workflow', jobs: ['unit', 'coverage'], steps: ['Run pytest tests', 'Run pytest -q tests'], headers: ['pytest tests', 'pytest -q tests'], shared: [false, false], command: 'pytest tests', script: 'pytest tests' }]);
   // A multi-line script's header is its first line, an aside included.
   const aside = repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          set -euo pipefail\n          npm test\n      - run: npm test\n'));
   assert.deepEqual(aside.map((r) => r.headers), [['set -euo pipefail', 'npm test']]);
@@ -116,6 +116,20 @@ jobs:
   assert.equal(onlyCommand('echo "$(cp fixtures/postgres.conf backend.conf)"\nnpm test', 'npm test'), false);
   assert.equal(onlyCommand('echo `cp fixtures/postgres.conf backend.conf`\nnpm test', 'npm test'), false);
   assert.equal(onlyCommand('npm test <(cat args)', 'npm test <(cat args)'), false);
+  // A `$` anywhere: quotes are gone by the time the words compare, so '$FILE' (a file of that name) and "$FILE" (the file FILE names) would read alike.
+  assert.equal(onlyCommand("node --test '$FILE'", "node --test $FILE"), false);
+  assert.equal(onlyCommand('node --test "$FILE"', 'node --test $FILE'), false);
+  const dollar = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    env:\n      FILE: other.mjs\n    steps:\n      - run: node --test \'$FILE\'\n      - run: node --test "$FILE"\n';
+  assert.deepEqual(repeatedTests(doc(dollar)), []);
+  const dSteps = [['Set up job', 1], ["Run node --test '$FILE'", 30], ['Run node --test "$FILE"', 30], ['Complete job', 0]];
+  const dLog = log([["node --test '$FILE'", tap(['A', 'B'])], ['node --test "$FILE"', tap(['A', 'B'])]]);
+  const dd = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: dSteps }), name: 't', log_text: dLog }]], file: dollar }]);
+  assert.equal(find(dd, 'tests run twice').length, 0);
+  // `set` options that change what the tests receive are not asides: -f turns globbing off.
+  assert.equal(onlyCommand('set -f\nnode --test test/*.mjs', 'node --test test/*.mjs'), false);
+  assert.equal(onlyCommand('set -o noglob\nnpm test', 'npm test'), false);
+  assert.equal(onlyCommand('set -o\nnpm test', 'npm test'), false);
+  assert.equal(onlyCommand('set -eu\nset -o pipefail\nset +x\nnpm test', 'npm test'), true);
   // A quoted argument keeps its boundary: one file named "test/a b.mjs" against the two files test/a and b.mjs.
   const quoted = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node --test "test/a b.mjs"\n      - run: node --test test/a b.mjs\n';
   assert.deepEqual(repeatedTests(doc(quoted)), []);
@@ -124,6 +138,20 @@ jobs:
   const qLog = log([['node --test "test/a b.mjs"', tap(['A', 'B'])], ['node --test test/a b.mjs', tap(['A', 'B'])]]);
   const q = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: qSteps }), name: 't', log_text: qLog }]], file: quoted }]);
   assert.equal(find(q, 'tests run twice').length, 0, 'the same names from different files are two results');
+  // The example repeats the step's script as written: the quoted file name stays one argument.
+  const sameQuoted = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: node --test "test/a b.mjs"\n      - name: B\n        run: |\n          set -e\n          node --test "test/a b.mjs"\n';
+  const sqSteps = [['Set up job', 1], ['A', 30], ['B', 30], ['Complete job', 0]];
+  const sqLog = log([['node --test "test/a b.mjs"', tap(['A', 'B'])], ['set -e', tap(['A', 'B'])]]);
+  const sq = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: sqSteps }), name: 't', log_text: sqLog }]], file: sameQuoted }]);
+  const [sqf] = find(sq, 'tests run twice');
+  assert.ok(sqf, JSON.stringify(sq.findings.map((x) => x.what)));
+  assert.match(sqf.example, /\n  run: node --test "test\/a b.mjs"$/);
+  assert.match(sqf.evidence, /`node --test test\/a b.mjs`/, 'the label is the command as a line');
+  // A multi-line script is repeated as a block.
+  const multi = sameQuoted.replace('      - name: A\n        run: node --test "test/a b.mjs"\n', '      - name: A\n        run: |\n          set -e\n          node --test "test/a b.mjs"\n');
+  const mLog = log([['set -e', tap(['A', 'B'])], ['set -e', tap(['A', 'B'])]]);
+  const [mf] = find(audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: sqSteps }), name: 't', log_text: mLog }]], file: multi }]), 'tests run twice');
+  assert.match(mf.example, /\n  run: \|\n    set -e\n    node --test "test\/a b.mjs"$/);
   // An expansion in an aside can assign: `${BACKEND:=postgres}` sets what the tests then read, so an aside carries no `$`.
   assert.equal(onlyCommand('echo "${BACKEND:=postgres}"\nnpm test -- --backend "$BACKEND"', 'npm test -- --backend "$BACKEND"'), false);
   assert.equal(onlyCommand('echo "$HOME"\nnpm test', 'npm test'), false);
@@ -368,7 +396,7 @@ jobs:
   assert.deepEqual(repeatedTests(monorepo).map(brief), [['job', ['one'], ['Front', 'Also front']]]);
   // Two unnamed steps with the same command share a display name and are still two runs (shared says so); a third
   // runner started twice beside them is its own candidate, and a step in one candidate is in no other.
-  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n      - run: npm test\n')), [{ scope: 'job', jobs: ['t'], steps: ['Run npm test', 'Run npm test'], headers: ['npm test', 'npm test'], shared: [true, true], command: 'npm test' }]);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n      - run: npm test\n')), [{ scope: 'job', jobs: ['t'], steps: ['Run npm test', 'Run npm test'], headers: ['npm test', 'npm test'], shared: [true, true], command: 'npm test', script: 'npm test' }]);
   assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: npm test\n      - name: B\n        run: npm test\n      - name: C\n        run: pytest tests\n')).map(brief), [['job', ['t'], ['A', 'B']]]);
 });
 

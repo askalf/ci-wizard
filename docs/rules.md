@@ -164,9 +164,11 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 ## tests run twice
 
 - **Fires when** two things agree. First the workflow file: the same test step twice, two steps
-  whose scripts are one and the same test command and nothing else (`echo` without any `$` and
-  `set` in its option form aside, `set -euo pipefail`; an `echo "${BACKEND:=postgres}"` assigns
-  what the tests then read, a `set -- args` assigns what a following `pytest "$@"`
+  whose scripts are one and the same test command and nothing else (`echo` and `set` with the
+  options that stop or trace the script aside, `set -euo pipefail`, `set +x`; a `$` anywhere in
+  the script is not, since the words compare with their quotes gone and `node --test '$FILE'`
+  would read as `node --test "$FILE"`, a `set -f` changes what a glob hands the tests, a `set --
+  args` assigns what a following `pytest "$@"`
   reads, a `cd` moves the tests, an `export` changes their environment, a pipe anywhere feeds or
   captures them, an input redirection of any kind feeds them (a here-document, a here-string, a
   file), and a command or process substitution anywhere, an echo's argument included, runs a
@@ -210,7 +212,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   rule matches them); two steps with one display name share a timing list and are priced at its
   minimum. A step the sample never timed adds nothing, and the evidence says so.
 - **Fix** run the suite once. Where the second run is wanted on one event (the push to the default
-  branch, a release), keep it and gate it on that event. *Trade-off:* a second run kept to catch a
+  branch, a release), keep it and gate it on that event; the example gates on `push` to the
+  repository's default branch and repeats the step's own script as written, quoting and all.
+  *Trade-off:* a second run kept to catch a
   flaky test is the point of itself: keep it, and say so in the step name; gated, the second run
   happens after the merge instead of on the pull request.
 - **Collection.** The logs are read only for the jobs a candidate names, in the newest sampled

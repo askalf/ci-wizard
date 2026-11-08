@@ -549,8 +549,9 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
         confidence: 'measured',
         tradeoff: 'a second run kept to catch a flaky test is the point of itself: keep it, and say so in the step name; gated, the second run happens after the merge instead of on the pull request',
         // The gate names the event and the default branch both: `push` alone would keep the second
-        // run on every branch's pushes.
-        example: `- name: Tests, second run\n  if: github.event_name == 'push' && github.ref == 'refs/heads/${defaultBranch || '<default branch>'}'   # once, after the merge; the pull request ran them above\n  run: ${repeats[0].command}`,
+        // run on every branch's pushes. The step's script is repeated as written (quoting and all),
+        // never rebuilt from the command's words.
+        example: `- name: Tests, second run\n  if: github.event_name == 'push' && github.ref == 'refs/heads/${defaultBranch || '<default branch>'}'   # once, after the merge; the pull request ran them above\n  run: ${repeats[0].script.includes('\n') ? `|\n    ${repeats[0].script.split('\n').join('\n    ')}` : repeats[0].script}`,
       });
   }
 
