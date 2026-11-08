@@ -167,19 +167,18 @@ jobs:
   assert.ok(sqf, JSON.stringify(sq.findings.map((x) => x.what)));
   assert.match(sqf.example, /\n  run: \|\n    node --test "test\/a b.mjs"$/, 'always a block scalar, the script as written');
   assert.match(sqf.evidence, /`node --test test\/a b.mjs`/, 'the label is the command as a line');
-  // The example parses as workflow YAML and gives the script back, a colon and space in a file name included.
-  const colon = sameQuoted.replace(/test\/a b\.mjs/g, 'test/a: b.mjs');
-  const cLog = log([['node --test "test/a: b.mjs"', tap(['A', 'B'])], ['set -e', tap(['A', 'B'])]]);
-  const [cf] = find(audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: sqSteps }), name: 't', log_text: cLog }]], file: colon }]), 'tests run twice');
-  assert.ok(cf, 'a colon in the file name is no obstacle to the match');
-  const parsed = parseYaml(cf.example);
-  assert.equal(parsed[0].run, 'node --test "test/a: b.mjs"\n');
-  assert.equal(parsed[0].if, "github.event_name == 'push' && github.ref == 'refs/heads/<default branch>'");
   // A multi-line script is repeated as a block.
   const multi = sameQuoted.replace('      - name: A\n        run: node --test "test/a b.mjs"\n', '      - name: A\n        run: |\n          set -e\n          node --test "test/a b.mjs"\n');
   const mLog = log([['set -e', tap(['A', 'B'])], ['set -e', tap(['A', 'B'])]]);
   const [mf] = find(audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: sqSteps }), name: 't', log_text: mLog }]], file: multi }]), 'tests run twice');
   assert.match(mf.example, /\n  run: \|\n    set -e\n    node --test "test\/a b.mjs"$/);
+  // The example parses as workflow YAML and gives the script back, a colon and space in a file name included.
+  const colon = multi.replace(/test\/a b\.mjs/g, 'test/a: b.mjs');
+  const [cf] = find(audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: sqSteps }), name: 't', log_text: mLog }]], file: colon }]), 'tests run twice');
+  assert.ok(cf, 'a colon in the file name is no obstacle to the match');
+  const parsed = parseYaml(cf.example);
+  assert.equal(parsed[0].run, 'set -e\nnode --test "test/a: b.mjs"\n');
+  assert.equal(parsed[0].if, "github.event_name == 'push' && github.ref == 'refs/heads/<default branch>'");
   // An expansion in an aside can assign: `${BACKEND:=postgres}` sets what the tests then read, so an aside carries no `$`.
   assert.equal(onlyCommand('echo "${BACKEND:=postgres}"\nnpm test -- --backend "$BACKEND"', 'npm test -- --backend "$BACKEND"'), false);
   assert.equal(onlyCommand('echo "$HOME"\nnpm test', 'npm test'), false);
@@ -565,23 +564,23 @@ jobs:
     steps:
       - run: npm test
         env:
-          API_URL: \${{ secrets.API_URL }}
+          API_URL: https://api.example/v1
   production:
     runs-on: ubuntu-latest
     environment: \${{ github.job }}
     steps:
       - run: npm test
         env:
-          API_URL: \${{ secrets.API_URL }}
+          API_URL: https://api.example/v1
       - run: npm test
         env:
-          API_URL: \${{ secrets.API_URL }}
+          API_URL: https://api.example/v1
 `;
   assert.deepEqual(repeatedTests(doc(file)).map(brief), [['job', ['production'], ['Run npm test', 'Run npm test']]]);
   assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  a:\n    runs-on: ${{ vars.RUNNER }}\n    steps:\n      - run: npm test\n  b:\n    runs-on: ${{ vars.RUNNER }}\n    steps:\n      - run: npm test\n')), []);
   assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${{ github.job }} > job.txt\n      - run: npm test\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${{ github.job }} > job.txt\n      - run: npm test\n')), [], 'a preparation step with an expression');
   const steps = [['Set up job', 1], ['Run npm test', 30], ['Complete job', 0]];
-  const twoJobs = file.replace(/\n      - run: npm test\n        env:\n          API_URL: \$\{\{ secrets.API_URL \}\}\n$/, '\n');
+  const twoJobs = file.replace(/\n      - run: npm test\n        env:\n          API_URL: https:\/\/api.example\/v1\n$/, '\n');
   const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'staging', log_text: log([['npm test', tap(A)]]) }, { ...job({ steps }), name: 'production', log_text: log([['npm test', tap(A)]]) }]], file: twoJobs }]);
   assert.equal(find(a, 'tests run twice').length, 0);
 });
