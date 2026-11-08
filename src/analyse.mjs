@@ -572,7 +572,7 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
         : 'drop the artifact step; the file is already where it is read',
       {
         confidence: 'measured',
-        tradeoff: 'none while the other destination is browsable (code scanning shows the SARIF, the release its assets); keep the artifact for a destination that is not',
+        tradeoff: 'none while the other destination is browsable (code scanning shows the SARIF, the release its assets) and nothing downloads the artifact: no download-artifact step in this file does, but another workflow or a script fetching it by run is not visible here, so check for one before the step goes; keep the artifact for a destination that is not browsable',
         example: later
           ? `# after the step that sends ${dupes[0].path} to ${dupes[0].alsoTo[0]}\n- name: ${dupes[0].step}\n  if: failure()   # only when that upload failed\n  uses: actions/upload-artifact@...\n  with:\n    path: ${dupes[0].path}`
           : `# remove\n- name: ${dupes[0].step}\n  uses: actions/upload-artifact@...\n  with:\n    path: ${dupes[0].path}`,

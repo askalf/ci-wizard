@@ -8598,6 +8598,7 @@ function repeatedTests(doc) {
       const first = steps[0];
       const before = text(all.slice(0, first.index).map((st) => ({ uses: st.uses ?? null, run: st.run ?? null, with: st.with ?? null, env: st.env ?? null, if: st.if ?? null, dir: st["working-directory"] ?? null, shell: st.shell ?? null })));
       const jobKey = [stepKey, text(job["runs-on"]), text(job.environment), text(job.env), text(job.container), text(job.services), text(job.defaults), cond(job), before].join("\0");
+      if (jobKey.includes("${{")) continue;
       if (!byCommand.has(jobKey)) byCommand.set(jobKey, []);
       byCommand.get(jobKey).push({ job: id, step: first.name, header: first.header, shared: first.shared, index: first.index, command: first.command, matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
@@ -8618,10 +8619,24 @@ function artifactNameOf(st) {
 }
 function duplicateUploads(doc) {
   const found = [];
+  let consumesAll = false;
+  const consumed = /* @__PURE__ */ new Set();
+  for (const [, job] of jobsOf(doc)) {
+    for (const st of stepsOf(job)) {
+      if (!/^actions\/download-artifact@/.test(String(st.uses || ""))) continue;
+      const w = st.with && typeof st.with === "object" ? st.with : {};
+      const name = w.name === void 0 || w.name === null ? "" : String(w.name).trim();
+      if (!name || name.includes("${{") || w.pattern !== void 0) consumesAll = true;
+      else consumed.add(name);
+    }
+  }
+  if (consumesAll) return found;
   for (const [id, job] of jobsOf(doc)) {
     const steps = stepsOf(job);
     steps.forEach((st, i) => {
       if (!/^actions\/upload-artifact@/.test(String(st.uses || ""))) return;
+      const artifactName = artifactNameOf(st);
+      if (artifactName === null || consumed.has(artifactName)) return;
       if (/failure\(\)|always\(\)|cancelled\(\)/.test(String(st.if ?? ""))) return;
       const raw = st.with && typeof st.with === "object" ? String(st.with.path ?? "") : "";
       const paths = raw.split("\n").map((p) => p.trim()).filter(Boolean);
@@ -8679,7 +8694,7 @@ var COUNT_LINES = [
   // jest
   { rx: /^\s*Tests\s+(?:.*?\| )?\d+ \w+ \((\d+)\)/, whole: true },
   // vitest: "Tests  12 passed (12)"
-  { rx: /^=+ ((?:\d+ \w+(?:, )?)+) in [\d.]+s(?: \([^)]*\))? =+$/, whole: true, pytest: true },
+  { rx: /^=+ (\d+ \w+(?:, \d+ \w+)*) in [\d.]+s(?: \([^)]*\))? =+$/, whole: true, pytest: true },
   // pytest: every outcome counted, warnings not
   { rx: /^\s*(\d+) passing\b/, whole: true },
   // mocha
@@ -10301,7 +10316,7 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
       later ? "move the artifact step after the upload it duplicates and give it `if: failure()`, so the file is kept only on a run where that upload failed; where the upload comes first, drop the artifact step" : "drop the artifact step; the file is already where it is read",
       {
         confidence: "measured",
-        tradeoff: "none while the other destination is browsable (code scanning shows the SARIF, the release its assets); keep the artifact for a destination that is not",
+        tradeoff: "none while the other destination is browsable (code scanning shows the SARIF, the release its assets) and nothing downloads the artifact: no download-artifact step in this file does, but another workflow or a script fetching it by run is not visible here, so check for one before the step goes; keep the artifact for a destination that is not browsable",
         example: later ? `# after the step that sends ${dupes[0].path} to ${dupes[0].alsoTo[0]}
 - name: ${dupes[0].step}
   if: failure()   # only when that upload failed

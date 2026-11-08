@@ -185,6 +185,11 @@ export function repeatedTests(doc) {
       // production, resolve the same `${{ secrets.API_URL }}` to two endpoints, and their identical
       // test listings are two results.
       const jobKey = [stepKey, text(job['runs-on']), text(job.environment), text(job.env), text(job.container), text(job.services), text(job.defaults), cond(job), before].join('\u0000');
+      // An expression in any of that reads the same in two jobs and can resolve apart (`environment:
+      // ${{ github.job }}` is each job's own name, and each name's own secrets): the equal text
+      // establishes nothing, so such a job is no cross-job candidate. Within one job the context is
+      // one, and the job's own two steps still compare.
+      if (jobKey.includes('${{')) continue;
       if (!byCommand.has(jobKey)) byCommand.set(jobKey, []);
       byCommand.get(jobKey).push({ job: id, step: first.name, header: first.header, shared: first.shared, index: first.index, command: first.command, matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
@@ -219,10 +224,29 @@ export function artifactNameOf(st) {
  */
 export function duplicateUploads(doc) {
   const found = [];
+  // An artifact another job of the workflow downloads is the workflow's own transport, whatever
+  // else the file was sent to: a download-artifact step with that literal name consumes it, and
+  // one with no name, a pattern, or an expression may consume any artifact of the run, so no
+  // candidate stands beside it. A consumer outside the file (another workflow, a script) is not
+  // visible here; the advice says so.
+  let consumesAll = false;
+  const consumed = new Set();
+  for (const [, job] of jobsOf(doc)) {
+    for (const st of stepsOf(job)) {
+      if (!/^actions\/download-artifact@/.test(String(st.uses || ''))) continue;
+      const w = st.with && typeof st.with === 'object' ? st.with : {};
+      const name = w.name === undefined || w.name === null ? '' : String(w.name).trim();
+      if (!name || name.includes('${{') || w.pattern !== undefined) consumesAll = true;
+      else consumed.add(name);
+    }
+  }
+  if (consumesAll) return found;
   for (const [id, job] of jobsOf(doc)) {
     const steps = stepsOf(job);
     steps.forEach((st, i) => {
       if (!/^actions\/upload-artifact@/.test(String(st.uses || ''))) return;
+      const artifactName = artifactNameOf(st);
+      if (artifactName === null || consumed.has(artifactName)) return;
       // An artifact step that runs after a failure (failure(), always(), !cancelled()) keeps a
       // failed run's file for a look, and would be the only copy when the destination is what
       // failed: never a duplicate.
@@ -319,7 +343,7 @@ const COUNT_LINES = [
   { rx: /^# tests (\d+)$/, whole: true }, // node --test's TAP summary
   { rx: /^Tests:\s+(?:.*?, )?(\d+) total/, whole: true }, // jest
   { rx: /^\s*Tests\s+(?:.*?\| )?\d+ \w+ \((\d+)\)/, whole: true }, // vitest: "Tests  12 passed (12)"
-  { rx: /^=+ ((?:\d+ \w+(?:, )?)+) in [\d.]+s(?: \([^)]*\))? =+$/, whole: true, pytest: true }, // pytest: every outcome counted, warnings not
+  { rx: /^=+ (\d+ \w+(?:, \d+ \w+)*) in [\d.]+s(?: \([^)]*\))? =+$/, whole: true, pytest: true }, // pytest: every outcome counted, warnings not
   { rx: /^\s*(\d+) passing\b/, whole: true }, // mocha
   { rx: /^test result: \w+\. (\d+) passed; (\d+) failed/, whole: false, both: true }, // cargo test, one line per binary
   { rx: /^\[INFO\] Tests run: (\d+), Failures: \d+, Errors: \d+, Skipped: \d+$/, whole: true }, // maven's total (a per-class line carries "-- in <class>")

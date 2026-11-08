@@ -429,27 +429,94 @@ jobs:
     steps:
       - run: npm test
         env:
-          API_URL: \${{ secrets.API_URL }}
+          API_URL: https://api.example/v1
   production:
     runs-on: ubuntu-latest
     environment: production
     steps:
       - run: npm test
         env:
-          API_URL: \${{ secrets.API_URL }}
+          API_URL: https://api.example/v1
   again:
     runs-on: ubuntu-latest
     environment: production
     steps:
       - run: npm test
         env:
-          API_URL: \${{ secrets.API_URL }}
+          API_URL: https://api.example/v1
 `;
   assert.deepEqual(repeatedTests(doc(file)).map((r) => r.jobs), [['production', 'again']], 'the same environment twice is the candidate; staging against production is not');
   const steps = [['Set up job', 1], ['Run npm test', 30], ['Complete job', 0]];
   const twoEnvs = file.replace(/\n  again:[\s\S]*$/, '\n');
   const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'staging', log_text: log([['npm test', tap(A)]]) }, { ...job({ steps }), name: 'production', log_text: log([['npm test', tap(A)]]) }]], file: twoEnvs }]);
   assert.equal(find(a, 'tests run twice').length, 0);
+});
+
+test('tests run twice: an expression in a job\'s identity reads alike in two jobs and can resolve apart, so such jobs are no cross-job candidate; one job\'s own two steps still are', () => {
+  const file = `on: push
+jobs:
+  staging:
+    runs-on: ubuntu-latest
+    environment: \${{ github.job }}
+    steps:
+      - run: npm test
+        env:
+          API_URL: \${{ secrets.API_URL }}
+  production:
+    runs-on: ubuntu-latest
+    environment: \${{ github.job }}
+    steps:
+      - run: npm test
+        env:
+          API_URL: \${{ secrets.API_URL }}
+      - run: npm test
+        env:
+          API_URL: \${{ secrets.API_URL }}
+`;
+  assert.deepEqual(repeatedTests(doc(file)).map(brief), [['job', ['production'], ['Run npm test', 'Run npm test']]]);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  a:\n    runs-on: ${{ vars.RUNNER }}\n    steps:\n      - run: npm test\n  b:\n    runs-on: ${{ vars.RUNNER }}\n    steps:\n      - run: npm test\n')), []);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${{ github.job }} > job.txt\n      - run: npm test\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${{ github.job }} > job.txt\n      - run: npm test\n')), [], 'a preparation step with an expression');
+  const steps = [['Set up job', 1], ['Run npm test', 30], ['Complete job', 0]];
+  const twoJobs = file.replace(/\n      - run: npm test\n        env:\n          API_URL: \$\{\{ secrets.API_URL \}\}\n$/, '\n');
+  const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'staging', log_text: log([['npm test', tap(A)]]) }, { ...job({ steps }), name: 'production', log_text: log([['npm test', tap(A)]]) }]], file: twoJobs }]);
+  assert.equal(find(a, 'tests run twice').length, 0);
+});
+
+test('duplicateUploads: an artifact a download-artifact step of the workflow names is the workflow\'s transport, never a candidate; a download with no name, a pattern or an expression may take any artifact, so none is', () => {
+  const producer = `on: push
+jobs:
+  analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report
+          path: results.sarif
+`;
+  const consumer = (withBlock) => `${producer}  triage:
+    runs-on: ubuntu-latest
+    needs: analysis
+    steps:
+      - uses: actions/download-artifact@v4
+${withBlock}      - run: ./triage results.sarif
+`;
+  assert.equal(duplicateUploads(doc(producer)).length, 1);
+  assert.deepEqual(duplicateUploads(doc(consumer('        with:\n          name: report\n'))), []);
+  assert.deepEqual(duplicateUploads(doc(consumer(''))), [], 'no name downloads every artifact of the run');
+  assert.deepEqual(duplicateUploads(doc(consumer('        with:\n          pattern: rep*\n          merge-multiple: true\n'))), []);
+  assert.deepEqual(duplicateUploads(doc(consumer('        with:\n          name: ${{ needs.analysis.outputs.artifact }}\n'))), []);
+  assert.equal(duplicateUploads(doc(consumer('        with:\n          name: coverage\n'))).length, 1, 'another artifact\'s consumer leaves this one');
+  // With valid single-file evidence the consumed artifact still yields no finding.
+  const steps = [['Set up job', 1], ['Run github/codeql-action/upload-sarif@v3', 3], ['Run actions/upload-artifact@v4', 4], ['Complete job', 0]];
+  const a = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'analysis', run_artifacts: [{ name: 'report', bytes: 16334, entries: [{ name: 'results.sarif', size: 71521 }] }] }]], file: consumer('        with:\n          name: report\n') }]);
+  assert.equal(find(a, 'an artifact that duplicates another upload').length, 0);
+  const b = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'analysis', run_artifacts: [{ name: 'report', bytes: 16334, entries: [{ name: 'results.sarif', size: 71521 }] }] }]], file: producer }]);
+  const [f] = find(b, 'an artifact that duplicates another upload');
+  assert.ok(f, JSON.stringify(b.findings.map((x) => x.what)));
+  assert.match(f.tradeoff, /another workflow or a script fetching it by run is not visible here/);
 });
 
 test('an artifact that duplicates another upload: a step between the destination and the artifact can rewrite the file, so valid artifact evidence confirms nothing there', () => {
