@@ -82,7 +82,9 @@ export function startsTests(doc) {
 export function selfHostedSetups(doc) {
   const found = [];
   for (const [id, job] of jobsOf(doc)) {
-    if (!runsOnSelfHosted(job['runs-on'])) continue;
+    // A literal self-hosted label: an expression that mentions self-hosted may pick a hosted runner
+    // (`${{ false && 'self-hosted' || 'ubuntu-latest' }}`), and is not established.
+    if (!runsOnSelfHosted(job['runs-on']) || JSON.stringify(job['runs-on'] ?? null).includes('${{')) continue;
     // A job in a container runs its steps inside that image, not on the host: the host's runtime is
     // not this job's, so the advice does not apply.
     if (job.container !== undefined && job.container !== null) continue;

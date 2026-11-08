@@ -103,6 +103,19 @@ jobs:
       - uses: actions/setup-python@v5
 `);
   assert.deepEqual(selfHostedSetups(container).map((s) => s.job), ['bare']);
+  // An expression that mentions self-hosted may pick a hosted runner: not established.
+  const expr = doc(`on: push
+jobs:
+  maybe:
+    runs-on: \${{ false && 'self-hosted' || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/setup-python@v5
+  literal:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-python@v5
+`);
+  assert.deepEqual(selfHostedSetups(expr).map((s) => s.job), ['literal']);
   // setup-go caches by default: only an explicit cache: false makes it runtime-only.
   const go = doc(`on: push
 jobs:
@@ -210,6 +223,9 @@ test('toolchain setup on a self-hosted runner fires at a few seconds a step, sav
   // A self-hosted job with no setup action in the file is the image's own setup, judged by the usual threshold.
   const plain = audit([{ name: 'CI', runs: runs(40), jobsPerRun: [[{ ...job({ steps: SETUP(3), selfHosted: true }), name: 'test' }]], file: setupFile('[self-hosted, box]').replace(/      - uses: actions\/setup-node@v4\n        with:\n          node-version: '22'\n/, '') }]);
   assert.equal(find(plain, 'toolchain setup').length, 0);
+  // A self-hosted label in the file whose sampled runs were on GitHub's hosted runners prices nothing.
+  const hostedRuns = audit([{ name: 'CI', runs: runs(40), jobsPerRun: [[{ ...job({ steps: SETUP(3) }), name: 'test' }]], file: setupFile('[self-hosted, box]') }]);
+  assert.equal(find(hostedRuns, 'toolchain setup').length, 0);
   // An API job no file job claims prices nothing.
   const unnamed = audit([{ name: 'CI', runs: runs(40), jobsPerRun: [[job({ steps: SETUP(3), selfHosted: true })]], file: setupFile('[self-hosted, box]') }]);
   assert.equal(find(unnamed, 'toolchain setup').length, 0);

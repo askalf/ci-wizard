@@ -9134,7 +9134,7 @@ function startsTests(doc) {
 function selfHostedSetups(doc) {
   const found = [];
   for (const [id, job] of jobsOf2(doc)) {
-    if (!runsOnSelfHosted(job["runs-on"])) continue;
+    if (!runsOnSelfHosted(job["runs-on"]) || JSON.stringify(job["runs-on"] ?? null).includes("${{")) continue;
     if (job.container !== void 0 && job.container !== null) continue;
     stepsOf2(job).forEach((st, i) => {
       const m = /^actions\/setup-(node|python|go|dotnet|ruby)@/.exec(String(st.uses || ""));
@@ -9632,9 +9632,9 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
   const timing = timeJobs(sampledRuns, stepCommands(doc));
   const shares = timeShares(timing);
   const jobRuns = assignJobRuns(allJobTimeouts(doc).map((t) => ({ id: t.id, name: t.name, reusable: Boolean(t.reusable) })), [...timing.jobDurations.keys()]);
-  const priced = (jobId, name) => {
+  const priced = (jobId, name, { selfHostedOnly = false } = {}) => {
     const label = String(name).replace(/\s+/g, " ").trim();
-    const apis = jobRuns.get(jobId) || [];
+    const apis = (jobRuns.get(jobId) || []).filter((api) => !selfHostedOnly || (timing.jobHosted.get(api) || 0) === 0);
     const xs = apis.flatMap((api) => timing.stepSeconds.get(`${api}\0${label}`) || []);
     if (!xs.length) return null;
     const byRun = [];
@@ -9742,7 +9742,7 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     // A self-hosted setup step, priced from the sample by its job and step name: one execution,
     // and what it costs a run (its matrix legs together); a name another step shares is not priced.
     selfhosted_setups: selfHostedSetups(doc).map((s) => {
-      const p = s.unique ? priced(s.job, s.step) : null;
+      const p = s.unique ? priced(s.job, s.step, { selfHostedOnly: true }) : null;
       return { ...s, seconds: p ? p.each : null, run_seconds: p ? p.perRun : null };
     }),
     // A passing job's log size, median over the sampled jobs whose size was read (null when none was).

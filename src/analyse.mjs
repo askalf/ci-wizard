@@ -202,9 +202,11 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
   const jobRuns = assignJobRuns(allJobTimeouts(doc).map((t) => ({ id: t.id, name: t.name, reusable: Boolean(t.reusable) })), [...timing.jobDurations.keys()]);
   // `each`: the median of one execution of the step; `perRun`: the mean over every sampled run of
   // what the step cost that run (0 for a run without it), every matrix leg of the job included.
-  const priced = (jobId, name) => {
+  const priced = (jobId, name, { selfHostedOnly = false } = {}) => {
     const label = String(name).replace(/\s+/g, ' ').trim();
-    const apis = jobRuns.get(jobId) || [];
+    // For the self-hosted rule only the job's runs that were not on GitHub's hosted runners count:
+    // a label that resolved to a hosted runner in the sample is not the host's setup to drop.
+    const apis = (jobRuns.get(jobId) || []).filter((api) => !selfHostedOnly || (timing.jobHosted.get(api) || 0) === 0);
     const xs = apis.flatMap((api) => timing.stepSeconds.get(`${api}\u0000${label}`) || []);
     if (!xs.length) return null;
     const byRun = [];
@@ -317,7 +319,7 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     // A self-hosted setup step, priced from the sample by its job and step name: one execution,
     // and what it costs a run (its matrix legs together); a name another step shares is not priced.
     selfhosted_setups: selfHostedSetups(doc).map((s) => {
-      const p = s.unique ? priced(s.job, s.step) : null;
+      const p = s.unique ? priced(s.job, s.step, { selfHostedOnly: true }) : null;
       return { ...s, seconds: p ? p.each : null, run_seconds: p ? p.perRun : null };
     }),
     // A passing job's log size, median over the sampled jobs whose size was read (null when none was).

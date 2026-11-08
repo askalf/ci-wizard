@@ -119,8 +119,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   *Trade-off:* pinning to the image's version ties the job to the image's update schedule.
 - **On self-hosted runners** the rule fires at 2 s per step, when the workflow file has a
   `actions/setup-*` step (node, python, go, dotnet, ruby; not java, whose setup writes a Maven
-  settings.xml with the job's credentials whatever its inputs) on a job that runs on self-hosted
-  runners and not in a `container:` (a container job's steps run inside that image, where the
+  settings.xml with the job's credentials whatever its inputs) on a job whose `runs-on` names a
+  self-hosted label literally (an expression that mentions one may pick a hosted runner), whose
+  sampled runs were not on GitHub's hosted runners, and not in a `container:` (a container job's steps run inside that image, where the
   host's runtime is not theirs), and the step sets up the runtime and nothing else (no `cache`, `cache-dependency-path`,
   `bundler-cache`, `registry-url` or other input that restores a cache or signs in to a registry;
   not `setup-go`, which caches by default, unless it says `cache: false`; and not `setup-node` from
