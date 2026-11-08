@@ -116,6 +116,16 @@ jobs:
   assert.equal(onlyCommand('echo "$(cp fixtures/postgres.conf backend.conf)"\nnpm test', 'npm test'), false);
   assert.equal(onlyCommand('echo `cp fixtures/postgres.conf backend.conf`\nnpm test', 'npm test'), false);
   assert.equal(onlyCommand('npm test <(cat args)', 'npm test <(cat args)'), false);
+  // An input redirection of any kind feeds the tests: a here-document, a here-string, a file.
+  assert.equal(onlyCommand('npm test <<EOF\nsqlite\nEOF', 'npm test'), false);
+  assert.equal(onlyCommand('npm test <<< postgres', 'npm test'), false);
+  assert.equal(onlyCommand('npm test < backend.conf', 'npm test'), false);
+  const heredoc = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          npm test <<EOF\n          sqlite\n          EOF\n      - run: |\n          npm test <<EOF\n          postgres\n          EOF\n';
+  assert.deepEqual(repeatedTests(doc(heredoc)), []);
+  const hdSteps = [['Set up job', 1], ['Run npm test <<EOF', 30], ['Run npm test <<EOF', 30], ['Complete job', 0]];
+  const hdLog = log([['npm test <<EOF', tap(A)], ['npm test <<EOF', tap(A)]]);
+  const h = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: hdSteps }), name: 't', log_text: hdLog }]], file: heredoc }]);
+  assert.equal(find(h, 'tests run twice').length, 0, 'identical listings fed two inputs are two results');
   const substituted = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          echo "$(cp fixtures/sqlite.conf backend.conf)"\n          npm test\n      - run: |\n          echo "$(cp fixtures/postgres.conf backend.conf)"\n          npm test\n';
   assert.deepEqual(repeatedTests(doc(substituted)), []);
   const subSteps = [['Set up job', 1], ['Run echo "$(cp fixtures/sqlite.conf backend.conf)"', 30], ['Run echo "$(cp fixtures/postgres.conf backend.conf)"', 30], ['Complete job', 0]];
