@@ -8499,12 +8499,30 @@ var TEST_RUNNERS = [
   /^ctest\b/,
   /^(vendor\/bin\/)?(phpunit|pest)\b/
 ];
-var REPORTING = [
-  /\s--test-reporter(-destination)?(=\S+|\s+\S+)/g,
-  /\s--reporter(=\S+|\s+\S+)/g,
-  /\s--(quiet|verbose|silent|no-color|color)\b/g,
-  /\s-(q|v|vv)\b/g
-];
+var REPORTING_WITH_VALUE = /^--(test-reporter(-destination)?|reporter)(=|$)/;
+var REPORTING_FLAG = /^(--(quiet|verbose|silent|no-color|color)|-(q|v|vv))$/;
+function testWords(words) {
+  const ws = [...words];
+  while (ws.length && KEYWORDS.has(ws[0])) ws.shift();
+  if (!TEST_RUNNERS.some((rx) => rx.test(ws.join(" ")))) return null;
+  const out = [];
+  for (let k = 0; k < ws.length; k++) {
+    const w = ws[k];
+    if (REPORTING_WITH_VALUE.test(w)) {
+      if (!w.includes("=")) k++;
+      continue;
+    }
+    if (REPORTING_FLAG.test(w)) continue;
+    out.push(w);
+  }
+  if (out.length && out[out.length - 1] === "--") out.pop();
+  return out;
+}
+var KEY_SEP = "";
+var toKey = (words) => words.join(KEY_SEP);
+function commandOfKey(key) {
+  return String(key).split(KEY_SEP).join(" ");
+}
 function survivesFailure(condition) {
   return /^(\$\{\{\s*)?(always\(\)|!\s*cancelled\(\))(\s*\}\})?$/.test(String(condition ?? "").trim());
 }
@@ -8516,14 +8534,13 @@ function setsOptionsOnly(words) {
 }
 var KEYWORDS = /* @__PURE__ */ new Set(["then", "do", "else", "elif", "{", "(", "!", "time", "exec"]);
 function testCommands(script) {
+  return testCommandKeys(script).map(commandOfKey);
+}
+function testCommandKeys(script) {
   const out = [];
   for (const words of shellCommands(script)) {
-    const ws = [...words];
-    while (ws.length && KEYWORDS.has(ws[0])) ws.shift();
-    let cmd = ws.join(" ");
-    if (!TEST_RUNNERS.some((rx) => rx.test(cmd))) continue;
-    for (const rx of REPORTING) cmd = cmd.replace(rx, "");
-    out.push(cmd.replace(/\s+/g, " ").replace(/\s--$/, "").trim());
+    const ws = testWords(words);
+    if (ws) out.push(toKey(ws));
   }
   return out;
 }
@@ -8532,14 +8549,14 @@ function onlyCommand(script, command2) {
   const commands = shellCommands(script);
   if (!commands.length) return false;
   let hits = 0;
+  const wanted = commandOfKey(command2);
   for (const words of commands) {
     const ws = [...words];
     while (ws.length && KEYWORDS.has(ws[0])) ws.shift();
     if (!ws.length) continue;
-    let cmd = ws.join(" ");
-    if (TEST_RUNNERS.some((rx) => rx.test(cmd))) {
-      for (const rx of REPORTING) cmd = cmd.replace(rx, "");
-      if (cmd.replace(/\s+/g, " ").replace(/\s--$/, "").trim() !== command2) return false;
+    const tw = testWords(ws);
+    if (tw) {
+      if (tw.join(" ") !== wanted) return false;
       hits++;
       continue;
     }
@@ -8581,15 +8598,15 @@ function repeatedTests(doc) {
     const all = stepsOf(job);
     all.forEach((st, i) => {
       if (st.run === void 0) return;
-      const commands = new Set(testCommands(st.run));
-      if (commands.size !== 1) return;
-      const [command2] = commands;
-      if (!onlyCommand(st.run, command2)) return;
-      const stepKey = [command2, cond(st), dirOf(st, job), text(st.env), text(st.shell)].join("\0");
+      const keys = new Set(testCommandKeys(st.run));
+      if (keys.size !== 1) return;
+      const [key2] = keys;
+      if (!onlyCommand(st.run, key2)) return;
+      const stepKey = [key2, cond(st), dirOf(st, job), text(st.env), text(st.shell)].join("\0");
       if (!inJob.has(stepKey)) inJob.set(stepKey, []);
       const name = stepName(st, i);
       const shared = name.includes("${{") || all.filter((x, k) => shown(stepName(x, k)) === shown(name)).length > 1;
-      inJob.get(stepKey).push({ index: i, name, header: logHeader(st), command: command2, shared });
+      inJob.get(stepKey).push({ index: i, name, header: logHeader(st), command: commandOfKey(key2), shared });
     });
     for (const [stepKey, steps] of inJob) {
       const runs = [];

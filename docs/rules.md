@@ -177,7 +177,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   also share `runs-on`, `environment:` (staging against production resolves the same secret to two
   endpoints), job `env:`, `container:`, `services:`, `defaults:`, `if:` and every step before the
   test step, each with its inputs, environment, directory and shell (the same setup leads into the
-  same tests), with no matrix, and with no expression in any of that: `environment: ${{
+  same tests), with no matrix, and with no expression in any of that. Commands compare word by
+  word as the shell splits them, quoting kept: `node --test "test/a b.mjs"` runs one file and
+  `node --test test/a b.mjs` two, and they are two commands. An expression: `environment: ${{
   github.job }}` reads alike in two jobs and names two environments, so equal text establishes
   nothing across jobs (within one job the context is one, and its two steps still compare). Commands are compared with their reporting flags
   removed (`--test-reporter`, `--reporter`, `-q`, `-v`, `--silent`): the same tests reported

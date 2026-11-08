@@ -116,6 +116,14 @@ jobs:
   assert.equal(onlyCommand('echo "$(cp fixtures/postgres.conf backend.conf)"\nnpm test', 'npm test'), false);
   assert.equal(onlyCommand('echo `cp fixtures/postgres.conf backend.conf`\nnpm test', 'npm test'), false);
   assert.equal(onlyCommand('npm test <(cat args)', 'npm test <(cat args)'), false);
+  // A quoted argument keeps its boundary: one file named "test/a b.mjs" against the two files test/a and b.mjs.
+  const quoted = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node --test "test/a b.mjs"\n      - run: node --test test/a b.mjs\n';
+  assert.deepEqual(repeatedTests(doc(quoted)), []);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node --test "test/a b.mjs"\n      - run: node --test \'test/a b.mjs\'\n')).map(brief), [['job', ['t'], ['Run node --test "test/a b.mjs"', "Run node --test 'test/a b.mjs'"]]], 'the same one file, quoted either way');
+  const qSteps = [['Set up job', 1], ['Run node --test "test/a b.mjs"', 30], ['Run node --test test/a b.mjs', 30], ['Complete job', 0]];
+  const qLog = log([['node --test "test/a b.mjs"', tap(['A', 'B'])], ['node --test test/a b.mjs', tap(['A', 'B'])]]);
+  const q = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: qSteps }), name: 't', log_text: qLog }]], file: quoted }]);
+  assert.equal(find(q, 'tests run twice').length, 0, 'the same names from different files are two results');
   // An expansion in an aside can assign: `${BACKEND:=postgres}` sets what the tests then read, so an aside carries no `$`.
   assert.equal(onlyCommand('echo "${BACKEND:=postgres}"\nnpm test -- --backend "$BACKEND"', 'npm test -- --backend "$BACKEND"'), false);
   assert.equal(onlyCommand('echo "$HOME"\nnpm test', 'npm test'), false);

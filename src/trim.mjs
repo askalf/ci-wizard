@@ -30,13 +30,42 @@ const TEST_RUNNERS = [
   /^(vendor\/bin\/)?(phpunit|pest)\b/,
 ];
 
-/** Flags that change how a run reports, not what it runs: two commands that differ only here are the same tests. */
-const REPORTING = [
-  /\s--test-reporter(-destination)?(=\S+|\s+\S+)/g,
-  /\s--reporter(=\S+|\s+\S+)/g,
-  /\s--(quiet|verbose|silent|no-color|color)\b/g,
-  /\s-(q|v|vv)\b/g,
-];
+/** Words that change how a run reports, not what it runs: two commands that differ only here are the same tests. */
+const REPORTING_WITH_VALUE = /^--(test-reporter(-destination)?|reporter)(=|$)/;
+const REPORTING_FLAG = /^(--(quiet|verbose|silent|no-color|color)|-(q|v|vv))$/;
+
+/**
+ * A test command's words, normalised: shell keywords before it dropped, reporting flags (and
+ * their values) removed, a trailing `--` separator dropped. Null for a command that starts no
+ * test runner. The words keep the shell's boundaries: `node --test "test/a b.mjs"` is three
+ * words and runs one file, `node --test test/a b.mjs` is four and runs two, and only the
+ * boundary-keeping key (testCommandKeys) tells them apart.
+ */
+function testWords(words) {
+  const ws = [...words];
+  while (ws.length && KEYWORDS.has(ws[0])) ws.shift();
+  if (!TEST_RUNNERS.some((rx) => rx.test(ws.join(' ')))) return null;
+  const out = [];
+  for (let k = 0; k < ws.length; k++) {
+    const w = ws[k];
+    if (REPORTING_WITH_VALUE.test(w)) {
+      if (!w.includes('=')) k++; // the value is the next word
+      continue;
+    }
+    if (REPORTING_FLAG.test(w)) continue;
+    out.push(w);
+  }
+  // `npm test -- --silent` with its flag gone is `npm test --`: the separator carried nothing else.
+  if (out.length && out[out.length - 1] === '--') out.pop();
+  return out;
+}
+
+const KEY_SEP = '\u0001';
+const toKey = (words) => words.join(KEY_SEP);
+/** A key's words as a command line, for the report. */
+export function commandOfKey(key) {
+  return String(key).split(KEY_SEP).join(' ');
+}
 
 /** A condition that runs the step after an earlier failure: exactly always() or !cancelled(), nothing compound (always() && success() does not). */
 export function survivesFailure(condition) {
@@ -65,15 +94,15 @@ const KEYWORDS = new Set(['then', 'do', 'else', 'elif', '{', '(', '!', 'time', '
  * reporting flags removed, whitespace collapsed. A script with none returns an empty list.
  */
 export function testCommands(script) {
+  return testCommandKeys(script).map(commandOfKey);
+}
+
+/** The same commands as boundary-keeping keys (testWords): what a repeat's identity compares. */
+export function testCommandKeys(script) {
   const out = [];
   for (const words of shellCommands(script)) {
-    const ws = [...words];
-    while (ws.length && KEYWORDS.has(ws[0])) ws.shift();
-    let cmd = ws.join(' ');
-    if (!TEST_RUNNERS.some((rx) => rx.test(cmd))) continue;
-    for (const rx of REPORTING) cmd = cmd.replace(rx, '');
-    // `npm test -- --silent` with its flag gone is `npm test --`: the separator carried nothing else.
-    out.push(cmd.replace(/\s+/g, ' ').replace(/\s--$/, '').trim());
+    const ws = testWords(words);
+    if (ws) out.push(toKey(ws));
   }
   return out;
 }
@@ -96,14 +125,16 @@ export function onlyCommand(script, command) {
   const commands = shellCommands(script);
   if (!commands.length) return false;
   let hits = 0;
+  // `command` is the step's own test command, as a key or as a line: the step's one test command
+  // must be it, with nothing else beside.
+  const wanted = commandOfKey(command);
   for (const words of commands) {
     const ws = [...words];
     while (ws.length && KEYWORDS.has(ws[0])) ws.shift();
     if (!ws.length) continue;
-    let cmd = ws.join(' ');
-    if (TEST_RUNNERS.some((rx) => rx.test(cmd))) {
-      for (const rx of REPORTING) cmd = cmd.replace(rx, '');
-      if (cmd.replace(/\s+/g, ' ').replace(/\s--$/, '').trim() !== command) return false;
+    const tw = testWords(ws);
+    if (tw) {
+      if (tw.join(' ') !== wanted) return false;
       hits++;
       continue;
     }
@@ -171,16 +202,18 @@ export function repeatedTests(doc) {
     const all = stepsOf(job);
     all.forEach((st, i) => {
       if (st.run === undefined) return;
-      const commands = new Set(testCommands(st.run));
-      if (commands.size !== 1) return;
-      const [command] = commands;
-      if (!onlyCommand(st.run, command)) return;
+      // The command as a boundary-keeping key: `node --test "test/a b.mjs"` (one file) and
+      // `node --test test/a b.mjs` (two files) read alike as a line and are two commands.
+      const keys = new Set(testCommandKeys(st.run));
+      if (keys.size !== 1) return;
+      const [key] = keys;
+      if (!onlyCommand(st.run, key)) return;
       // Everything the file says about where and how the step runs is part of its identity.
-      const stepKey = [command, cond(st), dirOf(st, job), text(st.env), text(st.shell)].join('\u0000');
+      const stepKey = [key, cond(st), dirOf(st, job), text(st.env), text(st.shell)].join('\u0000');
       if (!inJob.has(stepKey)) inJob.set(stepKey, []);
       const name = stepName(st, i);
       const shared = name.includes('${{') || all.filter((x, k) => shown(stepName(x, k)) === shown(name)).length > 1;
-      inJob.get(stepKey).push({ index: i, name, header: logHeader(st), command, shared });
+      inJob.get(stepKey).push({ index: i, name, header: logHeader(st), command: commandOfKey(key), shared });
     });
     for (const [stepKey, steps] of inJob) {
       // Within the job only steps next to each other: a step between two test steps (a setup, a
