@@ -8529,7 +8529,7 @@ function testCommands(script) {
   return out;
 }
 function onlyCommand(script, command) {
-  if (/\|/.test(String(script))) return false;
+  if (/\||\$\(|`|<\(|>\(/.test(String(script))) return false;
   const commands = shellCommands(script);
   if (!commands.length) return false;
   let hits = 0;

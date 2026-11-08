@@ -112,6 +112,16 @@ jobs:
   // `set --` assigns the positional parameters the test command reads: not an aside, and a bare `set` is not either.
   assert.equal(onlyCommand('set -- --base-url=https://staging.example\npytest "$@"', 'pytest "$@"'), false);
   assert.equal(onlyCommand('set\nnpm test', 'npm test'), false);
+  // A command or process substitution runs a command of its own, wherever it sits.
+  assert.equal(onlyCommand('echo "$(cp fixtures/postgres.conf backend.conf)"\nnpm test', 'npm test'), false);
+  assert.equal(onlyCommand('echo `cp fixtures/postgres.conf backend.conf`\nnpm test', 'npm test'), false);
+  assert.equal(onlyCommand('npm test <(cat args)', 'npm test <(cat args)'), false);
+  const substituted = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          echo "$(cp fixtures/sqlite.conf backend.conf)"\n          npm test\n      - run: |\n          echo "$(cp fixtures/postgres.conf backend.conf)"\n          npm test\n';
+  assert.deepEqual(repeatedTests(doc(substituted)), []);
+  const subSteps = [['Set up job', 1], ['Run echo "$(cp fixtures/sqlite.conf backend.conf)"', 30], ['Run echo "$(cp fixtures/postgres.conf backend.conf)"', 30], ['Complete job', 0]];
+  const subLog = log([['echo "$(cp fixtures/sqlite.conf backend.conf)"', tap(A)], ['echo "$(cp fixtures/postgres.conf backend.conf)"', tap(A)]]);
+  const s = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: subSteps }), name: 't', log_text: subLog }]], file: substituted }]);
+  assert.equal(find(s, 'tests run twice').length, 0, 'identical listings against two backends are two results');
   assert.equal(onlyCommand('set -e --\nnpm test', 'npm test'), false);
   const positional = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          set -- --base-url=https://staging.example\n          pytest "$@"\n      - run: |\n          set -- --base-url=https://production.example\n          pytest "$@"\n');
   assert.deepEqual(repeatedTests(positional), []);

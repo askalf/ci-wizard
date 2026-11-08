@@ -166,8 +166,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **Fires when** two things agree. First the workflow file: the same test step twice, two steps
   whose scripts are one and the same test command and nothing else (`echo` and `set` in its
   option form aside, `set -euo pipefail`; a `set -- args` assigns what a following `pytest "$@"`
-  reads, a `cd` moves the tests, an `export` changes their environment, and a pipe anywhere feeds
-  or captures them: none of those is aside), under the same `if:`, in the same declared working
+  reads, a `cd` moves the tests, an `export` changes their environment, a pipe anywhere feeds or
+  captures them, and a command or process substitution anywhere, an echo's argument included,
+  runs a command of its own: none of those is aside), under the same `if:`, in the same declared working
   directory (the step's, else the job's, else the workflow's `defaults.run`), with the same step
   `env:` and `shell:`. In one job, two such steps next to each other (a step between them, a
   setup, a build or a write, can change what the second one tests); or in two jobs of the run that

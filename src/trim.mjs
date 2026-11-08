@@ -86,8 +86,11 @@ export function testCommands(script) {
  */
 export function onlyCommand(script, command) {
   // A pipe feeds the tests their input or hands their output on (`echo postgres | npm test`,
-  // `npm test | tee out.txt`): shellCommands drops the operator, so the script is read for it.
-  if (/\|/.test(String(script))) return false;
+  // `npm test | tee out.txt`), and a command or process substitution runs a command of its own
+  // wherever it sits, an echo's argument included (`echo "$(cp fixtures/postgres.conf
+  // backend.conf)"` picks the backend): shellCommands keeps neither apart, so the script is read
+  // for them, and a script with any of them is not one command.
+  if (/\||\$\(|`|<\(|>\(/.test(String(script))) return false;
   const commands = shellCommands(script);
   if (!commands.length) return false;
   let hits = 0;
