@@ -8507,7 +8507,7 @@ function testWords(words) {
   while (ws.length && KEYWORDS.has(ws[0])) ws.shift();
   if (!TEST_RUNNERS.some((rx) => rx.test(ws.join(" ")))) return null;
   const out = [];
-  const forwards = /^(npm|pnpm|yarn|bun)$/.test(ws[0]);
+  const forwards = ws[0] === "npm";
   let literal = false;
   let separators = 0;
   for (let k = 0; k < ws.length; k++) {

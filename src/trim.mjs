@@ -47,10 +47,12 @@ function testWords(words) {
   if (!TEST_RUNNERS.some((rx) => rx.test(ws.join(' ')))) return null;
   const out = [];
   // After a `--` a runner reads every word as an operand: `pytest -- -v` tests a directory named
-  // -v, and nothing after it is a reporting flag. A package manager's first `--` instead hands the
-  // rest to the test script, flags included (`npm test -- --silent`), so there the stripping goes
-  // on past it; a second `--` is the script's own terminator (`npm test -- -- -v`), and ends it.
-  const forwards = /^(npm|pnpm|yarn|bun)$/.test(ws[0]);
+  // -v, and nothing after it is a reporting flag. npm consumes its first `--` and hands the rest to
+  // the test script, flags included (`npm test -- --silent`), so there the stripping goes on past
+  // it; a second `--` is the script's own terminator (`npm test -- -- -v`), and ends it. pnpm,
+  // yarn and bun pass a `--` through to the script, so for them the first one already ends it
+  // (`pnpm run test -- -v` hands pytest a directory named -v).
+  const forwards = ws[0] === 'npm';
   let literal = false;
   let separators = 0;
   for (let k = 0; k < ws.length; k++) {

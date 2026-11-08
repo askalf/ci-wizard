@@ -197,6 +197,14 @@ jobs:
   // A package manager's second `--` is the script's own terminator: `npm test -- -- -v` hands pytest a directory named -v.
   assert.deepEqual(testCommands('npm test -- -- -v\nnpm test -- -- -q\nnpm test -- --silent -- -v'), ['npm test -- -- -v', 'npm test -- -- -q', 'npm test -- -- -v']);
   assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test -- -- -v\n      - run: npm test -- -- -q\n')), []);
+  // pnpm, yarn and bun pass a `--` through to the script, so their first one already ends the flags.
+  assert.deepEqual(testCommands('pnpm run test -- -v\npnpm run test -- -q\nyarn test -- --silent\nbun test -- -q'), ['pnpm run test -- -v', 'pnpm run test -- -q', 'yarn test -- --silent', 'bun test -- -q']);
+  const pnpmFile = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pnpm run test -- -v\n      - run: pnpm run test -- -q\n';
+  assert.deepEqual(repeatedTests(doc(pnpmFile)), []);
+  const pnpmSteps = [['Set up job', 1], ['Run pnpm run test -- -v', 30], ['Run pnpm run test -- -q', 30], ['Complete job', 0]];
+  const pnpmDots = `${STAMP}............\n${STAMP}===== 12 passed in 0.3s =====`;
+  const pn = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: pnpmSteps }), name: 't', log_text: log([['pnpm run test -- -v', pnpmDots], ['pnpm run test -- -q', pnpmDots]]) }]], file: pnpmFile }]);
+  assert.equal(find(pn, 'tests run twice').length, 0);
   const fwdSteps = [['Set up job', 1], ['Run npm test -- -- -v', 30], ['Run npm test -- -- -q', 30], ['Complete job', 0]];
   const fwdDots = `${STAMP}............\n${STAMP}===== 12 passed in 0.3s =====`;
   const fwd = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: fwdSteps }), name: 't', log_text: log([['npm test -- -- -v', fwdDots], ['npm test -- -- -q', fwdDots]]) }]], file: 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test -- -- -v\n      - run: npm test -- -- -q\n' }]);
