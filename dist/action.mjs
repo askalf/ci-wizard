@@ -9136,7 +9136,7 @@ function selfHostedSetups(doc) {
   for (const [id, job] of jobsOf2(doc)) {
     if (!runsOnSelfHosted(job["runs-on"])) continue;
     stepsOf2(job).forEach((st, i) => {
-      const m = /^actions\/setup-(node|python|go|java|dotnet|ruby)@/.exec(String(st.uses || ""));
+      const m = /^actions\/setup-(node|python|go|dotnet|ruby)@/.exec(String(st.uses || ""));
       if (!m) return;
       const w = st.with && typeof st.with === "object" ? st.with : {};
       const off = (k) => String(w[k] ?? "").trim().toLowerCase() === "false";

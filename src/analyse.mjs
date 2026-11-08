@@ -200,8 +200,8 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
   // matches them (a matrix leg "test (20)" is a run of job test). Null when the sample ran no such
   // step of that job (a renamed step, a job the sample never ran, a job name two jobs share).
   const jobRuns = assignJobRuns(allJobTimeouts(doc).map((t) => ({ id: t.id, name: t.name, reusable: Boolean(t.reusable) })), [...timing.jobDurations.keys()]);
-  // `each`: the median of one execution of the step; `perRun`: the median over the sampled runs of
-  // what the step cost a run, every matrix leg of the job included.
+  // `each`: the median of one execution of the step; `perRun`: the mean over every sampled run of
+  // what the step cost that run (0 for a run without it), every matrix leg of the job included.
   const priced = (jobId, name) => {
     const label = String(name).replace(/\s+/g, ' ').trim();
     const apis = jobRuns.get(jobId) || [];

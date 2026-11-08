@@ -84,7 +84,9 @@ export function selfHostedSetups(doc) {
   for (const [id, job] of jobsOf(doc)) {
     if (!runsOnSelfHosted(job['runs-on'])) continue;
     stepsOf(job).forEach((st, i) => {
-      const m = /^actions\/setup-(node|python|go|java|dotnet|ruby)@/.exec(String(st.uses || ''));
+      // setup-java is not here: with only a distribution and a version it still writes a Maven
+      // settings.xml with the job's credentials, which a runtime baked into the host does not.
+      const m = /^actions\/setup-(node|python|go|dotnet|ruby)@/.exec(String(st.uses || ''));
       if (!m) return;
       // A setup that also restores a dependency cache or signs the job in to a registry does more
       // than state a version: dropping it would lose that work, so it is not this rule's.

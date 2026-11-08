@@ -67,6 +67,20 @@ jobs:
           python-version: '3.12'
 `);
   assert.deepEqual(selfHostedSetups(more).map((s) => s.job), ['plain']);
+  // setup-java writes a Maven settings.xml with the job's credentials even with only a distribution
+  // and a version: never runtime-only.
+  const java = doc(`on: push
+jobs:
+  publish:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: mvn deploy
+`);
+  assert.deepEqual(selfHostedSetups(java), []);
   // setup-go caches by default: only an explicit cache: false makes it runtime-only.
   const go = doc(`on: push
 jobs:
