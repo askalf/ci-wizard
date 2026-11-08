@@ -8690,8 +8690,7 @@ function duplicateUploads(doc) {
         if (j === i) return;
         if (guard(other) !== "" && !survivesFailure(guard(other))) return;
         if (other["continue-on-error"] !== void 0 && String(other["continue-on-error"]).trim().toLowerCase() !== "false") return;
-        if (j < i - 1) return;
-        if (j > i + 1 && !survivesFailure(guard(other))) return;
+        if (Math.abs(j - i) !== 1) return;
         const uses = String(other.uses || "");
         const w = other.with && typeof other.with === "object" ? other.with : {};
         const hit = /^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file) ? "code scanning" : /^softprops\/action-gh-release@/.test(uses) && same(w.files) ? "the release" : null;

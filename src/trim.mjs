@@ -364,11 +364,12 @@ export function duplicateUploads(doc) {
         if (guard(other) !== '' && !survivesFailure(guard(other))) return;
         // A destination allowed to fail (continue-on-error) can leave the artifact the only copy.
         if (other['continue-on-error'] !== undefined && String(other['continue-on-error']).trim().toLowerCase() !== 'false') return;
-        // A destination before the artifact counts only from the step just before it: a step
-        // between them (a second scanner writing the same results.sarif) can rewrite the file the
-        // artifact then keeps, and the artifact would be the only copy of that report.
-        if (j < i - 1) return;
-        if (j > i + 1 && !survivesFailure(guard(other))) return;
+        // A destination counts only next to the artifact step, in either direction: a step between
+        // them (a second scanner writing the same results.sarif) can rewrite the file, so a
+        // destination before would send a report the artifact does not hold, and one after, even
+        // under always(), would receive a report the artifact never held. The zip's entry name
+        // says what the artifact is called, not that the file stayed the same.
+        if (Math.abs(j - i) !== 1) return;
         const uses = String(other.uses || '');
         const w = other.with && typeof other.with === 'object' ? other.with : {};
         const hit = (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) ? 'code scanning' : (/^softprops\/action-gh-release@/.test(uses) && same(w.files)) ? 'the release' : null;

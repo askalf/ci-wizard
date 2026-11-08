@@ -244,14 +244,13 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   the same text on both steps can hold on one and turn on the next (`steps.saved.outputs.artifact-id
   == ''` once the artifact step has published). So the artifact step carries no condition at all,
   a destination counts only with none (in a run that succeeded, a step without a condition ran
-  and passed) or, later than next, with exactly `always()` or `!cancelled()`, and never with
-  `continue-on-error`, which lets it fail and leave the artifact the only copy; a destination before the artifact step counts only
-  when it is the step just before it (a step between them, a second scanner writing the same
-  `results.sarif`, can rewrite the file the artifact then keeps); and a destination after the
-  artifact step counts only when it is the next step, unless its own condition is exactly `always()` or
-  `!cancelled()`, since any other condition, `always() && success()` included, carries the
-  implicit success() and a step between them that fails would skip the destination after the
-  artifact already went up. An artifact a `download-artifact` step of the workflow names is the
+  and passed) or with exactly `always()` or `!cancelled()`, and never with `continue-on-error`,
+  which lets it fail and leave the artifact the only copy; and a destination counts only next to
+  the artifact step, in either direction: a step between them (a second scanner writing the same
+  `results.sarif`) can rewrite the file, so a destination before would have sent a report the
+  artifact does not hold, and one after, even under `always()`, would receive a report the
+  artifact never held. The zip's entry name says what the artifact is called, not that the file
+  stayed the same. An artifact a `download-artifact` step of the workflow names is the
   workflow's own transport, whatever else the file was sent to, and is never a candidate; a
   download with no name, a `pattern` or an expression may take any artifact of the run, so no
   candidate stands beside one. A consumer outside the file (another workflow, a script fetching

@@ -635,6 +635,34 @@ ${withBlock}      - run: ./triage results.sarif
   assert.match(f.tradeoff, /another workflow or a script fetching it by run is not visible here/);
 });
 
+test('an artifact that duplicates another upload: a later destination under always() past a rewriting step received a report the artifact never held, so valid artifact evidence confirms nothing there', () => {
+  const file = `on: push
+jobs:
+  analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SARIF file
+          path: results.sarif
+      - name: Second scanner
+        run: ./second-scanner > results.sarif
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+`;
+  assert.deepEqual(duplicateUploads(doc(file)), []);
+  const steps = [['Set up job', 1], ['Upload artifact', 4], ['Second scanner', 20], ['Upload to code scanning', 3], ['Complete job', 0]];
+  const a = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'analysis', run_artifacts: [{ name: 'SARIF file', bytes: 16334, entries: [{ name: 'results.sarif', size: 71521 }] }] }]], file }]);
+  assert.equal(find(a, 'an artifact that duplicates another upload').length, 0);
+  // Next to the artifact, the same always() destination counts (it can fail after the artifact went up: the order fix).
+  const adjacent = file.replace('      - name: Second scanner\n        run: ./second-scanner > results.sarif\n', '');
+  assert.deepEqual(duplicateUploads(doc(adjacent)).map((u) => u.after), [true]);
+});
+
 test('an artifact that duplicates another upload: a step between the destination and the artifact can rewrite the file, so valid artifact evidence confirms nothing there', () => {
   const file = `on: push
 jobs:
