@@ -132,8 +132,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 ## tests run twice
 
 - **Fires when** the workflow file has the same test step twice: two steps whose scripts are one
-  and the same test command and nothing else (`set`, `export` and `echo` aside; a `cd` is not
-  aside, it moves the tests), under the same `if:`, in the same declared working directory (the
+  and the same test command and nothing else (`set` and `echo` aside; a `cd` is not aside, it
+  moves the tests, and an `export` is not aside, it changes their environment), under the same `if:`, in the same declared working directory (the
   step's, else the job's, else the workflow's `defaults.run`), with the same step `env:` and
   `shell:`. In one job (two such steps), or in two jobs of the run that also share `runs-on`, job
   `env:`, `container:`, `services:`, `defaults:` and `if:`, with no matrix. Commands are compared

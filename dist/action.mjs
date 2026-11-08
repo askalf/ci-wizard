@@ -9106,7 +9106,7 @@ var REPORTING = [
 function survivesFailure(condition) {
   return /^(\$\{\{\s*)?(always\(\)|!\s*cancelled\(\))(\s*\}\})?$/.test(String(condition ?? "").trim());
 }
-var HARMLESS = /* @__PURE__ */ new Set(["set", "export", "echo", "true", ":", "pwd"]);
+var HARMLESS = /* @__PURE__ */ new Set(["set", "echo", "true", ":", "pwd"]);
 function onlyCommand(script, command2) {
   const commands = shellCommands(script);
   if (!commands.length) return false;

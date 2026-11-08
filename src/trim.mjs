@@ -36,12 +36,12 @@ export function survivesFailure(condition) {
   return /^(\$\{\{\s*)?(always\(\)|!\s*cancelled\(\))(\s*\}\})?$/.test(String(condition ?? '').trim());
 }
 
-/** Shell commands a test step may carry beside its tests without doing other work. */
-const HARMLESS = new Set(['set', 'export', 'echo', 'true', ':', 'pwd']);
+/** Shell commands a test step may carry beside its tests without changing what the tests are or where and how they run (an export changes the environment, a cd the directory: neither is here). */
+const HARMLESS = new Set(['set', 'echo', 'true', ':', 'pwd']);
 
 /**
- * Whether a script runs the one test command and nothing else (set, export and echo aside; a cd
- * moves the tests to another directory and is not aside). Only such a step is a repeat of another
+ * Whether a script runs the one test command and nothing else (set and echo aside; a cd moves the
+ * tests to another directory and an export changes their environment, neither is aside). Only such a step is a repeat of another
  * such step: a step with another suite, a build or an export beside it keeps work that must stay.
  */
 export function onlyCommand(script, command) {

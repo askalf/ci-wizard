@@ -53,6 +53,7 @@ jobs:
   assert.deepEqual(repeatedTests(across), [{ scope: 'workflow', jobs: ['unit', 'coverage'], steps: ['Run pytest tests', 'Run pytest -q tests'], command: 'pytest tests', same: true }]);
   assert.equal(onlyCommand('set -euo pipefail\nnpm test -- --silent', 'npm test'), true);
   assert.equal(onlyCommand('cd pkg\nnpm test', 'npm test'), false); // a cd moves the tests: not the same step
+  assert.equal(onlyCommand('export DB_BACKEND=sqlite\nnpm test', 'npm test'), false); // an export changes their environment
   assert.equal(onlyCommand('npm test\nnpm run build', 'npm test'), false);
   assert.equal(onlyCommand('npm test\npytest tests/a', 'npm test'), false); // another suite is work that stays
   assert.equal(onlyCommand('npm run build', 'npm test'), false);
@@ -101,6 +102,12 @@ jobs:
       - run: npm test
 `);
   assert.deepEqual(repeatedTests(envs), []);
+  // The environment set inside the script is an environment too.
+  const exported = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          export DB_BACKEND=sqlite\n          npm test\n      - run: |\n          export DB_BACKEND=postgres\n          npm test\n');
+  assert.deepEqual(repeatedTests(exported), []);
+  const exportedRuns = [['Set up job', 1], ['Run export DB_BACKEND=sqlite', 30], ['Run export DB_BACKEND=postgres', 30], ['Complete job', 0]];
+  const e = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: exportedRuns }), name: 't' }]], file: 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          export DB_BACKEND=sqlite\n          npm test\n      - run: |\n          export DB_BACKEND=postgres\n          npm test\n' }]);
+  assert.equal(find(e, 'tests run twice').length, 0);
   // A build or another suite beside the tests keeps work that must stay.
   assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          npm test\n          npm run build:a\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          npm test\n          npm run build:b\n')), []);
   assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: |\n          npm test\n          pytest tests\n      - name: B\n        run: npm test\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - name: C\n        run: pytest tests\n')), []);
