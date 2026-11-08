@@ -59,7 +59,9 @@ export function onlyCommand(script, command) {
       hits++;
       continue;
     }
-    if (!HARMLESS.has(ws[0])) return false;
+    // A command aside only while it touches nothing: a redirection or a pipe writes a file or
+    // feeds another command (`echo postgres > backend.conf` picks the backend under test).
+    if (!HARMLESS.has(ws[0]) || ws.some((w) => /^(<|>|>>|\|)/.test(w) || /[<>|]/.test(w) && !/^['"]/.test(w) && w !== ws[0])) return false;
   }
   return hits > 0;
 }
@@ -110,10 +112,12 @@ export function stepName(st, i = 0) {
 /**
  * The same test step twice: two steps whose scripts are one and the same test command and
  * nothing else, under the same condition, in the same declared working directory, with the same
- * step environment. In one job (scope "job"), or in two jobs of the run (scope "workflow") that
- * also share runs-on, job environment, container, services and run defaults, with no matrix. A
- * matrix leg is one job to GitHub; the same tests on two runners, in two directories, against
- * two environments, or under two conditions are two results, and nothing else the file could
+ * step environment. In one job (scope "job"), next to each other, so no step between them changes
+ * the runtime, the files or the environment; or in two jobs of the run (scope "workflow") that
+ * also share runs-on, job environment, container, services, run defaults, and every step before
+ * the test step (the same setup leads into the same tests), with no matrix. A matrix leg is one
+ * job to GitHub; the same tests on two runners, in two directories, against two environments,
+ * after two setups, or under two conditions are two results, and nothing else the file could
  * tell apart is called a repeat.
  */
 export function repeatedTests(doc) {
@@ -137,15 +141,29 @@ export function repeatedTests(doc) {
       if (!inJob.has(stepKey)) inJob.set(stepKey, []);
       inJob.get(stepKey).push({ index: i, name: stepName(st, i), command });
     });
+    const all = stepsOf(job);
     for (const [stepKey, steps] of inJob) {
-      if (steps.length > 1) {
-        found.push({ scope: 'job', jobs: [id], steps: steps.map((o) => o.name), command: steps[0].command, same: true });
-        for (const o of steps) used.add(key(id, o.index));
+      // Within the job only steps next to each other: a step between two test steps (a setup, a
+      // build, a write) can change what the second one tests.
+      const runs = [];
+      for (const o of steps) {
+        const last = runs[runs.length - 1];
+        if (last && o.index === last[last.length - 1].index + 1) last.push(o);
+        else runs.push([o]);
       }
-      // The job's own identity joins the step's for the cross-job scope.
-      const jobKey = [stepKey, text(job['runs-on']), text(job.env), text(job.container), text(job.services), text(job.defaults), cond(job)].join('\u0000');
+      for (const run of runs) {
+        if (run.length > 1) {
+          found.push({ scope: 'job', jobs: [id], steps: run.map((o) => o.name), command: run[0].command, same: true });
+          for (const o of run) used.add(key(id, o.index));
+        }
+      }
+      // The job's own identity, and every step before the test step, join the step's for the
+      // cross-job scope: the same setup leads into the same tests.
+      const first = steps[0];
+      const before = text(all.slice(0, first.index).map((st) => ({ uses: st.uses ?? null, run: st.run ?? null, with: st.with ?? null, env: st.env ?? null, if: st.if ?? null })));
+      const jobKey = [stepKey, text(job['runs-on']), text(job.env), text(job.container), text(job.services), text(job.defaults), cond(job), before].join('\u0000');
       if (!byCommand.has(jobKey)) byCommand.set(jobKey, []);
-      byCommand.get(jobKey).push({ job: id, step: steps[0].name, index: steps[0].index, command: steps[0].command, matrix: Boolean(job.strategy && job.strategy.matrix) });
+      byCommand.get(jobKey).push({ job: id, step: first.name, index: first.index, command: first.command, matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
   }
   for (const where of byCommand.values()) {
@@ -182,6 +200,10 @@ export function duplicateUploads(doc) {
       const paths = raw.split('\n').map((p) => p.trim()).filter(Boolean);
       if (paths.length !== 1 || /[*?[]/.test(paths[0]) || paths[0].includes('${{')) return;
       const path = paths[0].replace(/^\.\//, '');
+      // A path that names one file: a directory given to upload-sarif sends its SARIF files and the
+      // artifact keeps everything in it, so only a path with a file's extension and no trailing
+      // slash is compared.
+      if (!/\.[A-Za-z0-9]+$/.test(path) || path.endsWith('/')) return;
       const alsoTo = new Set();
       const same = (p) => String(p ?? '').split('\n').map((x) => x.trim().replace(/^\.\//, '')).includes(path);
       // The other destination must run whenever the artifact step runs: a release upload behind

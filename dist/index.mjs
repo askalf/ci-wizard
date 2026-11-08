@@ -9106,7 +9106,7 @@ function onlyCommand(script, command) {
       hits++;
       continue;
     }
-    if (!HARMLESS.has(ws[0])) return false;
+    if (!HARMLESS.has(ws[0]) || ws.some((w) => /^(<|>|>>|\|)/.test(w) || /[<>|]/.test(w) && !/^['"]/.test(w) && w !== ws[0])) return false;
   }
   return hits > 0;
 }
@@ -9155,14 +9155,25 @@ function repeatedTests(doc) {
       if (!inJob.has(stepKey)) inJob.set(stepKey, []);
       inJob.get(stepKey).push({ index: i, name: stepName(st, i), command });
     });
+    const all = stepsOf2(job);
     for (const [stepKey, steps] of inJob) {
-      if (steps.length > 1) {
-        found.push({ scope: "job", jobs: [id], steps: steps.map((o) => o.name), command: steps[0].command, same: true });
-        for (const o of steps) used.add(key(id, o.index));
+      const runs = [];
+      for (const o of steps) {
+        const last = runs[runs.length - 1];
+        if (last && o.index === last[last.length - 1].index + 1) last.push(o);
+        else runs.push([o]);
       }
-      const jobKey = [stepKey, text(job["runs-on"]), text(job.env), text(job.container), text(job.services), text(job.defaults), cond(job)].join("\0");
+      for (const run of runs) {
+        if (run.length > 1) {
+          found.push({ scope: "job", jobs: [id], steps: run.map((o) => o.name), command: run[0].command, same: true });
+          for (const o of run) used.add(key(id, o.index));
+        }
+      }
+      const first = steps[0];
+      const before = text(all.slice(0, first.index).map((st) => ({ uses: st.uses ?? null, run: st.run ?? null, with: st.with ?? null, env: st.env ?? null, if: st.if ?? null })));
+      const jobKey = [stepKey, text(job["runs-on"]), text(job.env), text(job.container), text(job.services), text(job.defaults), cond(job), before].join("\0");
       if (!byCommand.has(jobKey)) byCommand.set(jobKey, []);
-      byCommand.get(jobKey).push({ job: id, step: steps[0].name, index: steps[0].index, command: steps[0].command, matrix: Boolean(job.strategy && job.strategy.matrix) });
+      byCommand.get(jobKey).push({ job: id, step: first.name, index: first.index, command: first.command, matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
   }
   for (const where2 of byCommand.values()) {
@@ -9185,6 +9196,7 @@ function duplicateUploads(doc) {
       const paths = raw.split("\n").map((p) => p.trim()).filter(Boolean);
       if (paths.length !== 1 || /[*?[]/.test(paths[0]) || paths[0].includes("${{")) return;
       const path = paths[0].replace(/^\.\//, "");
+      if (!/\.[A-Za-z0-9]+$/.test(path) || path.endsWith("/")) return;
       const alsoTo = /* @__PURE__ */ new Set();
       const same = (p) => String(p ?? "").split("\n").map((x) => x.trim().replace(/^\.\//, "")).includes(path);
       const guard = (s) => String(s.if ?? "").replace(/\s+/g, " ").trim();

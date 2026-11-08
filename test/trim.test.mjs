@@ -54,6 +54,9 @@ jobs:
   assert.equal(onlyCommand('set -euo pipefail\nnpm test -- --silent', 'npm test'), true);
   assert.equal(onlyCommand('cd pkg\nnpm test', 'npm test'), false); // a cd moves the tests: not the same step
   assert.equal(onlyCommand('export DB_BACKEND=sqlite\nnpm test', 'npm test'), false); // an export changes their environment
+  assert.equal(onlyCommand('echo postgres > backend.conf\nnpm test', 'npm test'), false); // a redirection writes a file
+  assert.equal(onlyCommand('echo "starting" | tee log.txt\nnpm test', 'npm test'), false);
+  assert.equal(onlyCommand('echo "starting the tests"\nnpm test', 'npm test'), true);
   assert.equal(onlyCommand('npm test\nnpm run build', 'npm test'), false);
   assert.equal(onlyCommand('npm test\npytest tests/a', 'npm test'), false); // another suite is work that stays
   assert.equal(onlyCommand('npm run build', 'npm test'), false);
@@ -105,6 +108,46 @@ jobs:
   // The environment set inside the script is an environment too.
   const exported = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          export DB_BACKEND=sqlite\n          npm test\n      - run: |\n          export DB_BACKEND=postgres\n          npm test\n');
   assert.deepEqual(repeatedTests(exported), []);
+  // A configuration written before the tests picks what they test.
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          echo sqlite > backend.conf\n          npm test\n      - run: |\n          echo postgres > backend.conf\n          npm test\n')), []);
+  // Two runtimes are two results, in two jobs and within one; a step between two test steps can change what the second tests.
+  const runtimes = doc(`on: push
+jobs:
+  n20:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm test
+  n22:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+  same1:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+  within:
+    runs-on: ubuntu-latest
+    steps:
+      - name: A
+        run: npm test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: B
+        run: npm test
+      - name: C
+        run: npm test
+`);
+  assert.deepEqual(repeatedTests(runtimes).map((r) => [r.scope, r.jobs, r.steps]), [['job', ['within'], ['B', 'C']], ['workflow', ['n22', 'same1'], ['Run npm test', 'Run npm test']]]);
   const exportedRuns = [['Set up job', 1], ['Run export DB_BACKEND=sqlite', 30], ['Run export DB_BACKEND=postgres', 30], ['Complete job', 0]];
   const e = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: exportedRuns }), name: 't' }]], file: 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          export DB_BACKEND=sqlite\n          npm test\n      - run: |\n          export DB_BACKEND=postgres\n          npm test\n' }]);
   assert.equal(find(e, 'tests run twice').length, 0);
@@ -188,12 +231,12 @@ jobs:
       - name: Front
         run: npm test
         working-directory: packages/frontend
-      - name: Back
-        run: npm test
-        working-directory: packages/backend
       - name: Also front
         run: npm test
         working-directory: packages/frontend
+      - name: Back
+        run: npm test
+        working-directory: packages/backend
   two:
     runs-on: ubuntu-latest
     defaults:
@@ -279,6 +322,29 @@ jobs:
           files: dist.tar.gz
 `);
   assert.deepEqual(duplicateUploads(tagOnly), []);
+  // A directory given to upload-sarif sends its SARIF files; the artifact keeps everything in it.
+  const directory = doc(`on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: reports
+      - uses: actions/upload-artifact@v4
+        with:
+          path: reports
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: reports/
+      - uses: actions/upload-artifact@v4
+        with:
+          path: reports/
+`);
+  assert.deepEqual(duplicateUploads(directory), []);
   // The same condition on both steps is one path through the run: a duplicate again.
   const bothOnTag = doc(`on: push
 jobs:

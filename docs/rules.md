@@ -135,15 +135,19 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   and the same test command and nothing else (`set` and `echo` aside; a `cd` is not aside, it
   moves the tests, and an `export` is not aside, it changes their environment), under the same `if:`, in the same declared working directory (the
   step's, else the job's, else the workflow's `defaults.run`), with the same step `env:` and
-  `shell:`. In one job (two such steps), or in two jobs of the run that also share `runs-on`, job
-  `env:`, `container:`, `services:`, `defaults:` and `if:`, with no matrix. Commands are compared
+  `shell:`. In one job, two such steps next to each other (a step between them, a setup, a build or a
+  write, can change what the second one tests); or in two jobs of the run that also share
+  `runs-on`, job `env:`, `container:`, `services:`, `defaults:`, `if:` and every step before the
+  test step (the same setup leads into the same tests), with no matrix. An `echo` is aside only
+  without a redirection or a pipe, which write a file or feed a command. Commands are compared
   with their reporting flags removed (`--test-reporter`, `--reporter`, `-q`, `-v`, `--silent`):
   the same tests reported differently are the same tests. Runners known: `node --test`,
   `npm/pnpm/yarn/bun test` and `run test*`, jest, vitest, mocha, ava, tap, pytest, unittest, `go
   test`, `cargo test`, rspec, `dotnet test`, mvn and gradle test, `make test`, ctest, phpunit,
   pest. Anything the file can tell apart is no repeat: the same runner on other paths, in another
-  directory or after an export, against another environment, beside a build or another suite, on
-  another platform, or under another condition. Two steps are two runs whatever their names (two
+  directory or after an export, against another environment or another runtime version, after a
+  configuration written to a file, beside a build or another suite, on another platform, or under
+  another condition. Two steps are two runs whatever their names (two
   unnamed `run: npm test` steps are both "Run npm test"), and a step is in one finding at most.
 - **Confidence** confirmed: the file shows the same step twice.
 - **Estimate** the shorter step's time (the second run), times runs a week, each step priced from
@@ -155,9 +159,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   the merge instead of on the pull request.
 
 
-- **Fires when** a job's `actions/upload-artifact` step has one literal path (no glob, no
-  expression, one line) that another action step of the same job already publishes with the same
-  literal input: a SARIF file sent to code scanning (`github/codeql-action/upload-sarif` with the
+- **Fires when** a job's `actions/upload-artifact` step has one literal path naming one file (no
+  glob, no expression, one line, a file's extension and no trailing slash: a directory given to
+  `upload-sarif` sends its SARIF files while the artifact keeps everything in it) that another
+  action step of the same job already publishes with the same literal input: a SARIF file sent to code scanning (`github/codeql-action/upload-sarif` with the
   same `sarif_file`), or a file attached to the release (`softprops/action-gh-release` with it in
   `files`). Both read their input against the workspace, as upload-artifact does. An artifact step
   that runs after a failure (`failure()`, `always()`, `!cancelled()`) keeps a failed run's file
