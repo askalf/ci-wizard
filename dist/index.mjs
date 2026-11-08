@@ -9119,6 +9119,7 @@ function selfHostedSetups(doc) {
   const found = [];
   for (const [id, job] of jobsOf2(doc)) {
     if (!runsOnSelfHosted(job["runs-on"])) continue;
+    if (job.container !== void 0 && job.container !== null) continue;
     stepsOf2(job).forEach((st, i) => {
       const m = /^actions\/setup-(node|python|go|dotnet|ruby)@/.exec(String(st.uses || ""));
       if (!m) return;

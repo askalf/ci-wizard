@@ -83,6 +83,9 @@ export function selfHostedSetups(doc) {
   const found = [];
   for (const [id, job] of jobsOf(doc)) {
     if (!runsOnSelfHosted(job['runs-on'])) continue;
+    // A job in a container runs its steps inside that image, not on the host: the host's runtime is
+    // not this job's, so the advice does not apply.
+    if (job.container !== undefined && job.container !== null) continue;
     stepsOf(job).forEach((st, i) => {
       // setup-java is not here: with only a distribution and a version it still writes a Maven
       // settings.xml with the job's credentials, which a runtime baked into the host does not.

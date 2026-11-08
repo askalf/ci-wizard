@@ -81,6 +81,28 @@ jobs:
       - run: mvn deploy
 `);
   assert.deepEqual(selfHostedSetups(java), []);
+  // A job in a container runs inside that image: the host's runtime is not this job's.
+  const container = doc(`on: push
+jobs:
+  boxed:
+    runs-on: [self-hosted, x]
+    container: ubuntu:24.04
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+  boxed2:
+    runs-on: [self-hosted, x]
+    container:
+      image: node:22
+    steps:
+      - uses: actions/setup-node@v4
+  bare:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-python@v5
+`);
+  assert.deepEqual(selfHostedSetups(container).map((s) => s.job), ['bare']);
   // setup-go caches by default: only an explicit cache: false makes it runtime-only.
   const go = doc(`on: push
 jobs:
