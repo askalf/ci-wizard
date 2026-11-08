@@ -181,7 +181,10 @@ export function repeatedTests(doc) {
       // A preparation step that differs only in its directory or shell (`cp backend.conf .` from
       // fixtures/sqlite against fixtures/postgres) prepares different tests.
       const before = text(all.slice(0, first.index).map((st) => ({ uses: st.uses ?? null, run: st.run ?? null, with: st.with ?? null, env: st.env ?? null, if: st.if ?? null, dir: st['working-directory'] ?? null, shell: st.shell ?? null })));
-      const jobKey = [stepKey, text(job['runs-on']), text(job.env), text(job.container), text(job.services), text(job.defaults), cond(job), before].join('\u0000');
+      // The deployment environment too: two jobs alike in every line, one in staging and one in
+      // production, resolve the same `${{ secrets.API_URL }}` to two endpoints, and their identical
+      // test listings are two results.
+      const jobKey = [stepKey, text(job['runs-on']), text(job.environment), text(job.env), text(job.container), text(job.services), text(job.defaults), cond(job), before].join('\u0000');
       if (!byCommand.has(jobKey)) byCommand.set(jobKey, []);
       byCommand.get(jobKey).push({ job: id, step: first.name, header: first.header, shared: first.shared, index: first.index, command: first.command, matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
@@ -252,6 +255,10 @@ export function duplicateUploads(doc) {
         if (guard(other) !== mine && guard(other) !== '') return;
         // A destination allowed to fail (continue-on-error) can leave the artifact the only copy.
         if (other['continue-on-error'] !== undefined && String(other['continue-on-error']).trim().toLowerCase() !== 'false') return;
+        // A destination before the artifact counts only from the step just before it: a step
+        // between them (a second scanner writing the same results.sarif) can rewrite the file the
+        // artifact then keeps, and the artifact would be the only copy of that report.
+        if (j < i - 1) return;
         if (j > i + 1 && !survivesFailure(guard(other))) return;
         const uses = String(other.uses || '');
         const w = other.with && typeof other.with === 'object' ? other.with : {};
@@ -301,29 +308,44 @@ const NAME_LINES = [
   /^\s*[✓✔√] (.+?)(?: \(\d+ ?m?s\))?$/,
 ];
 
-/** Lines that give the count of tests a run reports, by runner; the last such line of a section is its count. */
+/**
+ * Summary lines that count the tests a run reports, by runner. A `whole` line is the section's
+ * one total (node --test, jest, vitest, pytest, mocha, maven's total, phpunit, rspec): two of
+ * them in one section are two suites, and the count is unknown. A `part` line counts one unit
+ * (cargo prints one per test binary and one for the doctests, with no total; dotnet one per
+ * project), and the parts add up. A section with both kinds is unknown too.
+ */
 const COUNT_LINES = [
-  /^# tests (\d+)$/, // node --test's TAP summary
-  /^Tests:\s+(?:.*?, )?(\d+) total/, // jest
-  /^\s*Tests\s+(?:.*?\| )?\d+ \w+ \((\d+)\)/, // vitest: "Tests  12 passed (12)"
-  /^=+ (\d+) passed/, // pytest
-  /^\s*(\d+) passing/, // mocha
-  /^test result: \w+\. (\d+) passed; (\d+) failed/, // cargo test, one line per binary (the last counts)
-  /^\[INFO\] Tests run: (\d+), Failures/, // maven's total, after the per-class lines
-  /^Tests run: (\d+), Failures/, // gradle, surefire per class
-  /^OK \((\d+) tests?/, // phpunit
-  /^(\d+) examples?, \d+ failures?/, // rspec
-  /^\s*Passed!\s+-\s+Failed:\s+\d+,\s+Passed:\s+\d+,\s+Skipped:\s+\d+,\s+Total:\s+(\d+)/, // dotnet test
+  { rx: /^# tests (\d+)$/, whole: true }, // node --test's TAP summary
+  { rx: /^Tests:\s+(?:.*?, )?(\d+) total/, whole: true }, // jest
+  { rx: /^\s*Tests\s+(?:.*?\| )?\d+ \w+ \((\d+)\)/, whole: true }, // vitest: "Tests  12 passed (12)"
+  { rx: /^=+ ((?:\d+ \w+(?:, )?)+) in [\d.]+s(?: \([^)]*\))? =+$/, whole: true, pytest: true }, // pytest: every outcome counted, warnings not
+  { rx: /^\s*(\d+) passing\b/, whole: true }, // mocha
+  { rx: /^test result: \w+\. (\d+) passed; (\d+) failed/, whole: false, both: true }, // cargo test, one line per binary
+  { rx: /^\[INFO\] Tests run: (\d+), Failures: \d+, Errors: \d+, Skipped: \d+$/, whole: true }, // maven's total (a per-class line carries "-- in <class>")
+  { rx: /^OK \((\d+) tests?/, whole: true }, // phpunit
+  { rx: /^(\d+) examples?, \d+ failures?/, whole: true }, // rspec
+  { rx: /^\s*Passed!\s+-\s+Failed:\s+\d+,\s+Passed:\s+\d+,\s+Skipped:\s+\d+,\s+Total:\s+(\d+)/, whole: false }, // dotnet test, one line per project
 ];
+
+/** pytest's totals: "1 passed, 1 failed, 2 skipped, 3 warnings": the outcomes that are tests, summed. */
+function pytestCount(summary) {
+  let n = 0;
+  for (const m of summary.matchAll(/(\d+) (passed|failed|errors?|skipped|xfailed|xpassed)\b/g)) n += Number(m[1]);
+  return n;
+}
 
 /**
  * What a test step's log says ran: the tests by name where the runner lists them, else the count
- * its summary gives; null for a log that shows neither. Names come from every line that names a
- * test (a subtest's indented line included), the count from the last summary line.
+ * its summary gives (COUNT_LINES); null for a log that shows neither. Names come from every line
+ * that names a test (a subtest's indented line included).
  */
 export function testSignature(sectionText) {
   const names = [];
-  let count = null;
+  let whole = null;
+  let wholes = 0;
+  let parts = 0;
+  let hasParts = false;
   for (const line of String(sectionText).split('\n')) {
     for (const rx of NAME_LINES) {
       const m = rx.exec(line);
@@ -332,15 +354,21 @@ export function testSignature(sectionText) {
         break;
       }
     }
-    for (const rx of COUNT_LINES) {
-      const m = rx.exec(line);
-      if (m) {
-        // cargo's line carries passed and failed apart; every other has one figure.
-        count = m.length > 2 && m[2] !== undefined ? Number(m[1]) + Number(m[2]) : Number(m[1]);
-        break;
+    for (const c of COUNT_LINES) {
+      const m = c.rx.exec(line);
+      if (!m) continue;
+      const n = c.pytest ? pytestCount(m[1]) : c.both ? Number(m[1]) + Number(m[2]) : Number(m[1]);
+      if (c.whole) {
+        wholes++;
+        whole = n;
+      } else {
+        hasParts = true;
+        parts += n;
       }
+      break;
     }
   }
+  const count = wholes > 1 || (wholes === 1 && hasParts) ? null : wholes === 1 ? whole : hasParts ? parts : null;
   // Where the names are listed they are the identity, and their number the count (a summary that
   // counts only the passing tests says less than the list).
   if (names.length) return { names, count: names.length };

@@ -25,7 +25,7 @@ const B = ['the client records the limit', 'a stop near the limit names the budg
 test('stepSections: a log splits at the runner\'s step headers, timestamps and colour stripped; a uses step opens a section too', () => {
   const s = stepSections(log([['actions/checkout@v4', `${STAMP}Syncing repository`], ['npm test', tap(A)]]));
   assert.deepEqual(s.map((x) => x.header), ['actions/checkout@v4', 'npm test']);
-  assert.match(s[0].text, /^npm test\n|Syncing repository/);
+  assert.match(s[0].text, /Syncing repository/);
   assert.ok(!/\u001b|2026-11-08T/.test(s[1].text), 'no colour code and no timestamp survives');
   assert.deepEqual(stepSections('no header at all\njust lines'), []);
 });
@@ -41,8 +41,15 @@ test('testSignature: the tests by name where the runner lists them (TAP, go -v, 
   assert.deepEqual(testSignature('Tests:       1 failed, 11 passed, 12 total'), { names: null, count: 12 });
   assert.deepEqual(testSignature(' Tests  12 passed (12)'), { names: null, count: 12 });
   assert.deepEqual(testSignature('  12 passing (40ms)'), { names: null, count: 12 });
-  assert.deepEqual(testSignature('test result: ok. 10 passed; 0 failed; 0 ignored\ntest result: ok. 5 passed; 1 failed; 0 ignored'), { names: null, count: 6 });
-  assert.deepEqual(testSignature('[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.1 s\n[INFO] Tests run: 12, Failures: 0, Errors: 0, Skipped: 0'), { names: null, count: 12 });
+  // cargo prints one summary per test binary and one for the doctests, no total: they add up, so two
+  // sections that differ in an earlier binary and share the last line differ.
+  assert.deepEqual(testSignature('test result: ok. 10 passed; 0 failed; 0 ignored\ntest result: ok. 5 passed; 1 failed; 0 ignored\ntest result: ok. 1 passed; 0 failed; 0 ignored'), { names: null, count: 17 });
+  assert.deepEqual(sameTests(testSignature('test result: ok. 10 passed; 0 failed\ntest result: ok. 1 passed; 0 failed'), testSignature('test result: ok. 20 passed; 0 failed\ntest result: ok. 1 passed; 0 failed')), { same: false, by: 'count', count: 11 });
+  assert.deepEqual(testSignature('[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.1 s -- in com.Foo\n[INFO] Tests run: 12, Failures: 0, Errors: 0, Skipped: 0'), { names: null, count: 12 });
+  assert.deepEqual(testSignature('===== 1 passed, 1 failed, 2 skipped, 3 warnings in 0.3s ====='), { names: null, count: 4 });
+  // Two totals in one section are two suites, and a total beside per-unit lines is no one count: unknown.
+  assert.equal(testSignature('Tests:       2 passed, 2 total\nTests:       3 passed, 3 total'), null);
+  assert.equal(testSignature('# tests 4\ntest result: ok. 2 passed; 0 failed'), null);
   assert.deepEqual(testSignature('OK (12 tests, 30 assertions)'), { names: null, count: 12 });
   assert.deepEqual(testSignature('12 examples, 0 failures'), { names: null, count: 12 });
   assert.deepEqual(testSignature('Passed!  - Failed:     0, Passed:    12, Skipped:     0, Total:    12, Duration: 1 s'), { names: null, count: 12 });
@@ -340,7 +347,7 @@ test('tests run twice: fires when the newest sampled run\'s logs list the same t
   assert.equal(f.saving_min_week, 10); // 20 s x 30 runs / 60
   assert.match(f.evidence, /job test runs the same test step twice, `npm test` in steps "Unit tests" and "Tests again" \(30 s and 20 s a run\); the newest sampled run's logs list the same 3 tests by name in both/);
   assert.match(f.fix, /^run the suite once/);
-  assert.match(f.example, /if: github.event_name == 'push'/);
+  assert.match(f.example, /if: github.event_name == 'push' && github.ref == 'refs\/heads\/<default branch>'/, 'the gate names the event and the branch both');
   assert.match(f.tradeoff, /flaky test/);
   assert.deepEqual(a.workflows[0].repeated_tests[0].same_tests, { same: true, by: 'name', count: 3 });
 });
@@ -411,6 +418,62 @@ test('tests run twice: two steps with one display name share a timing list and a
   assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
   assert.deepEqual(a.workflows[0].repeated_tests[0].seconds, [10, 10]);
   assert.equal(f.saving_min_week, 5); // 10 s x 30 runs / 60, the lower of the two shared timings
+});
+
+test('tests run twice: two jobs in two deployment environments are two results, whatever their identical logs list', () => {
+  const file = `on: push
+jobs:
+  staging:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - run: npm test
+        env:
+          API_URL: \${{ secrets.API_URL }}
+  production:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - run: npm test
+        env:
+          API_URL: \${{ secrets.API_URL }}
+  again:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - run: npm test
+        env:
+          API_URL: \${{ secrets.API_URL }}
+`;
+  assert.deepEqual(repeatedTests(doc(file)).map((r) => r.jobs), [['production', 'again']], 'the same environment twice is the candidate; staging against production is not');
+  const steps = [['Set up job', 1], ['Run npm test', 30], ['Complete job', 0]];
+  const twoEnvs = file.replace(/\n  again:[\s\S]*$/, '\n');
+  const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'staging', log_text: log([['npm test', tap(A)]]) }, { ...job({ steps }), name: 'production', log_text: log([['npm test', tap(A)]]) }]], file: twoEnvs }]);
+  assert.equal(find(a, 'tests run twice').length, 0);
+});
+
+test('an artifact that duplicates another upload: a step between the destination and the artifact can rewrite the file, so valid artifact evidence confirms nothing there', () => {
+  const file = `on: push
+jobs:
+  analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+      - name: Second scanner
+        run: ./second-scanner > results.sarif
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SARIF file
+          path: results.sarif
+`;
+  const steps = [['Set up job', 1], ['Upload to code scanning', 3], ['Second scanner', 20], ['Upload artifact', 4], ['Complete job', 0]];
+  const a = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'analysis', run_artifacts: [{ name: 'SARIF file', bytes: 16334, entries: [{ name: 'results.sarif', size: 71521 }] }] }]], file }]);
+  assert.equal(find(a, 'an artifact that duplicates another upload').length, 0);
+  assert.deepEqual(a.workflows[0].duplicate_uploads, []);
 });
 
 test('duplicateUploads: a SARIF uploaded as an artifact and to code scanning; a release asset uploaded twice; a failure-only or globbed artifact is not a candidate', () => {
@@ -574,7 +637,33 @@ jobs:
         with:
           path: results.sarif
 `);
-  assert.deepEqual(duplicateUploads(between).map((u) => [u.job, u.after]), [['b', false]]);
+  // In b the destination went first, but a step between them can rewrite the file (a second scanner
+  // writing the same results.sarif): the artifact would then be the only copy of that report, so a
+  // destination counts only next to the artifact in that direction too.
+  assert.deepEqual(duplicateUploads(between), []);
+  const overwritten = doc(`on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+      - run: ./second-scanner > results.sarif
+      - uses: actions/upload-artifact@v4
+        with:
+          path: results.sarif
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+      - uses: actions/upload-artifact@v4
+        with:
+          path: results.sarif
+`);
+  assert.deepEqual(duplicateUploads(overwritten).map((u) => [u.job, u.after]), [['b', false]]);
   // Matching conditions still carry the implicit success(), so a failure between them skips the
   // later destination; always() on both lets the destination fail with the artifact already up.
   const betweenGuarded = doc(`on: push

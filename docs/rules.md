@@ -170,9 +170,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   directory (the step's, else the job's, else the workflow's `defaults.run`), with the same step
   `env:` and `shell:`. In one job, two such steps next to each other (a step between them, a
   setup, a build or a write, can change what the second one tests); or in two jobs of the run that
-  also share `runs-on`, job `env:`, `container:`, `services:`, `defaults:`, `if:` and every step
-  before the test step, each with its inputs, environment, directory and shell (the same setup
-  leads into the same tests), with no matrix. Commands are compared with their reporting flags
+  also share `runs-on`, `environment:` (staging against production resolves the same secret to two
+  endpoints), job `env:`, `container:`, `services:`, `defaults:`, `if:` and every step before the
+  test step, each with its inputs, environment, directory and shell (the same setup leads into the
+  same tests), with no matrix. Commands are compared with their reporting flags
   removed (`--test-reporter`, `--reporter`, `-q`, `-v`, `--silent`): the same tests reported
   differently are the same tests. Runners known: `node --test`, `npm/pnpm/yarn/bun test` and `run
   test*`, jest, vitest, mocha, ava, tap, pytest, unittest, `go test`, `cargo test`, rspec, `dotnet
@@ -185,8 +186,11 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   runner opens each step with `##[group]Run <first line of the script>`; across jobs, one section
   from each job's log) must show the same tests, by name where the runner lists them (TAP as
   `node --test` prints it, `go test -v`, `pytest -v`, the tick a jest, vitest or mocha listing
-  prints), else by the count the runner's summary line gives (jest, vitest, pytest, mocha, cargo,
-  maven, gradle, phpunit, rspec, dotnet). A log that lists different tests, shows no tests, could
+  prints), else by the count the runner's summary gives: the section's one total line (node
+  --test, jest, vitest, pytest with every outcome counted, mocha, maven's total, phpunit, rspec;
+  two total lines in one section are two suites, and count as unknown), or the sum of one line per
+  unit where the runner prints no total (cargo, one per test binary and one for the doctests;
+  dotnet, one per project). A log that lists different tests, shows no tests, could
   not be read, opens a different number of sections for the step's header than the file has such
   steps (a step's own output can print one), or belongs to a job the file's job does not map to
   one-to-one (a matrix leg, a name two jobs share) confirms nothing, and the rule is silent. The
@@ -221,8 +225,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   the artifact step runs: a release upload behind `if: startsWith(github.ref, 'refs/tags/')`
   leaves the artifact the only copy on every other run, so a destination counts only under the
   artifact step's own condition or with none, and never with `continue-on-error`, which lets it
-  fail and leave the artifact the only copy; and a destination after the artifact step counts
-  only when it is the next step, unless its own condition is exactly `always()` or
+  fail and leave the artifact the only copy; a destination before the artifact step counts only
+  when it is the step just before it (a step between them, a second scanner writing the same
+  `results.sarif`, can rewrite the file the artifact then keeps); and a destination after the
+  artifact step counts only when it is the next step, unless its own condition is exactly `always()` or
   `!cancelled()`, since any other condition, `always() && success()` included, carries the
   implicit success() and a step between them that fails would skip the destination after the
   artifact already went up. Then the newest sampled successful run's record: its artifact of the

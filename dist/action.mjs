@@ -8597,7 +8597,7 @@ function repeatedTests(doc) {
       }
       const first = steps[0];
       const before = text(all.slice(0, first.index).map((st) => ({ uses: st.uses ?? null, run: st.run ?? null, with: st.with ?? null, env: st.env ?? null, if: st.if ?? null, dir: st["working-directory"] ?? null, shell: st.shell ?? null })));
-      const jobKey = [stepKey, text(job["runs-on"]), text(job.env), text(job.container), text(job.services), text(job.defaults), cond(job), before].join("\0");
+      const jobKey = [stepKey, text(job["runs-on"]), text(job.environment), text(job.env), text(job.container), text(job.services), text(job.defaults), cond(job), before].join("\0");
       if (!byCommand.has(jobKey)) byCommand.set(jobKey, []);
       byCommand.get(jobKey).push({ job: id, step: first.name, header: first.header, shared: first.shared, index: first.index, command: first.command, matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
@@ -8637,6 +8637,7 @@ function duplicateUploads(doc) {
         if (j === i) return;
         if (guard(other) !== mine && guard(other) !== "") return;
         if (other["continue-on-error"] !== void 0 && String(other["continue-on-error"]).trim().toLowerCase() !== "false") return;
+        if (j < i - 1) return;
         if (j > i + 1 && !survivesFailure(guard(other))) return;
         const uses = String(other.uses || "");
         const w = other.with && typeof other.with === "object" ? other.with : {};
@@ -8672,32 +8673,38 @@ var NAME_LINES = [
   /^\s*[✓✔√] (.+?)(?: \(\d+ ?m?s\))?$/
 ];
 var COUNT_LINES = [
-  /^# tests (\d+)$/,
+  { rx: /^# tests (\d+)$/, whole: true },
   // node --test's TAP summary
-  /^Tests:\s+(?:.*?, )?(\d+) total/,
+  { rx: /^Tests:\s+(?:.*?, )?(\d+) total/, whole: true },
   // jest
-  /^\s*Tests\s+(?:.*?\| )?\d+ \w+ \((\d+)\)/,
+  { rx: /^\s*Tests\s+(?:.*?\| )?\d+ \w+ \((\d+)\)/, whole: true },
   // vitest: "Tests  12 passed (12)"
-  /^=+ (\d+) passed/,
-  // pytest
-  /^\s*(\d+) passing/,
+  { rx: /^=+ ((?:\d+ \w+(?:, )?)+) in [\d.]+s(?: \([^)]*\))? =+$/, whole: true, pytest: true },
+  // pytest: every outcome counted, warnings not
+  { rx: /^\s*(\d+) passing\b/, whole: true },
   // mocha
-  /^test result: \w+\. (\d+) passed; (\d+) failed/,
-  // cargo test, one line per binary (the last counts)
-  /^\[INFO\] Tests run: (\d+), Failures/,
-  // maven's total, after the per-class lines
-  /^Tests run: (\d+), Failures/,
-  // gradle, surefire per class
-  /^OK \((\d+) tests?/,
+  { rx: /^test result: \w+\. (\d+) passed; (\d+) failed/, whole: false, both: true },
+  // cargo test, one line per binary
+  { rx: /^\[INFO\] Tests run: (\d+), Failures: \d+, Errors: \d+, Skipped: \d+$/, whole: true },
+  // maven's total (a per-class line carries "-- in <class>")
+  { rx: /^OK \((\d+) tests?/, whole: true },
   // phpunit
-  /^(\d+) examples?, \d+ failures?/,
+  { rx: /^(\d+) examples?, \d+ failures?/, whole: true },
   // rspec
-  /^\s*Passed!\s+-\s+Failed:\s+\d+,\s+Passed:\s+\d+,\s+Skipped:\s+\d+,\s+Total:\s+(\d+)/
-  // dotnet test
+  { rx: /^\s*Passed!\s+-\s+Failed:\s+\d+,\s+Passed:\s+\d+,\s+Skipped:\s+\d+,\s+Total:\s+(\d+)/, whole: false }
+  // dotnet test, one line per project
 ];
+function pytestCount(summary2) {
+  let n = 0;
+  for (const m of summary2.matchAll(/(\d+) (passed|failed|errors?|skipped|xfailed|xpassed)\b/g)) n += Number(m[1]);
+  return n;
+}
 function testSignature(sectionText) {
   const names = [];
-  let count = null;
+  let whole = null;
+  let wholes = 0;
+  let parts = 0;
+  let hasParts = false;
   for (const line of String(sectionText).split("\n")) {
     for (const rx of NAME_LINES) {
       const m = rx.exec(line);
@@ -8706,14 +8713,21 @@ function testSignature(sectionText) {
         break;
       }
     }
-    for (const rx of COUNT_LINES) {
-      const m = rx.exec(line);
-      if (m) {
-        count = m.length > 2 && m[2] !== void 0 ? Number(m[1]) + Number(m[2]) : Number(m[1]);
-        break;
+    for (const c of COUNT_LINES) {
+      const m = c.rx.exec(line);
+      if (!m) continue;
+      const n = c.pytest ? pytestCount(m[1]) : c.both ? Number(m[1]) + Number(m[2]) : Number(m[1]);
+      if (c.whole) {
+        wholes++;
+        whole = n;
+      } else {
+        hasParts = true;
+        parts += n;
       }
+      break;
     }
   }
+  const count = wholes > 1 || wholes === 1 && hasParts ? null : wholes === 1 ? whole : hasParts ? parts : null;
   if (names.length) return { names, count: names.length };
   if (count !== null && count > 0) return { names: null, count };
   return null;
@@ -10266,8 +10280,10 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
       {
         confidence: "measured",
         tradeoff: "a second run kept to catch a flaky test is the point of itself: keep it, and say so in the step name; gated, the second run happens after the merge instead of on the pull request",
+        // The gate names the event and the default branch both: `push` alone would keep the second
+        // run on every branch's pushes.
         example: `- name: Tests, second run
-  if: github.event_name == 'push'   # once, on main; the pull request ran them above
+  if: github.event_name == 'push' && github.ref == 'refs/heads/${defaultBranch || "<default branch>"}'   # once, after the merge; the pull request ran them above
   run: ${repeats[0].command}`
       }
     );
