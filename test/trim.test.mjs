@@ -42,7 +42,7 @@ jobs:
       - uses: actions/setup-node@v4
       - run: npm test
 `);
-  assert.deepEqual(selfHostedSetups(d), [{ job: 'box', step: 'Run actions/setup-node@v4', action: 'setup-node' }]);
+  assert.deepEqual(selfHostedSetups(d), [{ job: 'box', step: 'Run actions/setup-node@v4', action: 'setup-node', unique: true }]);
   // A setup that restores a dependency cache or signs in to a registry does more than state a version.
   const more = doc(`on: push
 jobs:
@@ -91,6 +91,41 @@ jobs:
           cache: false
 `);
   assert.deepEqual(selfHostedSetups(go).map((s) => s.job), ['plain', 'node']);
+  // setup-node from v6 caches the package manager's store by itself; a SHA pin may be that new.
+  const nodeVersions = doc(`on: push
+jobs:
+  v6:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+  v6off:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          package-manager-cache: false
+  sha:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22'
+  v4:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-node@v4.1.0
+  twins:
+    runs-on: [self-hosted, x]
+    steps:
+      - name: Prepare
+        uses: actions/setup-python@v5
+      - name: Prepare
+        run: make build
+`);
+  assert.deepEqual(selfHostedSetups(nodeVersions).map((s) => [s.job, s.unique]), [['v6off', true], ['v4', true], ['twins', false]]);
 });
 
 const setupFile = (runsOn) => `on: push
@@ -122,6 +157,43 @@ test('toolchain setup on a self-hosted runner fires at a few seconds a step, sav
   // An API job no file job claims prices nothing.
   const unnamed = audit([{ name: 'CI', runs: runs(40), jobsPerRun: [[job({ steps: SETUP(3), selfHosted: true })]], file: setupFile('[self-hosted, box]') }]);
   assert.equal(find(unnamed, 'toolchain setup').length, 0);
+  // A matrix: the threshold is per leg, the saving is what the legs cost a run together, and the
+  // general rule gets nothing of it.
+  const matrixFile = `on: push
+jobs:
+  test:
+    runs-on: [self-hosted, box]
+    strategy:
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+      - name: Run tests
+        run: npm test
+`;
+  const legs = [1, 2, 3, 4].map((n) => ({ ...job({ steps: SETUP(30), selfHosted: true }), name: `test (${n})` }));
+  const mx = audit([{ name: 'CI', runs: runs(10), jobsPerRun: [legs, legs], file: matrixFile }]);
+  const mf = find(mx, 'toolchain setup');
+  assert.equal(mf.length, 1);
+  assert.equal(mf[0].saving_min_week, 20); // 4 legs x 30 s = 120 s a run x 10 runs / 60
+  assert.match(mf[0].evidence, /setup-node in job test, 30 s a leg, 2.0 min a run/);
+  assert.doesNotMatch(mf[0].evidence, /per job/); // nothing left for the general rule
+  // A step name another step of the job shares is not priced: a setup and a build both named Prepare.
+  const twinsFile = `on: push
+jobs:
+  test:
+    runs-on: [self-hosted, box]
+    steps:
+      - name: Prepare
+        uses: actions/setup-python@v5
+      - name: Prepare
+        run: make build
+      - name: Run tests
+        run: npm test
+`;
+  const tw = audit([{ name: 'CI', runs: runs(40), jobsPerRun: [[{ ...job({ steps: [['Set up job', 1], ['Prepare', 3], ['Prepare', 120], ['Run tests', 30], ['Complete job', 0]], selfHosted: true }), name: 'test' }]], file: twinsFile }]);
+  assert.equal(find(tw, 'toolchain setup').filter((f) => /self-hosted runners takes/.test(f.evidence)).length, 0);
   // Mixed hosting: the self-hosted step is priced from its own job (3 s); the hosted jobs' 120 s
   // setups are the general rule's, half of them, and never described as self-hosted.
   const mixedFile = `on: push

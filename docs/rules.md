@@ -120,9 +120,14 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **On self-hosted runners** the rule fires at 2 s per step, when the workflow file has a
   `actions/setup-*` step (node, python, go, java, dotnet, ruby) on a job that runs on self-hosted
   runners and the step sets up the runtime and nothing else (no `cache`, `cache-dependency-path`,
-  `bundler-cache`, `registry-url` or other input that restores a cache or signs in to a registry,
-  and not `setup-go`, which caches by default, unless it says `cache: false`: dropping such a step
-  would lose that work), each such step priced from its own job's sampled runs. The host can carry the runtime,
+  `bundler-cache`, `registry-url` or other input that restores a cache or signs in to a registry;
+  not `setup-go`, which caches by default, unless it says `cache: false`; and not `setup-node` from
+  v6, which caches the package manager's store by itself, or at a version the file does not show
+  as v5 or earlier (a SHA pin), unless it says `package-manager-cache: false`: dropping such a
+  step would lose that work), each such step priced from its own job's sampled runs: the 2 s
+  threshold is per execution, the saving is what the step costs a run with every matrix leg of
+  the job, and a step whose name another step of the job shares is not priced, since the sample
+  cannot tell their timings apart. The host can carry the runtime,
   so the step only restates a version: a tool-cache hit still costs the step, and a cold row
   downloads the runtime again. **Estimate** those steps' time, times runs a week; the rest of the
   workflow's toolchain time (hosted jobs' included) is judged by the 15 s rule above on its own. **Fix** the runtime the host has, its

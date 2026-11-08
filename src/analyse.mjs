@@ -82,9 +82,9 @@ export function timeJobs(sampledRuns, commands) {
   const t = {
     secondsByCategory: {}, workStepSeconds: new Map(), jobSecondsPerRun: [], queueWaits: [], tails: [], heads: [],
     jobLengths: [], stepsPerJob: [], hostedJobs: 0, jobCount: 0, sawCacheStep: false, billedPerRun: [], jobDurations: new Map(),
-    jobHosted: new Map(), stepSeconds: new Map(),
+    jobHosted: new Map(), stepSeconds: new Map(), stepRunTotals: new Map(),
   };
-  for (const jobs of sampledRuns) {
+  for (const [r, jobs] of sampledRuns.entries()) {
     let runSeconds = 0;
     let billed = 0;
     for (const job of jobs) {
@@ -117,6 +117,10 @@ export function timeJobs(sampledRuns, commands) {
         const label = `${jobName}\u0000${String(step.name).replace(/\s+/g, ' ').trim()}`;
         if (!t.stepSeconds.has(label)) t.stepSeconds.set(label, []);
         t.stepSeconds.get(label).push(seconds);
+        // And what the step costs a run: a matrix leg is one API job each, and a run pays them all.
+        if (!t.stepRunTotals.has(label)) t.stepRunTotals.set(label, []);
+        const totals = t.stepRunTotals.get(label);
+        totals[r] = (totals[r] || 0) + seconds;
         if (kind === 'work') {
           const name = String(step.name).replace(/\s+/g, ' ').slice(0, 60);
           if (!t.workStepSeconds.has(name)) t.workStepSeconds.set(name, []);
@@ -196,10 +200,19 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
   // matches them (a matrix leg "test (20)" is a run of job test). Null when the sample ran no such
   // step of that job (a renamed step, a job the sample never ran, a job name two jobs share).
   const jobRuns = assignJobRuns(allJobTimeouts(doc).map((t) => ({ id: t.id, name: t.name, reusable: Boolean(t.reusable) })), [...timing.jobDurations.keys()]);
+  // `each`: the median of one execution of the step; `perRun`: the median over the sampled runs of
+  // what the step cost a run, every matrix leg of the job included.
   const priced = (jobId, name) => {
     const label = String(name).replace(/\s+/g, ' ').trim();
-    const xs = (jobRuns.get(jobId) || []).flatMap((api) => timing.stepSeconds.get(`${api}\u0000${label}`) || []);
-    return xs.length ? round(median(xs), 1) : null;
+    const apis = jobRuns.get(jobId) || [];
+    const xs = apis.flatMap((api) => timing.stepSeconds.get(`${api}\u0000${label}`) || []);
+    if (!xs.length) return null;
+    const byRun = [];
+    for (const api of apis) {
+      const totals = timing.stepRunTotals.get(`${api}\u0000${label}`) || [];
+      totals.forEach((v, r) => { if (v !== undefined) byRun[r] = (byRun[r] || 0) + v; });
+    }
+    return { each: round(median(xs), 1), perRun: round(median(byRun.filter((v) => v !== undefined)), 1) };
   };
   const logBytes = sampledRuns.flat().map((j) => j.log_bytes).filter((b) => Number.isFinite(b) && b >= 0);
   const sampledCount = sampledRuns.length;
@@ -297,8 +310,12 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     job_timeouts: allJobTimeouts(doc),
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3),
-    // A self-hosted setup step, priced from the sample by its job and step name.
-    selfhosted_setups: selfHostedSetups(doc).map((s) => ({ ...s, seconds: priced(s.job, s.step) })),
+    // A self-hosted setup step, priced from the sample by its job and step name: one execution,
+    // and what it costs a run (its matrix legs together); a name another step shares is not priced.
+    selfhosted_setups: selfHostedSetups(doc).map((s) => {
+      const p = s.unique ? priced(s.job, s.step) : null;
+      return { ...s, seconds: p ? p.each : null, run_seconds: p ? p.perRun : null };
+    }),
     // A passing job's log size, median over the sampled jobs whose size was read (null when none was).
     log_bytes_p50: logBytes.length ? Math.round(median(logBytes)) : null,
     log_jobs_read: logBytes.length,
@@ -392,9 +409,10 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
   // the step, a cold row downloads the runtime again), so the whole step is the saving. The
   // general rule below judges the rest of the toolchain time, hosted jobs' included.
   const selfSetups = (w.selfhosted_setups || []).filter((s) => s.seconds !== null && s.seconds !== undefined);
-  const selfSecs = selfSetups.reduce((s, x) => s + x.seconds, 0);
-  if (selfSetups.length && selfSecs / selfSetups.length >= T.toolchainPerJobSelfHosted) {
-    const names = selfSetups.slice(0, 4).map((s) => `${s.action} in job ${s.job}, ${fmtS(s.seconds)}`);
+  // The threshold is per execution; the saving is what the steps cost a run, matrix legs included.
+  const selfSecs = selfSetups.reduce((s, x) => s + (x.run_seconds ?? x.seconds), 0);
+  if (selfSetups.length && selfSetups.every((s) => s.seconds >= T.toolchainPerJobSelfHosted)) {
+    const names = selfSetups.slice(0, 4).map((s) => `${s.action} in job ${s.job}, ${fmtS(s.seconds)}${s.run_seconds !== null && s.run_seconds !== s.seconds ? ` a leg, ${fmtS(s.run_seconds)} a run` : ''}`);
     add(selfSecs * w.runs_week / 60, 'toolchain setup', `toolchain setup on self-hosted runners takes ${fmtS(selfSecs)} a run (${names.join('; ')}${selfSetups.length > 4 ? '; and more' : ''}), where the host can carry the runtime, so the step only restates its version`,
       'use the runtime the host has, pin its version in the host image, and drop the setup step',
       { confidence: 'inferred', tradeoff: "the job follows the host image's update schedule, and a job that needs another version keeps its step", brief: `${fmtS(selfSecs)} a run on self-hosted runners` });

@@ -9140,9 +9140,14 @@ function selfHostedSetups(doc) {
       const m = /^actions\/setup-(node|python|go|java|dotnet|ruby)@/.exec(String(st.uses || ""));
       if (!m) return;
       const w = st.with && typeof st.with === "object" ? st.with : {};
-      if (Object.keys(w).some((k) => /^(cache|cache-dependency-path|bundler-cache|registry-url|scope|always-auth|server-id|server-username|server-password|gpg-private-key|source-url)$/.test(k) && !(k === "cache" && String(w[k]).trim().toLowerCase() === "false"))) return;
-      if (m[1] === "go" && String(w.cache ?? "").trim().toLowerCase() !== "false") return;
-      found.push({ job: id, step: stepName(st, i), action: `setup-${m[1]}` });
+      const off = (k) => String(w[k] ?? "").trim().toLowerCase() === "false";
+      if (Object.keys(w).some((k) => /^(cache|cache-dependency-path|bundler-cache|registry-url|scope|always-auth|server-id|server-username|server-password|gpg-private-key|source-url|package-manager-cache)$/.test(k) && !((k === "cache" || k === "package-manager-cache") && off(k)))) return;
+      if (m[1] === "go" && !off("cache")) return;
+      const major = /@v(\d+)(\.|$)/.exec(String(st.uses));
+      if (m[1] === "node" && !(major && Number(major[1]) <= 5) && !off("package-manager-cache")) return;
+      const name = stepName(st, i);
+      const unique = stepsOf2(job).filter((x, k) => stepName(x, k) === name).length === 1;
+      found.push({ job: id, step: name, action: `setup-${m[1]}`, unique });
     });
   }
   return found;
@@ -9532,9 +9537,10 @@ function timeJobs(sampledRuns, commands) {
     billedPerRun: [],
     jobDurations: /* @__PURE__ */ new Map(),
     jobHosted: /* @__PURE__ */ new Map(),
-    stepSeconds: /* @__PURE__ */ new Map()
+    stepSeconds: /* @__PURE__ */ new Map(),
+    stepRunTotals: /* @__PURE__ */ new Map()
   };
-  for (const jobs of sampledRuns) {
+  for (const [r, jobs] of sampledRuns.entries()) {
     let runSeconds = 0;
     let billed = 0;
     for (const job of jobs) {
@@ -9561,6 +9567,9 @@ function timeJobs(sampledRuns, commands) {
         const label = `${jobName}\0${String(step.name).replace(/\s+/g, " ").trim()}`;
         if (!t.stepSeconds.has(label)) t.stepSeconds.set(label, []);
         t.stepSeconds.get(label).push(seconds);
+        if (!t.stepRunTotals.has(label)) t.stepRunTotals.set(label, []);
+        const totals = t.stepRunTotals.get(label);
+        totals[r] = (totals[r] || 0) + seconds;
         if (kind === "work") {
           const name = String(step.name).replace(/\s+/g, " ").slice(0, 60);
           if (!t.workStepSeconds.has(name)) t.workStepSeconds.set(name, []);
@@ -9624,8 +9633,17 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
   const jobRuns = assignJobRuns(allJobTimeouts(doc).map((t) => ({ id: t.id, name: t.name, reusable: Boolean(t.reusable) })), [...timing.jobDurations.keys()]);
   const priced = (jobId, name) => {
     const label = String(name).replace(/\s+/g, " ").trim();
-    const xs = (jobRuns.get(jobId) || []).flatMap((api) => timing.stepSeconds.get(`${api}\0${label}`) || []);
-    return xs.length ? round(median(xs), 1) : null;
+    const apis = jobRuns.get(jobId) || [];
+    const xs = apis.flatMap((api) => timing.stepSeconds.get(`${api}\0${label}`) || []);
+    if (!xs.length) return null;
+    const byRun = [];
+    for (const api of apis) {
+      const totals = timing.stepRunTotals.get(`${api}\0${label}`) || [];
+      totals.forEach((v, r) => {
+        if (v !== void 0) byRun[r] = (byRun[r] || 0) + v;
+      });
+    }
+    return { each: round(median(xs), 1), perRun: round(median(byRun.filter((v) => v !== void 0)), 1) };
   };
   const logBytes = sampledRuns.flat().map((j) => j.log_bytes).filter((b) => Number.isFinite(b) && b >= 0);
   const sampledCount = sampledRuns.length;
@@ -9719,8 +9737,12 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     job_timeouts: allJobTimeouts(doc),
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3),
-    // A self-hosted setup step, priced from the sample by its job and step name.
-    selfhosted_setups: selfHostedSetups(doc).map((s) => ({ ...s, seconds: priced(s.job, s.step) })),
+    // A self-hosted setup step, priced from the sample by its job and step name: one execution,
+    // and what it costs a run (its matrix legs together); a name another step shares is not priced.
+    selfhosted_setups: selfHostedSetups(doc).map((s) => {
+      const p = s.unique ? priced(s.job, s.step) : null;
+      return { ...s, seconds: p ? p.each : null, run_seconds: p ? p.perRun : null };
+    }),
     // A passing job's log size, median over the sampled jobs whose size was read (null when none was).
     log_bytes_p50: logBytes.length ? Math.round(median(logBytes)) : null,
     log_jobs_read: logBytes.length,
@@ -9812,9 +9834,9 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
   }
   const tc = perRun.toolchain || 0;
   const selfSetups = (w.selfhosted_setups || []).filter((s) => s.seconds !== null && s.seconds !== void 0);
-  const selfSecs = selfSetups.reduce((s, x) => s + x.seconds, 0);
-  if (selfSetups.length && selfSecs / selfSetups.length >= T.toolchainPerJobSelfHosted) {
-    const names = selfSetups.slice(0, 4).map((s) => `${s.action} in job ${s.job}, ${fmtS(s.seconds)}`);
+  const selfSecs = selfSetups.reduce((s, x) => s + (x.run_seconds ?? x.seconds), 0);
+  if (selfSetups.length && selfSetups.every((s) => s.seconds >= T.toolchainPerJobSelfHosted)) {
+    const names = selfSetups.slice(0, 4).map((s) => `${s.action} in job ${s.job}, ${fmtS(s.seconds)}${s.run_seconds !== null && s.run_seconds !== s.seconds ? ` a leg, ${fmtS(s.run_seconds)} a run` : ""}`);
     add(
       selfSecs * w.runs_week / 60,
       "toolchain setup",

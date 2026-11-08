@@ -89,11 +89,21 @@ export function selfHostedSetups(doc) {
       // A setup that also restores a dependency cache or signs the job in to a registry does more
       // than state a version: dropping it would lose that work, so it is not this rule's.
       const w = st.with && typeof st.with === 'object' ? st.with : {};
-      if (Object.keys(w).some((k) => /^(cache|cache-dependency-path|bundler-cache|registry-url|scope|always-auth|server-id|server-username|server-password|gpg-private-key|source-url)$/.test(k) && !(k === 'cache' && String(w[k]).trim().toLowerCase() === 'false'))) return;
+      const off = (k) => String(w[k] ?? '').trim().toLowerCase() === 'false';
+      if (Object.keys(w).some((k) => /^(cache|cache-dependency-path|bundler-cache|registry-url|scope|always-auth|server-id|server-username|server-password|gpg-private-key|source-url|package-manager-cache)$/.test(k) && !((k === 'cache' || k === 'package-manager-cache') && off(k)))) return;
       // setup-go caches by default (v4 and later; the version is not checked, which only ever
       // keeps a step): only an explicit `cache: false` makes it a runtime-only setup.
-      if (m[1] === 'go' && String(w.cache ?? '').trim().toLowerCase() !== 'false') return;
-      found.push({ job: id, step: stepName(st, i), action: `setup-${m[1]}` });
+      if (m[1] === 'go' && !off('cache')) return;
+      // setup-node caches the package manager's store by itself from v6 when package.json names
+      // one; a version that is not a known v5 or earlier (a SHA pin, a branch) is taken to be that
+      // new, so only an explicit `package-manager-cache: false` makes it runtime-only.
+      const major = /@v(\d+)(\.|$)/.exec(String(st.uses));
+      if (m[1] === 'node' && !(major && Number(major[1]) <= 5) && !off('package-manager-cache')) return;
+      // A step name that another step of the job shares cannot be priced from the sample (the
+      // timings of both would pool): `unique` says the name is this step's alone.
+      const name = stepName(st, i);
+      const unique = stepsOf(job).filter((x, k) => stepName(x, k) === name).length === 1;
+      found.push({ job: id, step: name, action: `setup-${m[1]}`, unique });
     });
   }
   return found;
