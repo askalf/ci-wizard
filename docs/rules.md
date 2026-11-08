@@ -125,8 +125,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   host's runtime is not theirs), and the step sets up the runtime and nothing else (no `cache`, `cache-dependency-path`,
   `bundler-cache`, `registry-url` or other input that restores a cache or signs in to a registry;
   not `setup-go`, which caches by default, unless it says `cache: false`; and not `setup-node` from
-  v6, which caches the package manager's store by itself, or at a version the file does not show
-  as v5 or earlier (a SHA pin), unless it says `package-manager-cache: false`: dropping such a
+  v5, which caches the package manager's store by itself, or at a version the file does not show
+  as v4 or earlier (a SHA pin), unless it says `package-manager-cache: false`: dropping such a
   step would lose that work), each such step priced from its own job's sampled runs: each step
   qualifies on its own at 2 s per execution (the median); the saving is what the qualifying steps
   cost a run, a mean over the sampled runs with every matrix leg of the job, the same measure as

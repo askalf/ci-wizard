@@ -140,7 +140,7 @@ jobs:
           cache: false
 `);
   assert.deepEqual(selfHostedSetups(go).map((s) => s.job), ['plain', 'node']);
-  // setup-node from v6 caches the package manager's store by itself; a SHA pin may be that new.
+  // setup-node from v5 caches the package manager's store by itself; a SHA pin may be that new.
   const nodeVersions = doc(`on: push
 jobs:
   v6:
@@ -149,6 +149,19 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
+  v5:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+  v5off:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          package-manager-cache: false
   v6off:
     runs-on: [self-hosted, x]
     steps:
@@ -174,7 +187,7 @@ jobs:
       - name: Prepare
         run: make build
 `);
-  assert.deepEqual(selfHostedSetups(nodeVersions).map((s) => [s.job, s.unique]), [['v6off', true], ['v4', true], ['twins', false]]);
+  assert.deepEqual(selfHostedSetups(nodeVersions).map((s) => [s.job, s.unique]), [['v5off', true], ['v6off', true], ['v4', true], ['twins', false]]);
   // Names compare as GitHub shows them, and a name with an expression is never this step's alone.
   const shown = doc(`on: push
 jobs:

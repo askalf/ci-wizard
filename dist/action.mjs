@@ -9144,7 +9144,7 @@ function selfHostedSetups(doc) {
       if (Object.keys(w).some((k) => /^(cache|cache-dependency-path|bundler-cache|registry-url|scope|always-auth|server-id|server-username|server-password|gpg-private-key|source-url|package-manager-cache)$/.test(k) && !((k === "cache" || k === "package-manager-cache") && off(k)))) return;
       if (m[1] === "go" && !off("cache")) return;
       const major = /@v(\d+)(\.|$)/.exec(String(st.uses));
-      if (m[1] === "node" && !(major && Number(major[1]) <= 5) && !off("package-manager-cache")) return;
+      if (m[1] === "node" && !(major && Number(major[1]) <= 4) && !off("package-manager-cache")) return;
       const name = stepName(st, i);
       const shown = (x) => String(x).replace(/\s+/g, " ").trim();
       const unique = !name.includes("${{") && stepsOf2(job).filter((x, k) => shown(stepName(x, k)) === shown(name)).length === 1;

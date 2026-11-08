@@ -101,11 +101,11 @@ export function selfHostedSetups(doc) {
       // setup-go caches by default (v4 and later; the version is not checked, which only ever
       // keeps a step): only an explicit `cache: false` makes it a runtime-only setup.
       if (m[1] === 'go' && !off('cache')) return;
-      // setup-node caches the package manager's store by itself from v6 when package.json names
-      // one; a version that is not a known v5 or earlier (a SHA pin, a branch) is taken to be that
+      // setup-node caches the package manager's store by itself from v5 when package.json names
+      // one; a version that is not a known v4 or earlier (a SHA pin, a branch) is taken to be that
       // new, so only an explicit `package-manager-cache: false` makes it runtime-only.
       const major = /@v(\d+)(\.|$)/.exec(String(st.uses));
-      if (m[1] === 'node' && !(major && Number(major[1]) <= 5) && !off('package-manager-cache')) return;
+      if (m[1] === 'node' && !(major && Number(major[1]) <= 4) && !off('package-manager-cache')) return;
       // A step name that another step of the job shares cannot be priced from the sample (the
       // timings of both would pool): `unique` says the name is this step's alone.
       const name = stepName(st, i);
