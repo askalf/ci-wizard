@@ -134,7 +134,9 @@ export function repeatedTests(doc) {
         inJob.get(command).push({ index: i, name, run: st.run, when: cond(st) });
         // Occurrences by step, not by display name: two unnamed `run: npm test` steps are both
         // "Run npm test", and are two runs.
-        const runner = runnerOf(command);
+        // Grouped by the step's condition too: two steps gated apart (push against pull_request)
+        // never run in the same run, and are no repeat.
+        const runner = `${runnerOf(command)}\u0000${cond(st)}`;
         if (!byRunner.has(runner)) byRunner.set(runner, []);
         byRunner.get(runner).push({ index: i, name, command, run: st.run });
       }
@@ -157,7 +159,7 @@ export function repeatedTests(doc) {
         const same = commands.length === 1;
         // Priced only when each step is that one command and nothing else; two different commands
         // (other paths, another directory) are two suites as far as the file can tell.
-        found.push({ scope: 'job', jobs: [id], steps: taken.map((o) => o.name), pure: taken.map((o) => same && onlyCommand(o.run, commands[0])), command: same ? commands[0] : runner, same });
+        found.push({ scope: 'job', jobs: [id], steps: taken.map((o) => o.name), pure: taken.map((o) => same && onlyCommand(o.run, commands[0])), command: same ? commands[0] : runner.split('\u0000')[0], same });
         for (const i of byIndex.keys()) used.add(key(id, i));
       }
     }
@@ -194,7 +196,10 @@ export function duplicateUploads(doc) {
     const steps = stepsOf(job);
     steps.forEach((st, i) => {
       if (!/^actions\/upload-artifact@/.test(String(st.uses || ''))) return;
-      if (/failure\(\)/.test(String(st.if ?? ''))) return;
+      // An artifact step that runs after a failure (failure(), always(), !cancelled()) keeps a
+      // failed run's file for a look, and would be the only copy when the destination is what
+      // failed: never a duplicate.
+      if (/failure\(\)|always\(\)|cancelled\(\)/.test(String(st.if ?? ''))) return;
       const raw = st.with && typeof st.with === 'object' ? String(st.with.path ?? '') : '';
       const paths = raw.split('\n').map((p) => p.trim()).filter(Boolean);
       if (paths.length !== 1 || /[*?[]/.test(paths[0]) || paths[0].includes('${{')) return;
@@ -206,17 +211,14 @@ export function duplicateUploads(doc) {
       // run, so a destination with a condition the artifact step does not share does not count.
       const guard = (s) => String(s.if ?? '').replace(/\s+/g, ' ').trim();
       const mine = guard(st);
-      // A destination with no condition runs only on success (GitHub's implicit success()). An
-      // artifact step that runs after a failure too (always(), !cancelled()) then keeps the only
-      // copy of a failed run's file, so such a destination counts only under the same condition.
-      const afterFailure = /always\(\)|cancelled\(\)/.test(mine);
-      // A destination that comes later counts only when it comes next, unless its own condition
-      // survives a failure (always(), !cancelled()): any other condition, or none, carries the
-      // implicit success(), and a step between them that fails skips the destination after the
-      // artifact already went up.
+      // The artifact step runs on success alone (above). A destination before it that fails fails
+      // the job, and the artifact never goes up; a destination with no condition after it counts
+      // only when it comes next, since a step between them that fails skips the destination
+      // (implicit success()) after the artifact already went up, and a later destination under a
+      // condition of its own counts only when that condition is exactly always() or !cancelled().
       steps.forEach((other, j) => {
         if (j === i) return;
-        if (guard(other) !== mine && (guard(other) !== '' || afterFailure)) return;
+        if (guard(other) !== mine && guard(other) !== '') return;
         // A destination allowed to fail (continue-on-error) can leave the artifact the only copy.
         if (other['continue-on-error'] !== undefined && String(other['continue-on-error']).trim().toLowerCase() !== 'false') return;
         if (j > i + 1 && !survivesFailure(guard(other))) return;

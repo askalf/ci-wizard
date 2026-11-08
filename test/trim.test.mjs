@@ -128,6 +128,9 @@ jobs:
   // One step that starts two suites of one runner is one step, not a repeat.
   const multiline = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Suites\n        run: |\n          pytest tests/unit\n          pytest tests/integration\n');
   assert.deepEqual(repeatedTests(multiline), []);
+  // Two steps of one job gated apart never run together; under one condition they are a repeat.
+  const gatedSteps = doc('on: [push, pull_request]\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: On push\n        if: github.event_name == \'push\'\n        run: npm test\n      - name: On pull request\n        if: github.event_name == \'pull_request\'\n        run: npm test\n      - name: A\n        if: github.event_name == \'push\'\n        run: pytest tests\n      - name: B\n        if: github.event_name == \'push\'\n        run: pytest tests\n');
+  assert.deepEqual(repeatedTests(gatedSteps).map((r) => [r.steps, r.command]), [[['A', 'B'], 'pytest tests']]);
   // Two unnamed steps with the same command share a display name and are still two runs.
   const unnamed = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n      - run: npm test\n');
   assert.deepEqual(repeatedTests(unnamed), [{ scope: 'job', jobs: ['t'], steps: ['Run npm test', 'Run npm test'], pure: [true, true], command: 'npm test', same: true }]);
@@ -244,7 +247,8 @@ jobs:
         with:
           sarif_file: results.sarif
 `);
-  assert.deepEqual(duplicateUploads(afterFailure).map((u) => u.job), ['b']);
+  // Under always() on both, the destination can fail and the artifact still goes up: no duplicate either.
+  assert.deepEqual(duplicateUploads(afterFailure), []);
   // A destination with no condition after the artifact counts only when it comes next: a step
   // between them that fails skips it, and the artifact is the only copy of that run's file.
   const between = doc(`on: push
@@ -301,7 +305,23 @@ jobs:
         with:
           sarif_file: results.sarif
 `);
-  assert.deepEqual(duplicateUploads(betweenGuarded).map((u) => u.job), ['b']);
+  assert.deepEqual(duplicateUploads(betweenGuarded), []);
+  // The destination first and both under always(): a failed destination leaves the artifact the only copy.
+  const sarifFirstAlways = doc(`on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          path: results.sarif
+`);
+  assert.deepEqual(duplicateUploads(sarifFirstAlways), []);
   // A compound condition that mentions always() still carries success(): it does not survive the failure.
   const compound = doc(betweenGuarded === null ? '' : `on: push
 jobs:

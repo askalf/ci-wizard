@@ -9171,7 +9171,7 @@ function repeatedTests(doc) {
       for (const command of new Set(testCommands(st.run))) {
         if (!inJob.has(command)) inJob.set(command, []);
         inJob.get(command).push({ index: i, name, run: st.run, when: cond(st) });
-        const runner = runnerOf(command);
+        const runner = `${runnerOf(command)}\0${cond(st)}`;
         if (!byRunner.has(runner)) byRunner.set(runner, []);
         byRunner.get(runner).push({ index: i, name, command, run: st.run });
       }
@@ -9187,7 +9187,7 @@ function repeatedTests(doc) {
       const commands = [...new Set(occurrences.filter((o) => byIndex.has(o.index)).map((o) => o.command))];
       if (taken.length > 1) {
         const same = commands.length === 1;
-        found.push({ scope: "job", jobs: [id], steps: taken.map((o) => o.name), pure: taken.map((o) => same && onlyCommand(o.run, commands[0])), command: same ? commands[0] : runner, same });
+        found.push({ scope: "job", jobs: [id], steps: taken.map((o) => o.name), pure: taken.map((o) => same && onlyCommand(o.run, commands[0])), command: same ? commands[0] : runner.split("\0")[0], same });
         for (const i of byIndex.keys()) used.add(key(id, i));
       }
     }
@@ -9215,7 +9215,7 @@ function duplicateUploads(doc) {
     const steps = stepsOf2(job);
     steps.forEach((st, i) => {
       if (!/^actions\/upload-artifact@/.test(String(st.uses || ""))) return;
-      if (/failure\(\)/.test(String(st.if ?? ""))) return;
+      if (/failure\(\)|always\(\)|cancelled\(\)/.test(String(st.if ?? ""))) return;
       const raw = st.with && typeof st.with === "object" ? String(st.with.path ?? "") : "";
       const paths = raw.split("\n").map((p) => p.trim()).filter(Boolean);
       if (paths.length !== 1 || /[*?[]/.test(paths[0]) || paths[0].includes("${{")) return;
@@ -9224,10 +9224,9 @@ function duplicateUploads(doc) {
       const same = (p) => String(p ?? "").split("\n").map((x) => x.trim().replace(/^\.\//, "")).includes(path);
       const guard = (s) => String(s.if ?? "").replace(/\s+/g, " ").trim();
       const mine = guard(st);
-      const afterFailure = /always\(\)|cancelled\(\)/.test(mine);
       steps.forEach((other, j) => {
         if (j === i) return;
-        if (guard(other) !== mine && (guard(other) !== "" || afterFailure)) return;
+        if (guard(other) !== mine && guard(other) !== "") return;
         if (other["continue-on-error"] !== void 0 && String(other["continue-on-error"]).trim().toLowerCase() !== "false") return;
         if (j > i + 1 && !survivesFailure(guard(other))) return;
         const uses = String(other.uses || "");

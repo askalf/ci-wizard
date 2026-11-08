@@ -135,8 +135,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   command (`npm test` twice) or the same runner on other paths or in another directory (`node
   --test` on the checkout, then on an exported tree); or in two jobs of the run, the same command
   on the same kind of runner with no matrix. A matrix leg is one job to GitHub, and the same
-  tests on two platforms are two results, so neither counts; two jobs or steps under different
-  conditions (`push` against `pull_request`) never run in the same run, and are no repeat; a job already counted within itself
+  tests on two platforms are two results, so neither counts; two jobs, or two steps of one job, under
+  different conditions (`push` against `pull_request`) never run in the same run, and are no
+  repeat; a job already counted within itself
   is left out of the cross-job scope, so no run is counted twice. Two steps are two runs whatever their names: two unnamed `run: npm test` steps are both
   "Run npm test", and are priced at the lower of their shared timings; one step that starts two
   suites of one runner is one step, and a step is priced once: a step in a within-job finding is
@@ -166,15 +167,15 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   expression, one line) that another action step of the same job already publishes with the same
   literal input: a SARIF file sent to code scanning (`github/codeql-action/upload-sarif` with the
   same `sarif_file`), or a file attached to the release (`softprops/action-gh-release` with it in
-  `files`). Both read their input against the workspace, as upload-artifact does. A `gh release
+  `files`). Both read their input against the workspace, as upload-artifact does. An artifact step
+  that runs after a failure (`failure()`, `always()`, `!cancelled()`) keeps a failed run's file
+  for a look and would be the only copy when the destination is what failed: never a duplicate. A `gh release
   upload` in a run script is not read: whether the shell reaches it (a `test … || exit 0`, an
   `if`, a here-document) and from which directory (`working-directory`, a `cd`) is not the file's
-  to establish, and a wrong duplicate deletes the only copy. The other destination must run whenever the artifact step runs: a release upload
-  behind `if: startsWith(github.ref, 'refs/tags/')` leaves the artifact the only copy on every
-  other run, and a destination with no condition runs only on success, so an artifact step with
-  `if: always()` or `!cancelled()` keeps the only copy of a failed run's file; a destination counts
-  only under the artifact step's own condition, or with none when the artifact step runs on
-  success alone, and never with `continue-on-error`, which lets it fail and leave the artifact the
+  to establish, and a wrong duplicate deletes the only copy. The other destination must run, and succeed, whenever the artifact step runs: a
+  release upload behind `if: startsWith(github.ref, 'refs/tags/')` leaves the artifact the only
+  copy on every other run, so a destination counts only under the artifact step's own condition
+  or with none, and never with `continue-on-error`, which lets it fail and leave the artifact the
   only copy; and a destination after the artifact step counts only when it is the next step,
   unless its own condition is exactly `always()` or `!cancelled()`, since any other condition,
   `always() && success()` included, carries the implicit success() and a step between them that
