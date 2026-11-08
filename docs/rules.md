@@ -172,9 +172,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   reads, a `cd` moves the tests, an `export` changes their environment, a pipe anywhere feeds or
   captures them, an input redirection of any kind feeds them (a here-document, a here-string, a
   file), a command or process substitution anywhere, an echo's argument included, runs a command
-  of its own, and a quote or a backslash beside a brace, glob or tilde decides whether it expands,
-  `node --test 'test/{a,b}.mjs'` and `node --test test/\{a,b\}.mjs` being one file where the
-  bare line is two: none of those is aside),
+  of its own, a quote beside a brace, glob or tilde decides whether it expands, `node --test
+  'test/{a,b}.mjs'` being one file where the bare line is two, and a backslash anywhere escapes a
+  brace or, inside double quotes alone, the character after it: none of those is aside),
   under the same `if:`, in the same declared working directory (the step's, else the job's, else
   the workflow's `defaults.run`), with the same step `env:` and `shell:`, and with no expression
   in any of those (`env: SEED: ${{ steps.first.outputs.seed || 'initial' }}` reads alike on two
@@ -239,10 +239,13 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   duplicate. A `gh release upload` in a run script is not read: whether the shell reaches it (a
   `test … || exit 0`, an `if`, a here-document) and from which directory (`working-directory`, a
   `cd`) is not the file's to establish. The other destination must run, and succeed, whenever
-  the artifact step runs: a release upload behind `if: startsWith(github.ref, 'refs/tags/')`
-  leaves the artifact the only copy on every other run, so a destination counts only under the
-  artifact step's own condition or with none, and never with `continue-on-error`, which lets it
-  fail and leave the artifact the only copy; a destination before the artifact step counts only
+  the artifact step runs, and a condition does not establish that: a release upload behind `if:
+  startsWith(github.ref, 'refs/tags/')` leaves the artifact the only copy on every other run, and
+  the same text on both steps can hold on one and turn on the next (`steps.saved.outputs.artifact-id
+  == ''` once the artifact step has published). So the artifact step carries no condition at all,
+  a destination counts only with none (in a run that succeeded, a step without a condition ran
+  and passed) or, later than next, with exactly `always()` or `!cancelled()`, and never with
+  `continue-on-error`, which lets it fail and leave the artifact the only copy; a destination before the artifact step counts only
   when it is the step just before it (a step between them, a second scanner writing the same
   `results.sarif`, can rewrite the file the artifact then keeps); and a destination after the
   artifact step counts only when it is the next step, unless its own condition is exactly `always()` or
@@ -269,9 +272,11 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **Fix** when the other upload comes first, drop the artifact step: an upload that fails fails
   the job before the artifact goes up. When the artifact step comes first, the other upload can
   fail after the artifact went up, so the fix is the order: move the artifact step behind that
-  upload under `if: failure()`, kept only on a run where the upload failed. *Trade-off:* none while
-  the other destination is browsable (code scanning shows the SARIF, the release its assets); keep
-  the artifact for one that is not.
+  upload under `if: failure()`, kept only on a run where the upload failed. The example writes
+  the step's name and the path as double-quoted YAML scalars, so a `: ` inside either stays text.
+  *Trade-off:* none while the other destination is browsable (code scanning shows the SARIF, the
+  release its assets) and nothing downloads the artifact; keep it for a destination that is not
+  browsable.
 - **Collection.** Only where the file raises a candidate, and only for the newest sampled
   successful run: the run's artifact listing (one API call), then each candidate artifact's zip
   (one API call for the redirect, the file from its host, no token, up to 8 MB), read for the

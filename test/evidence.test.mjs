@@ -131,7 +131,11 @@ jobs:
   assert.equal(onlyCommand('node --test test/{a,b}.mjs', 'node --test test/{a,b}.mjs'), true, 'unquoted, the words are the shell\'s own');
   // A backslash escapes the brace the same way, and is gone from the words too.
   assert.equal(onlyCommand('node --test test/\\{a,b\\}.mjs', 'node --test test/{a,b}.mjs'), false);
-  assert.equal(onlyCommand('node --test test/a\\ b.mjs', 'node --test test/a b.mjs'), true, 'a backslash before a space only joins the words, and the key keeps that');
+  // Inside double quotes a backslash escapes, inside single quotes it is a character: "test/a\\b.mjs" and 'test/a\\b.mjs' are two files whose words read alike, so any backslash disqualifies the script.
+  assert.equal(onlyCommand('node --test test/a\\ b.mjs', 'node --test test/a b.mjs'), false);
+  assert.equal(onlyCommand('node --test "test/a\\\\b.mjs"', 'node --test test/a\\\\b.mjs'), false);
+  assert.equal(onlyCommand("node --test 'test/a\\\\b.mjs'", 'node --test test/a\\\\b.mjs'), false);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node --test "test/a\\\\b.mjs"\n      - run: node --test \'test/a\\\\b.mjs\'\n')), []);
   const escaped = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node --test test/{a,b}.mjs\n      - run: node --test test/\\{a,b\\}.mjs\n';
   assert.deepEqual(repeatedTests(doc(escaped)), []);
   const eSteps = [['Set up job', 1], ['Run node --test test/{a,b}.mjs', 30], ['Run node --test test/\\{a,b\\}.mjs', 30], ['Complete job', 0]];
@@ -746,7 +750,9 @@ jobs:
           path: reports/
 `);
   assert.deepEqual(duplicateUploads(directory), []);
-  // The same condition on both steps is one path through the run: a candidate again.
+  // The same condition on both steps is not one path through the run: the same text can hold on
+  // one step and turn on the next (`steps.saved.outputs.artifact-id == ''` once the artifact step
+  // has published), so a conditioned artifact step is no candidate, whatever the destination says.
   const bothOnTag = doc(`on: push
 jobs:
   r:
@@ -761,7 +767,42 @@ jobs:
         with:
           files: dist.tar.gz
 `);
-  assert.equal(duplicateUploads(bothOnTag).length, 1);
+  assert.equal(duplicateUploads(bothOnTag).length, 0);
+  const turning = `on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - id: saved
+        uses: actions/upload-artifact@v4
+        if: steps.saved.outputs.artifact-id == ''
+        with:
+          name: SARIF file
+          path: results.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        if: steps.saved.outputs.artifact-id == ''
+        with:
+          sarif_file: results.sarif
+`;
+  assert.deepEqual(duplicateUploads(doc(turning)), []);
+  const turningSteps = [['Set up job', 1], ['Run actions/upload-artifact@v4', 4], ['Run github/codeql-action/upload-sarif@v3', 0], ['Complete job', 0]];
+  const t = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[{ ...job({ steps: turningSteps }), name: 'a', run_artifacts: [{ name: 'SARIF file', bytes: 16334, entries: [{ name: 'results.sarif', size: 71521 }] }] }]], file: turning }]);
+  assert.equal(find(t, 'an artifact that duplicates another upload').length, 0, 'valid single-file evidence under a condition that turned confirms nothing');
+  // A conditioned destination beside an unconditioned artifact step does not count either, unless it is exactly always() or !cancelled().
+  const conditionedDestination = doc(`on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/upload-sarif@v3
+        if: github.event_name == 'push'
+        with:
+          sarif_file: results.sarif
+      - uses: actions/upload-artifact@v4
+        with:
+          path: results.sarif
+`);
+  assert.deepEqual(duplicateUploads(conditionedDestination), []);
   // An artifact kept after a failure beside a destination that runs on success alone: the artifact
   // is the only copy of a failed run's file. Under always() on both, the destination can fail and
   // the artifact still goes up: no candidate either.
@@ -959,6 +1000,19 @@ test('an artifact that duplicates another upload: fires when the newest sampled 
   assert.match(g.fix, /^drop the artifact step/);
   assert.match(g.example, /# remove/);
   assert.ok(!/in a later step/.test(g.evidence));
+  // Both examples parse as YAML and give the step name and path back, a colon and space in either included.
+  const colonFile = (destinationFirst) => scorecardFile(destinationFirst).replace(/name: Upload artifact/, "name: 'Upload: report'").replace(/(path|sarif_file): results\.sarif/g, "$1: 'report: final.sarif'");
+  const colonSteps = SCORECARD.map(([n, s]) => [n === 'Upload artifact' ? 'Upload: report' : n, s]);
+  const colonArtifacts = [{ name: 'SARIF file', bytes: 16334, entries: [{ name: 'report: final.sarif', size: 71521 }] }];
+  for (const destinationFirst of [false, true]) {
+    const c = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[{ ...job({ steps: colonSteps }), name: 'analysis', run_artifacts: colonArtifacts }]], file: colonFile(destinationFirst) }]);
+    const [h] = find(c, 'an artifact that duplicates another upload');
+    assert.ok(h, `destination ${destinationFirst ? 'first' : 'after'}: ${JSON.stringify(c.findings.map((x) => x.what))}`);
+    const parsed = parseYaml(h.example);
+    assert.equal(parsed[0].name, 'Upload: report');
+    assert.equal(parsed[0].with.path, 'report: final.sarif');
+    assert.equal(parsed[0].if, destinationFirst ? undefined : 'failure()');
+  }
 });
 
 test('an artifact that duplicates another upload: silent without the run\'s artifact, with an artifact of another name, with more than the one file, or with a directory the zip could not be read', () => {

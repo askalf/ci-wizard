@@ -575,9 +575,11 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
       {
         confidence: 'measured',
         tradeoff: 'none while the other destination is browsable (code scanning shows the SARIF, the release its assets) and nothing downloads the artifact: no download-artifact step in this file does, but another workflow or a script fetching it by run is not visible here, so check for one before the step goes; keep the artifact for a destination that is not browsable',
+        // The step's name and the path are written as double-quoted YAML scalars (JSON strings
+        // are valid ones): a `: ` inside either would otherwise read as a mapping.
         example: later
-          ? `# after the step that sends ${dupes[0].path} to ${dupes[0].alsoTo[0]}\n- name: ${dupes[0].step}\n  if: failure()   # only when that upload failed\n  uses: actions/upload-artifact@...\n  with:\n    path: ${dupes[0].path}`
-          : `# remove\n- name: ${dupes[0].step}\n  uses: actions/upload-artifact@...\n  with:\n    path: ${dupes[0].path}`,
+          ? `# after the step that sends ${dupes[0].path} to ${dupes[0].alsoTo[0]}\n- name: ${JSON.stringify(dupes[0].step)}\n  if: failure()   # only when that upload failed\n  uses: actions/upload-artifact@...\n  with:\n    path: ${JSON.stringify(dupes[0].path)}`
+          : `# remove\n- name: ${JSON.stringify(dupes[0].step)}\n  uses: actions/upload-artifact@...\n  with:\n    path: ${JSON.stringify(dupes[0].path)}`,
       });
   }
 

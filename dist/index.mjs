@@ -8539,8 +8539,8 @@ function testCommandKeys(script) {
   return out;
 }
 function onlyCommand(script, command) {
-  if (/\||\$|`|<|>\(/.test(String(script))) return false;
-  if (/['"\\]/.test(String(script)) && /[{}*?[\]~]/.test(String(script))) return false;
+  if (/\||\$|`|<|>\(|\\/.test(String(script))) return false;
+  if (/['"]/.test(String(script)) && /[{}*?[\]~]/.test(String(script))) return false;
   const commands = shellCommands(script);
   if (!commands.length) return false;
   let hits = 0;
@@ -8668,11 +8668,11 @@ function duplicateUploads(doc) {
       const alsoTo = /* @__PURE__ */ new Set();
       const same = (p) => String(p ?? "").split("\n").map((x) => x.trim().replace(/^\.\//, "")).includes(path);
       const guard = (s) => String(s.if ?? "").replace(/\s+/g, " ").trim();
-      const mine = guard(st);
+      if (guard(st) !== "") return;
       let after = false;
       steps.forEach((other, j) => {
         if (j === i) return;
-        if (guard(other) !== mine && guard(other) !== "") return;
+        if (guard(other) !== "" && !survivesFailure(guard(other))) return;
         if (other["continue-on-error"] !== void 0 && String(other["continue-on-error"]).trim().toLowerCase() !== "false") return;
         if (j < i - 1) return;
         if (j > i + 1 && !survivesFailure(guard(other))) return;
@@ -10343,16 +10343,18 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
       {
         confidence: "measured",
         tradeoff: "none while the other destination is browsable (code scanning shows the SARIF, the release its assets) and nothing downloads the artifact: no download-artifact step in this file does, but another workflow or a script fetching it by run is not visible here, so check for one before the step goes; keep the artifact for a destination that is not browsable",
+        // The step's name and the path are written as double-quoted YAML scalars (JSON strings
+        // are valid ones): a `: ` inside either would otherwise read as a mapping.
         example: later ? `# after the step that sends ${dupes[0].path} to ${dupes[0].alsoTo[0]}
-- name: ${dupes[0].step}
+- name: ${JSON.stringify(dupes[0].step)}
   if: failure()   # only when that upload failed
   uses: actions/upload-artifact@...
   with:
-    path: ${dupes[0].path}` : `# remove
-- name: ${dupes[0].step}
+    path: ${JSON.stringify(dupes[0].path)}` : `# remove
+- name: ${JSON.stringify(dupes[0].step)}
   uses: actions/upload-artifact@...
   with:
-    path: ${dupes[0].path}`
+    path: ${JSON.stringify(dupes[0].path)}`
       }
     );
   }

@@ -135,13 +135,14 @@ export function onlyCommand(script, command) {
   // shellCommands keeps none of them apart, so the script is read for them, and a script with any
   // of them is not one command. Nor is one with any `$`: shellCommands drops the quotes, and
   // `node --test '$FILE'` (a file named $FILE) and `node --test "$FILE"` (the file FILE names)
-  // would read alike.
-  if (/\||\$|`|<|>\(/.test(String(script))) return false;
-  // Quotes and backslashes decide whether a brace, glob or tilde expands: `node --test
-  // test/{a,b}.mjs` runs two files, `node --test 'test/{a,b}.mjs'` and `node --test
-  // test/\{a,b\}.mjs` one, and the words read alike once the quotes and backslashes are gone. A
-  // script with such a character beside a quote or a backslash is not established as one command.
-  if (/['"\\]/.test(String(script)) && /[{}*?[\]~]/.test(String(script))) return false;
+  // would read alike. Nor one with a backslash: it escapes a brace from expanding, and inside
+  // double quotes it is an escape where inside single quotes it is a character, and the words
+  // keep none of that.
+  if (/\||\$|`|<|>\(|\\/.test(String(script))) return false;
+  // Quotes decide whether a brace, glob or tilde expands: `node --test test/{a,b}.mjs` runs two
+  // files and `node --test 'test/{a,b}.mjs'` one, and the words read alike once the quotes are
+  // gone. A script with such a character beside a quote is not established as one command.
+  if (/['"]/.test(String(script)) && /[{}*?[\]~]/.test(String(script))) return false;
   const commands = shellCommands(script);
   if (!commands.length) return false;
   let hits = 0;
@@ -341,11 +342,15 @@ export function duplicateUploads(doc) {
       if (!/\.[A-Za-z0-9]+$/.test(path) || path.endsWith('/')) return;
       const alsoTo = new Set();
       const same = (p) => String(p ?? '').split('\n').map((x) => x.trim().replace(/^\.\//, '')).includes(path);
-      // The other destination must run whenever the artifact step runs: a release upload behind
-      // `if: startsWith(github.ref, 'refs/tags/')` leaves the artifact the only copy on every other
-      // run, so a destination with a condition the artifact step does not share does not count.
+      // The other destination must run whenever the artifact step runs, and a condition does not
+      // establish that: a release upload behind `if: startsWith(github.ref, 'refs/tags/')` leaves
+      // the artifact the only copy on every other run, and the same text on both steps can hold
+      // on one and not the other (`steps.saved.outputs.artifact-id == ''` turns once the artifact
+      // step has published). So the artifact step carries no condition, and a destination counts
+      // with none (or, later than next, with exactly always() or !cancelled(), below): in a run
+      // that succeeded, a step without a condition ran and passed.
       const guard = (s) => String(s.if ?? '').replace(/\s+/g, ' ').trim();
-      const mine = guard(st);
+      if (guard(st) !== '') return;
       // The artifact step runs on success alone (above). A destination before it that fails fails
       // the job, and the artifact never goes up; a destination with no condition after it counts
       // only when it comes next, since a step between them that fails skips the destination
@@ -356,7 +361,7 @@ export function duplicateUploads(doc) {
       let after = false;
       steps.forEach((other, j) => {
         if (j === i) return;
-        if (guard(other) !== mine && guard(other) !== '') return;
+        if (guard(other) !== '' && !survivesFailure(guard(other))) return;
         // A destination allowed to fail (continue-on-error) can leave the artifact the only copy.
         if (other['continue-on-error'] !== undefined && String(other['continue-on-error']).trim().toLowerCase() !== 'false') return;
         // A destination before the artifact counts only from the step just before it: a step
