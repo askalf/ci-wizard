@@ -129,6 +129,15 @@ jobs:
   assert.equal(onlyCommand("node --test 'test/{a,b}.mjs'", 'node --test test/{a,b}.mjs'), false);
   assert.equal(onlyCommand('node --test "test/*.mjs"', 'node --test test/*.mjs'), false);
   assert.equal(onlyCommand('node --test test/{a,b}.mjs', 'node --test test/{a,b}.mjs'), true, 'unquoted, the words are the shell\'s own');
+  // A backslash escapes the brace the same way, and is gone from the words too.
+  assert.equal(onlyCommand('node --test test/\\{a,b\\}.mjs', 'node --test test/{a,b}.mjs'), false);
+  assert.equal(onlyCommand('node --test test/a\\ b.mjs', 'node --test test/a b.mjs'), true, 'a backslash before a space only joins the words, and the key keeps that');
+  const escaped = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node --test test/{a,b}.mjs\n      - run: node --test test/\\{a,b\\}.mjs\n';
+  assert.deepEqual(repeatedTests(doc(escaped)), []);
+  const eSteps = [['Set up job', 1], ['Run node --test test/{a,b}.mjs', 30], ['Run node --test test/\\{a,b\\}.mjs', 30], ['Complete job', 0]];
+  const eLog = log([['node --test test/{a,b}.mjs', tap(['A', 'B'])], ['node --test test/\\{a,b\\}.mjs', tap(['A', 'B'])]]);
+  const ee = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: eSteps }), name: 't', log_text: eLog }]], file: escaped }]);
+  assert.equal(find(ee, 'tests run twice').length, 0);
   assert.equal(onlyCommand('node --test "test/a b.mjs"', 'node --test test/a b.mjs'), true, 'quoted without an expanding character: the boundary is the only effect, and the key keeps it');
   const braces = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node --test test/{a,b}.mjs\n      - run: node --test \'test/{a,b}.mjs\'\n';
   assert.deepEqual(repeatedTests(doc(braces)), []);

@@ -172,8 +172,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   reads, a `cd` moves the tests, an `export` changes their environment, a pipe anywhere feeds or
   captures them, an input redirection of any kind feeds them (a here-document, a here-string, a
   file), a command or process substitution anywhere, an echo's argument included, runs a command
-  of its own, and a quote beside a brace, glob or tilde decides whether it expands, `node --test
-  'test/{a,b}.mjs'` being one file where the unquoted line is two: none of those is aside),
+  of its own, and a quote or a backslash beside a brace, glob or tilde decides whether it expands,
+  `node --test 'test/{a,b}.mjs'` and `node --test test/\{a,b\}.mjs` being one file where the
+  bare line is two: none of those is aside),
   under the same `if:`, in the same declared working directory (the step's, else the job's, else
   the workflow's `defaults.run`), with the same step `env:` and `shell:`, and with no expression
   in any of those (`env: SEED: ${{ steps.first.outputs.seed || 'initial' }}` reads alike on two

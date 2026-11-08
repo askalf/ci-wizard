@@ -137,10 +137,11 @@ export function onlyCommand(script, command) {
   // `node --test '$FILE'` (a file named $FILE) and `node --test "$FILE"` (the file FILE names)
   // would read alike.
   if (/\||\$|`|<|>\(/.test(String(script))) return false;
-  // Quotes decide whether a brace, glob or tilde expands: `node --test test/{a,b}.mjs` runs two
-  // files and `node --test 'test/{a,b}.mjs'` one, and the words read alike once the quotes are
-  // gone. A script with both a quote and such a character is not established as one command.
-  if (/['"]/.test(String(script)) && /[{}*?[\]~]/.test(String(script))) return false;
+  // Quotes and backslashes decide whether a brace, glob or tilde expands: `node --test
+  // test/{a,b}.mjs` runs two files, `node --test 'test/{a,b}.mjs'` and `node --test
+  // test/\{a,b\}.mjs` one, and the words read alike once the quotes and backslashes are gone. A
+  // script with such a character beside a quote or a backslash is not established as one command.
+  if (/['"\\]/.test(String(script)) && /[{}*?[\]~]/.test(String(script))) return false;
   const commands = shellCommands(script);
   if (!commands.length) return false;
   let hits = 0;
