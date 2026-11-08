@@ -9145,16 +9145,22 @@ function repeatedTests(doc) {
   const used = /* @__PURE__ */ new Set();
   const key = (job, index) => `${job}\0${index}`;
   const cond = (x) => String(x?.if ?? "").replace(/\s+/g, " ").trim();
+  const dirOf = (st, job) => {
+    const declared = st["working-directory"] ?? job.defaults?.run?.["working-directory"] ?? doc.defaults?.run?.["working-directory"] ?? "";
+    const cds = shellCommands(st.run).filter((ws) => ws[0] === "cd").map((ws) => ws.slice(1).join(" "));
+    return [String(declared).trim(), ...cds].join("/");
+  };
   for (const [id, job] of jobsOf2(doc)) {
     const inJob = /* @__PURE__ */ new Map();
     const byRunner = /* @__PURE__ */ new Map();
     stepsOf2(job).forEach((st, i) => {
       if (st.run === void 0) return;
       const name = stepName(st, i);
+      const dir = dirOf(st, job);
       for (const command of new Set(testCommands(st.run))) {
         if (!inJob.has(command)) inJob.set(command, []);
-        inJob.get(command).push({ index: i, name, run: st.run, when: cond(st) });
-        const runner = `${runnerOf(command)}\0${cond(st)}`;
+        inJob.get(command).push({ index: i, name, run: st.run, when: `${cond(st)}\0${dir}` });
+        const runner = `${runnerOf(command)}\0${cond(st)}\0${dir}`;
         if (!byRunner.has(runner)) byRunner.set(runner, []);
         byRunner.get(runner).push({ index: i, name, command, run: st.run });
       }
@@ -9207,6 +9213,7 @@ function duplicateUploads(doc) {
       const same = (p) => String(p ?? "").split("\n").map((x) => x.trim().replace(/^\.\//, "")).includes(path);
       const guard = (s) => String(s.if ?? "").replace(/\s+/g, " ").trim();
       const mine = guard(st);
+      let after = false;
       steps.forEach((other, j) => {
         if (j === i) return;
         if (guard(other) !== mine && guard(other) !== "") return;
@@ -9214,10 +9221,12 @@ function duplicateUploads(doc) {
         if (j > i + 1 && !survivesFailure(guard(other))) return;
         const uses = String(other.uses || "");
         const w = other.with && typeof other.with === "object" ? other.with : {};
-        if (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) alsoTo.add("code scanning");
-        if (/^softprops\/action-gh-release@/.test(uses) && same(w.files)) alsoTo.add("the release");
+        const hit = /^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file) ? "code scanning" : /^softprops\/action-gh-release@/.test(uses) && same(w.files) ? "the release" : null;
+        if (!hit) return;
+        alsoTo.add(hit);
+        if (j > i) after = true;
       });
-      if (alsoTo.size) found.push({ job: id, step: stepName(st, i), path, alsoTo: [...alsoTo] });
+      if (alsoTo.size) found.push({ job: id, step: stepName(st, i), path, alsoTo: [...alsoTo], after });
     });
   }
   return found;
@@ -9963,13 +9972,19 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
   const dupes = w.duplicate_uploads || [];
   if (dupes.length) {
     const saving = dupes.reduce((s, u) => s + (u.seconds || 0), 0) * w.runs_week / 60;
-    const describe = (u) => `job ${u.job} uploads ${u.path} as an artifact in "${u.step}"${u.seconds !== null ? ` (${fmtS(u.seconds)} a run)` : ""} and sends the same file to ${u.alsoTo.join(" and ")}`;
+    const describe = (u) => `job ${u.job} uploads ${u.path} as an artifact in "${u.step}"${u.seconds !== null ? ` (${fmtS(u.seconds)} a run)` : ""} and sends the same file to ${u.alsoTo.join(" and ")}${u.after ? ", in a later step" : ""}`;
+    const later = dupes.some((u) => u.after);
     add(
       saving,
       "an artifact that duplicates another upload",
       dupes.slice(0, 3).map(describe).join("; "),
-      "drop the artifact step; the file is already where it is read",
-      { confidence: "confirmed", tradeoff: "none while the other destination is browsable (code scanning shows the SARIF, the release its assets); keep the artifact for a destination that is not", example: `# remove
+      later ? "move the artifact step after the upload it duplicates and give it `if: failure()`, so the file is kept only on a run where that upload failed; where the upload comes first, drop the artifact step" : "drop the artifact step; the file is already where it is read",
+      { confidence: "confirmed", tradeoff: "none while the other destination is browsable (code scanning shows the SARIF, the release its assets); keep the artifact for a destination that is not", example: later ? `# after the step that sends ${dupes[0].path} to ${dupes[0].alsoTo[0]}
+- name: ${dupes[0].step}
+  if: failure()   # only when that upload failed
+  uses: actions/upload-artifact@...
+  with:
+    path: ${dupes[0].path}` : `# remove
 - name: ${dupes[0].step}
   uses: actions/upload-artifact@...
   with:

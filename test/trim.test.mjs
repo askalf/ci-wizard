@@ -52,10 +52,23 @@ jobs:
           cd "$RUNNER_TEMP/out"
           node --test a/*.test.mjs
 `);
-  const [r] = repeatedTests(exported);
+  // The second run is in another directory (the cd): two suites as far as the file can tell, no repeat.
+  assert.deepEqual(repeatedTests(exported), []);
+  // The same runner on other paths in the same directory: a repeat the file cannot price.
+  const otherPaths = doc(`on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: All
+        run: node --test a/*.test.mjs b/*.test.mjs
+      - name: Some
+        run: node --test a/*.test.mjs
+`);
+  const [r] = repeatedTests(otherPaths);
   assert.equal(r.scope, 'job');
   assert.equal(r.same, false);
-  assert.deepEqual(r.steps, ['Unit tests', 'Public edition']);
+  assert.deepEqual(r.steps, ['All', 'Some']);
   assert.equal(r.command, 'node --test');
   assert.deepEqual(r.pure, [false, false]); // two different commands: two suites as far as the file can tell
   const across = doc(`on: push
@@ -128,6 +141,43 @@ jobs:
   // One step that starts two suites of one runner is one step, not a repeat.
   const multiline = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Suites\n        run: |\n          pytest tests/unit\n          pytest tests/integration\n');
   assert.deepEqual(repeatedTests(multiline), []);
+  // The same command in two directories is two suites: a monorepo's packages, within a job and across jobs.
+  const monorepo = doc(`on: push
+defaults:
+  run:
+    working-directory: packages
+jobs:
+  one:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Front
+        run: npm test
+        working-directory: packages/frontend
+      - name: Back
+        run: npm test
+        working-directory: packages/backend
+      - name: Also front
+        run: npm test
+        working-directory: packages/frontend
+  two:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/api
+    steps:
+      - run: npm test
+  three:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+  four:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          cd packages/web
+          npm test
+`);
+  assert.deepEqual(repeatedTests(monorepo).map((r) => [r.scope, r.jobs, r.steps]), [['job', ['one'], ['Front', 'Also front']]]);
   // Two steps of one job gated apart never run together; under one condition they are a repeat.
   const gatedSteps = doc('on: [push, pull_request]\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: On push\n        if: github.event_name == \'push\'\n        run: npm test\n      - name: On pull request\n        if: github.event_name == \'pull_request\'\n        run: npm test\n      - name: A\n        if: github.event_name == \'push\'\n        run: pytest tests\n      - name: B\n        if: github.event_name == \'push\'\n        run: pytest tests\n');
   assert.deepEqual(repeatedTests(gatedSteps).map((r) => [r.steps, r.command]), [[['A', 'B'], 'pytest tests']]);
@@ -158,7 +208,7 @@ jobs:
         with:
           sarif_file: results.sarif
 `);
-  assert.deepEqual(duplicateUploads(scorecard), [{ job: 'analysis', step: 'Upload artifact', path: 'results.sarif', alsoTo: ['code scanning'] }]);
+  assert.deepEqual(duplicateUploads(scorecard), [{ job: 'analysis', step: 'Upload artifact', path: 'results.sarif', alsoTo: ['code scanning'], after: true }]);
   const release = doc(`on: release
 jobs:
   r:
@@ -174,7 +224,7 @@ jobs:
             dist.tar.gz
             checksums.txt
 `);
-  assert.deepEqual(duplicateUploads(release), [{ job: 'r', step: 'Run actions/upload-artifact@v4', path: 'dist.tar.gz', alsoTo: ['the release'] }]);
+  assert.deepEqual(duplicateUploads(release), [{ job: 'r', step: 'Run actions/upload-artifact@v4', path: 'dist.tar.gz', alsoTo: ['the release'], after: true }]);
   // A `gh release upload` in a script never counts: the shell's path to it and its directory are not the file's to establish.
   const shell = doc(`on: release
 jobs:
@@ -583,8 +633,16 @@ jobs:
   assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
   assert.equal(f.confidence, 'confirmed');
   assert.equal(f.saving_min_week, 2); // 4 s x 30 runs / 60
-  assert.match(f.evidence, /uploads results.sarif as an artifact in "Upload artifact" \(4 s a run\) and sends the same file to code scanning/);
-  assert.match(f.example, /# remove/);
+  assert.match(f.evidence, /uploads results.sarif as an artifact in "Upload artifact" \(4 s a run\) and sends the same file to code scanning, in a later step/);
+  // The destination comes after the artifact and can fail after it went up: the fix is the order and failure(), not a deletion.
+  assert.match(f.fix, /move the artifact step after the upload it duplicates and give it `if: failure\(\)`/);
+  assert.match(f.example, /if: failure\(\)/);
+  // The destination first: the artifact step is dropped.
+  const first = file.replace(/      - name: Upload artifact\n        uses: actions\/upload-artifact@v4\n        with:\n          path: results.sarif\n/, '') + '      - name: Upload artifact\n        uses: actions/upload-artifact@v4\n        with:\n          path: results.sarif\n';
+  const b = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'analysis' }]], file: first }]);
+  const [g] = find(b, 'an artifact that duplicates another upload');
+  assert.match(g.fix, /^drop the artifact step/);
+  assert.match(g.example, /# remove/);
 });
 
 const setupFile = (runsOn) => `on: push

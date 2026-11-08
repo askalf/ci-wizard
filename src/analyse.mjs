@@ -444,10 +444,18 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
   const dupes = w.duplicate_uploads || [];
   if (dupes.length) {
     const saving = dupes.reduce((s, u) => s + (u.seconds || 0), 0) * w.runs_week / 60;
-    const describe = (u) => `job ${u.job} uploads ${u.path} as an artifact in "${u.step}"${u.seconds !== null ? ` (${fmtS(u.seconds)} a run)` : ''} and sends the same file to ${u.alsoTo.join(' and ')}`;
+    const describe = (u) => `job ${u.job} uploads ${u.path} as an artifact in "${u.step}"${u.seconds !== null ? ` (${fmtS(u.seconds)} a run)` : ''} and sends the same file to ${u.alsoTo.join(' and ')}${u.after ? ', in a later step' : ''}`;
+    // A destination after the artifact step can fail after the artifact went up: the artifact
+    // then moves behind it under failure(), kept only on the run where the upload failed. A
+    // destination before it that fails fails the job before the artifact goes up: it is dropped.
+    const later = dupes.some((u) => u.after);
     add(saving, 'an artifact that duplicates another upload', dupes.slice(0, 3).map(describe).join('; '),
-      'drop the artifact step; the file is already where it is read',
-      { confidence: 'confirmed', tradeoff: 'none while the other destination is browsable (code scanning shows the SARIF, the release its assets); keep the artifact for a destination that is not', example: `# remove\n- name: ${dupes[0].step}\n  uses: actions/upload-artifact@...\n  with:\n    path: ${dupes[0].path}` });
+      later
+        ? 'move the artifact step after the upload it duplicates and give it `if: failure()`, so the file is kept only on a run where that upload failed; where the upload comes first, drop the artifact step'
+        : 'drop the artifact step; the file is already where it is read',
+      { confidence: 'confirmed', tradeoff: 'none while the other destination is browsable (code scanning shows the SARIF, the release its assets); keep the artifact for a destination that is not', example: later
+        ? `# after the step that sends ${dupes[0].path} to ${dupes[0].alsoTo[0]}\n- name: ${dupes[0].step}\n  if: failure()   # only when that upload failed\n  uses: actions/upload-artifact@...\n  with:\n    path: ${dupes[0].path}`
+        : `# remove\n- name: ${dupes[0].step}\n  uses: actions/upload-artifact@...\n  with:\n    path: ${dupes[0].path}` });
   }
 
   // A passing job's log the size of a test listing: streamed to GitHub as the job runs, uploaded

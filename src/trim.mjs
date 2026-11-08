@@ -123,20 +123,29 @@ export function repeatedTests(doc) {
   const used = new Set();
   const key = (job, index) => `${job}\u0000${index}`;
   const cond = (x) => String(x?.if ?? '').replace(/\s+/g, ' ').trim();
+  // Where a step's command runs: its working-directory, else the job's, else the workflow's, plus
+  // every `cd` in its script. The same command in two directories is two suites (a monorepo's
+  // packages), so the directory is part of every match.
+  const dirOf = (st, job) => {
+    const declared = st['working-directory'] ?? job.defaults?.run?.['working-directory'] ?? doc.defaults?.run?.['working-directory'] ?? '';
+    const cds = shellCommands(st.run).filter((ws) => ws[0] === 'cd').map((ws) => ws.slice(1).join(' '));
+    return [String(declared).trim(), ...cds].join('/');
+  };
   for (const [id, job] of jobsOf(doc)) {
     const inJob = new Map();
     const byRunner = new Map();
     stepsOf(job).forEach((st, i) => {
       if (st.run === undefined) return;
       const name = stepName(st, i);
+      const dir = dirOf(st, job);
       for (const command of new Set(testCommands(st.run))) {
         if (!inJob.has(command)) inJob.set(command, []);
-        inJob.get(command).push({ index: i, name, run: st.run, when: cond(st) });
+        inJob.get(command).push({ index: i, name, run: st.run, when: `${cond(st)}\u0000${dir}` });
         // Occurrences by step, not by display name: two unnamed `run: npm test` steps are both
         // "Run npm test", and are two runs.
         // Grouped by the step's condition too: two steps gated apart (push against pull_request)
         // never run in the same run, and are no repeat.
-        const runner = `${runnerOf(command)}\u0000${cond(st)}`;
+        const runner = `${runnerOf(command)}\u0000${cond(st)}\u0000${dir}`;
         if (!byRunner.has(runner)) byRunner.set(runner, []);
         byRunner.get(runner).push({ index: i, name, command, run: st.run });
       }
@@ -188,7 +197,9 @@ export function repeatedTests(doc) {
  * (github/codeql-action/upload-sarif), or a file attached to the release
  * (softprops/action-gh-release). Both actions read their input against the workspace, as
  * upload-artifact does. An upload that runs only on failure is a crash's files kept for a look,
- * not a duplicate.
+ * not a duplicate. `after` says the destination comes after the artifact step: it can then fail
+ * after the artifact went up, so that order's fix moves the artifact behind it under failure()
+ * rather than dropping it.
  */
 export function duplicateUploads(doc) {
   const found = [];
@@ -216,6 +227,9 @@ export function duplicateUploads(doc) {
       // only when it comes next, since a step between them that fails skips the destination
       // (implicit success()) after the artifact already went up, and a later destination under a
       // condition of its own counts only when that condition is exactly always() or !cancelled().
+      // Whether a counted destination comes after the artifact step: it can then fail after the
+      // artifact went up, so the fix for that order moves the artifact behind it under failure().
+      let after = false;
       steps.forEach((other, j) => {
         if (j === i) return;
         if (guard(other) !== mine && guard(other) !== '') return;
@@ -224,13 +238,15 @@ export function duplicateUploads(doc) {
         if (j > i + 1 && !survivesFailure(guard(other))) return;
         const uses = String(other.uses || '');
         const w = other.with && typeof other.with === 'object' ? other.with : {};
-        if (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) alsoTo.add('code scanning');
-        if (/^softprops\/action-gh-release@/.test(uses) && same(w.files)) alsoTo.add('the release');
+        const hit = (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) ? 'code scanning' : (/^softprops\/action-gh-release@/.test(uses) && same(w.files)) ? 'the release' : null;
+        if (!hit) return;
+        alsoTo.add(hit);
+        if (j > i) after = true;
         // A `gh release upload` in a run script is not read: whether the shell reaches it (a
         // `test ... || exit 0`, an if, a here-document) and from which directory (working-directory,
         // a cd) is not the file's to establish, and a wrong "duplicate" deletes the only copy.
       });
-      if (alsoTo.size) found.push({ job: id, step: stepName(st, i), path, alsoTo: [...alsoTo] });
+      if (alsoTo.size) found.push({ job: id, step: stepName(st, i), path, alsoTo: [...alsoTo], after: after });
     });
   }
   return found;

@@ -137,7 +137,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   on the same kind of runner with no matrix. A matrix leg is one job to GitHub, and the same
   tests on two platforms are two results, so neither counts; two jobs, or two steps of one job, under
   different conditions (`push` against `pull_request`) never run in the same run, and are no
-  repeat; a job already counted within itself
+  repeat; the same command in two directories (a step's `working-directory`, the job's or the
+  workflow's default, a `cd` in the script) is two suites, a monorepo's packages, and no repeat; a job already counted within itself
   is left out of the cross-job scope, so no run is counted twice. Two steps are two runs whatever their names: two unnamed `run: npm test` steps are both
   "Run npm test", and are priced at the lower of their shared timings; one step that starts two
   suites of one runner is one step, and a step is priced once: a step in a within-job finding is
@@ -184,8 +185,12 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **Confidence** confirmed.
 - **Estimate** the artifact step's time, times runs a week; the retention it adds is not costed.
   The finding stays under the noise floor: the file shows it and the fix is one deleted step.
-- **Fix** drop the artifact step. *Trade-off:* none while the other destination is browsable (code
-  scanning shows the SARIF, the release its assets); keep the artifact for one that is not.
+- **Fix** when the other upload comes first, drop the artifact step: an upload that fails fails
+  the job before the artifact goes up. When the artifact step comes first, the other upload can
+  fail after the artifact went up, so the fix is the order: move the artifact step behind that
+  upload under `if: failure()`, kept only on a run where the upload failed. *Trade-off:* none while
+  the other destination is browsable (code scanning shows the SARIF, the release its assets); keep
+  the artifact for one that is not.
 
 ## test output floods the log
 
