@@ -134,7 +134,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   on the same kind of runner with no matrix. A matrix leg is one job to GitHub, and the same
   tests on two platforms are two results, so neither counts; a job already counted within itself
   is left out of the cross-job scope, so no run is counted twice. Two steps are two runs whatever their names: two unnamed `run: npm test` steps are both
-  "Run npm test", and are priced at the lower of their shared timings. Commands are compared with their
+  "Run npm test", and are priced at the lower of their shared timings; one step that starts two
+  suites of one runner is one step. Commands are compared with their
   reporting flags removed (`--test-reporter`, `--reporter`, `-q`, `-v`, `--silent`): the same tests
   reported differently are the same tests. Runners known: `node --test`, `npm/pnpm/yarn/bun test`
   and `run test*`, jest, vitest, mocha, ava, tap, pytest, unittest, `go test`, `cargo test`, rspec,
@@ -161,7 +162,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   only under the artifact step's own condition, or with none when the artifact step runs on
   success alone. `gh release upload` is read as a parsed command, its tag and option values set
   aside, so an echo or a comment naming the path, or a tag that happens to equal it, is not an
-  upload. An upload that runs only on failure (`if: failure()`) is a crash's files kept for
+  upload; and it counts only as a line of its own before any shell control flow, since an upload
+  behind `&&`, `;`, an `if` or a `case` may not run on the run the artifact ran on. An upload that runs only on failure (`if: failure()`) is a crash's files kept for
   a look, not a duplicate. The OSSF Scorecard starter workflow carries this pattern.
 - **Confidence** confirmed.
 - **Estimate** the artifact step's time, times runs a week; the retention it adds is not costed.

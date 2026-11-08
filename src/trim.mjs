@@ -100,7 +100,7 @@ export function repeatedTests(doc) {
         // "Run npm test", and are two runs.
         const runner = runnerOf(command);
         if (!byRunner.has(runner)) byRunner.set(runner, []);
-        byRunner.get(runner).push({ name, command });
+        byRunner.get(runner).push({ index: i, name, command });
       }
     });
     for (const [command, steps] of inJob) {
@@ -108,7 +108,11 @@ export function repeatedTests(doc) {
       byCommand.get(command).push({ job: id, step: steps[0], runsOn: JSON.stringify(job['runs-on'] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
     for (const [runner, occurrences] of byRunner) {
-      const steps = occurrences.map((o) => o.name);
+      // One step that starts two suites of one runner is one step: distinct steps by index, each
+      // named once, so a step is never priced twice for two commands inside it.
+      const byIndex = new Map();
+      for (const o of occurrences) if (!byIndex.has(o.index)) byIndex.set(o.index, o.name);
+      const steps = [...byIndex.values()];
       const commands = [...new Set(occurrences.map((o) => o.command))];
       // Two steps of this runner: the same command in both, or two commands (other paths, another directory).
       if (steps.length > 1) {
@@ -160,7 +164,7 @@ export function duplicateUploads(doc) {
       const afterFailure = /always\(\)|cancelled\(\)/.test(mine);
       // `gh release upload <tag> <files...>` as a parsed command, so an echo, a comment or another
       // command that names the path is not an upload.
-      const releaseUploads = (script) => shellCommands(script).filter((ws) => ws[0] === 'gh' && ws[1] === 'release' && ws[2] === 'upload').map((ws) => releaseFiles(ws.slice(3)));
+      const releaseUploads = unconditionalReleaseUploads;
       steps.forEach((other, j) => {
         if (j === i) return;
         if (guard(other) !== mine && (guard(other) !== '' || afterFailure)) return;
@@ -198,6 +202,32 @@ export function releaseFiles(args) {
     files.push(a.split('#')[0].replace(/^\.\//, ''));
   }
   return files;
+}
+
+/** A line that opens shell control flow; everything after it may or may not run. */
+const CONTROL_FLOW = /^(if|case|while|until|for|select|elif|else)\b|^\{|^\(/;
+
+/**
+ * The files of each `gh release upload` the script runs on every path through it: a line that is
+ * the upload command and nothing else, before any control flow. An upload behind `&&`, `||`, `;`,
+ * an `if` or a `case`, or after one, may not run (a tag-only upload on a branch run), and the
+ * artifact beside it would be the only copy, so it does not count.
+ */
+export function unconditionalReleaseUploads(script) {
+  const out = [];
+  for (const raw of String(script || '').split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (CONTROL_FLOW.test(line)) break;
+    if (/^(exec\s+)?gh\s+release\s+upload\b/.test(line) && !/&&|\|\||;/.test(line)) {
+      const [ws] = shellCommands(line);
+      if (ws && ws[0] === 'gh' && ws[1] === 'release' && ws[2] === 'upload') out.push(releaseFiles(ws.slice(3)));
+      continue;
+    }
+    // Any other line that carries the command is a guarded one: a `test ... && gh release upload`.
+    if (/\bgh\s+release\s+upload\b/.test(line)) continue;
+  }
+  return out;
 }
 
 /** Whether any step of the workflow starts a test runner. The bytes of a log are not read, so this is the file's word on what a large log is likely to be. */

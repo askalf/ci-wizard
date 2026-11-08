@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { analyse } from '../src/analyse.mjs';
 import { createClient } from '../src/github.mjs';
 import { savingText } from '../src/report.mjs';
-import { duplicateUploads, releaseFiles, repeatedTests, runnerOf, selfHostedSetups, stepName, testCommands } from '../src/trim.mjs';
+import { duplicateUploads, releaseFiles, repeatedTests, runnerOf, selfHostedSetups, stepName, testCommands, unconditionalReleaseUploads } from '../src/trim.mjs';
 import { parseWorkflow } from '../src/workflow.mjs';
 import { data, find, job, runs } from './helpers.mjs';
 
@@ -97,6 +97,9 @@ jobs:
   const suites = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run test:unit\n      - run: npm run test:e2e\n');
   // Two scripts of one runner in one job: the file cannot say they are the same tests, and the finding says so.
   assert.deepEqual(repeatedTests(suites).map((r) => [r.scope, r.same, r.command]), [['job', false, 'npm run test']]);
+  // One step that starts two suites of one runner is one step, not a repeat.
+  const multiline = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Suites\n        run: |\n          pytest tests/unit\n          pytest tests/integration\n');
+  assert.deepEqual(repeatedTests(multiline), []);
   // Two unnamed steps with the same command share a display name and are still two runs.
   const unnamed = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n      - run: npm test\n');
   assert.deepEqual(repeatedTests(unnamed), [{ scope: 'job', jobs: ['t'], steps: ['Run npm test', 'Run npm test'], command: 'npm test', same: true }]);
@@ -215,6 +218,28 @@ jobs:
   assert.deepEqual(duplicateUploads(tagAndOption).map((u) => u.path), ['dist.tar.gz']);
   assert.deepEqual(releaseFiles(['v1', '-R', 'o/r', '--clobber', './a.tgz', 'b.tgz#Label']), ['a.tgz', 'b.tgz']);
   assert.deepEqual(releaseFiles(['v1', '--', '-weird.tgz']), ['-weird.tgz']);
+  // An upload the script can skip (a condition inside run:) is not a destination.
+  const guardedInRun = doc(`on: push
+jobs:
+  r:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        with:
+          path: dist.tar.gz
+      - run: test "$GITHUB_REF_TYPE" = tag && gh release upload "$TAG" dist.tar.gz
+      - run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            gh release upload "$TAG" dist.tar.gz
+          fi
+      - run: |
+          case "$GITHUB_REF" in refs/tags/*) ;; *) exit 0 ;; esac
+          gh release upload "$TAG" dist.tar.gz
+`);
+  assert.deepEqual(duplicateUploads(guardedInRun), []);
+  assert.deepEqual(unconditionalReleaseUploads('set -euo pipefail\ncp a b\n# gh release upload v0 x\ngh release upload "$TAG" --clobber dist.tar.gz\n'), [['dist.tar.gz']]);
+  assert.deepEqual(unconditionalReleaseUploads('gh release upload v1 a.tgz; rm a.tgz'), []);
+  assert.deepEqual(unconditionalReleaseUploads('if true; then :; fi\ngh release upload v1 a.tgz'), []);
   // An echo, a comment, or another command naming the path is not an upload.
   const mentions = doc(`on: push
 jobs:

@@ -9147,7 +9147,7 @@ function repeatedTests(doc) {
         inJob.get(command2).push(name);
         const runner = runnerOf(command2);
         if (!byRunner.has(runner)) byRunner.set(runner, []);
-        byRunner.get(runner).push({ name, command: command2 });
+        byRunner.get(runner).push({ index: i, name, command: command2 });
       }
     });
     for (const [command2, steps] of inJob) {
@@ -9155,7 +9155,9 @@ function repeatedTests(doc) {
       byCommand.get(command2).push({ job: id, step: steps[0], runsOn: JSON.stringify(job["runs-on"] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
     for (const [runner, occurrences] of byRunner) {
-      const steps = occurrences.map((o) => o.name);
+      const byIndex = /* @__PURE__ */ new Map();
+      for (const o of occurrences) if (!byIndex.has(o.index)) byIndex.set(o.index, o.name);
+      const steps = [...byIndex.values()];
       const commands = [...new Set(occurrences.map((o) => o.command))];
       if (steps.length > 1) {
         found.push({ scope: "job", jobs: [id], steps, command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
@@ -9192,7 +9194,7 @@ function duplicateUploads(doc) {
       const guard = (s) => String(s.if ?? "").replace(/\s+/g, " ").trim();
       const mine = guard(st);
       const afterFailure = /always\(\)|cancelled\(\)/.test(mine);
-      const releaseUploads = (script) => shellCommands(script).filter((ws) => ws[0] === "gh" && ws[1] === "release" && ws[2] === "upload").map((ws) => releaseFiles(ws.slice(3)));
+      const releaseUploads = unconditionalReleaseUploads;
       steps.forEach((other, j) => {
         if (j === i) return;
         if (guard(other) !== mine && (guard(other) !== "" || afterFailure)) return;
@@ -9228,6 +9230,22 @@ function releaseFiles(args) {
     files.push(a.split("#")[0].replace(/^\.\//, ""));
   }
   return files;
+}
+var CONTROL_FLOW = /^(if|case|while|until|for|select|elif|else)\b|^\{|^\(/;
+function unconditionalReleaseUploads(script) {
+  const out = [];
+  for (const raw of String(script || "").split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (CONTROL_FLOW.test(line)) break;
+    if (/^(exec\s+)?gh\s+release\s+upload\b/.test(line) && !/&&|\|\||;/.test(line)) {
+      const [ws] = shellCommands(line);
+      if (ws && ws[0] === "gh" && ws[1] === "release" && ws[2] === "upload") out.push(releaseFiles(ws.slice(3)));
+      continue;
+    }
+    if (/\bgh\s+release\s+upload\b/.test(line)) continue;
+  }
+  return out;
 }
 function startsTests(doc) {
   return jobsOf2(doc).some(([, job]) => stepsOf2(job).some((st) => st.run !== void 0 && testCommands(st.run).length > 0));
