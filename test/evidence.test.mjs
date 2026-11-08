@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyse } from '../src/analyse.mjs';
-import { artifactNameOf, duplicateUploads, onlyCommand, repeatedTests, sameTests, signaturesOf, stepSections, survivesFailure, testSignature } from '../src/trim.mjs';
+import { artifactNameOf, duplicateUploads, onlyCommand, repeatedTests, sameTests, signaturesOf, stepSections, survivesFailure, testCommands, testSignature } from '../src/trim.mjs';
 import { parseWorkflow } from '../src/workflow.mjs';
 import { data, find, job, runs } from './helpers.mjs';
 import { parse as parseYaml } from 'yaml';
@@ -192,6 +192,15 @@ jobs:
   const parsed = parseYaml(cf.example);
   assert.equal(parsed[0].run, 'set -e\nnode --test "test/a: b.mjs"\n');
   assert.equal(parsed[0].if, "github.event_name == 'push' && github.ref == 'refs/heads/<default branch>'");
+  // After a runner's `--` every word is an operand: `pytest -- -v` tests a directory named -v. A package manager's `--` forwards flags to the script instead.
+  assert.deepEqual(testCommands('pytest -- -v\npytest -- -q\nnpm test -- --silent\nnode --test -- -v'), ['pytest -- -v', 'pytest -- -q', 'npm test', 'node --test -- -v']);
+  const terminated = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pytest -- -v\n      - run: pytest -- -q\n';
+  assert.deepEqual(repeatedTests(doc(terminated)), []);
+  const tSteps = [['Set up job', 1], ['Run pytest -- -v', 30], ['Run pytest -- -q', 30], ['Complete job', 0]];
+  const dots = `${STAMP}............\n${STAMP}===== 12 passed in 0.3s =====`;
+  const tLog = log([['pytest -- -v', dots], ['pytest -- -q', dots]]);
+  const tt = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: tSteps }), name: 't', log_text: tLog }]], file: terminated }]);
+  assert.equal(find(tt, 'tests run twice').length, 0, 'the same count from two directories is two results');
   // An expansion in an aside can assign: `${BACKEND:=postgres}` sets what the tests then read, so an aside carries no `$`.
   assert.equal(onlyCommand('echo "${BACKEND:=postgres}"\nnpm test -- --backend "$BACKEND"', 'npm test -- --backend "$BACKEND"'), false);
   assert.equal(onlyCommand('echo "$HOME"\nnpm test', 'npm test'), false);

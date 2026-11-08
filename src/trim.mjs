@@ -46,8 +46,23 @@ function testWords(words) {
   while (ws.length && KEYWORDS.has(ws[0])) ws.shift();
   if (!TEST_RUNNERS.some((rx) => rx.test(ws.join(' ')))) return null;
   const out = [];
+  // After a `--` a runner reads every word as an operand: `pytest -- -v` tests a directory named
+  // -v, and nothing after it is a reporting flag. A package manager's `--` instead hands the rest
+  // to the test script, flags included (`npm test -- --silent`), so only there the stripping
+  // goes on past it.
+  const forwards = /^(npm|pnpm|yarn|bun)$/.test(ws[0]);
+  let literal = false;
   for (let k = 0; k < ws.length; k++) {
     const w = ws[k];
+    if (literal) {
+      out.push(w);
+      continue;
+    }
+    if (w === '--') {
+      if (!forwards) literal = true;
+      out.push(w);
+      continue;
+    }
     if (REPORTING_WITH_VALUE.test(w)) {
       if (!w.includes('=')) k++; // the value is the next word
       continue;

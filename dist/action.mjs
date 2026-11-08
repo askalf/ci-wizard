@@ -8506,8 +8506,19 @@ function testWords(words) {
   while (ws.length && KEYWORDS.has(ws[0])) ws.shift();
   if (!TEST_RUNNERS.some((rx) => rx.test(ws.join(" ")))) return null;
   const out = [];
+  const forwards = /^(npm|pnpm|yarn|bun)$/.test(ws[0]);
+  let literal = false;
   for (let k = 0; k < ws.length; k++) {
     const w = ws[k];
+    if (literal) {
+      out.push(w);
+      continue;
+    }
+    if (w === "--") {
+      if (!forwards) literal = true;
+      out.push(w);
+      continue;
+    }
     if (REPORTING_WITH_VALUE.test(w)) {
       if (!w.includes("=")) k++;
       continue;
