@@ -237,7 +237,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   and no trailing slash) that another action step of the same job publishes with the same literal
   input: a SARIF file sent to code scanning (`github/codeql-action/upload-sarif` with the same
   `sarif_file`), or a file attached to the release (`softprops/action-gh-release` with it in
-  `files`). Both read their input against the workspace, as upload-artifact does. An artifact
+  `files`, and `overwrite_files` left at its default or literally true: with it off the release
+  keeps the asset it already has and the step still succeeds, so the new file never reached it).
+  Both read their input against the workspace, as upload-artifact does. An artifact
   step that runs after a failure (`failure()`, `always()`, `!cancelled()`) keeps a failed run's
   file for a look and would be the only copy when the destination is what failed: never a
   duplicate. A `gh release upload` in a run script is not read: whether the shell reaches it (a

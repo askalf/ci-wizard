@@ -8707,7 +8707,8 @@ function duplicateUploads(doc) {
         if (Math.abs(j - i) !== 1) return;
         const uses = String(other.uses || "");
         const w = other.with && typeof other.with === "object" ? other.with : {};
-        const hit = /^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file) ? "code scanning" : /^softprops\/action-gh-release@/.test(uses) && same(w.files) ? "the release" : null;
+        const overwrites = w.overwrite_files === void 0 || w.overwrite_files === null || String(w.overwrite_files).trim().toLowerCase() === "true";
+        const hit = /^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file) ? "code scanning" : /^softprops\/action-gh-release@/.test(uses) && same(w.files) && overwrites ? "the release" : null;
         if (!hit) return;
         alsoTo.add(hit);
         if (j > i) after = true;

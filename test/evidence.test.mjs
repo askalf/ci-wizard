@@ -747,6 +747,26 @@ jobs:
             checksums.txt
 `);
   assert.deepEqual(duplicateUploads(release), [{ job: 'r', step: 'Run actions/upload-artifact@v4', path: 'dist.tar.gz', name: 'artifact', alsoTo: ['the release'], after: true }]);
+  // A release upload with overwriting off keeps the asset the release already has and succeeds: the new file never reached it.
+  const keepsOld = (value) => doc(`on: release
+jobs:
+  r:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist.tar.gz
+          overwrite_files: ${value}
+      - uses: actions/upload-artifact@v4
+        with:
+          path: dist.tar.gz
+`);
+  assert.deepEqual(duplicateUploads(keepsOld('false')), []);
+  assert.deepEqual(duplicateUploads(keepsOld("${{ inputs.overwrite }}")), []);
+  assert.equal(duplicateUploads(keepsOld('true')).length, 1);
+  const koSteps = [['Set up job', 1], ['Run softprops/action-gh-release@v2', 3], ['Run actions/upload-artifact@v4', 4], ['Complete job', 0]];
+  const ko = audit([{ name: 'Release', runs: runs(30), jobsPerRun: [[{ ...job({ steps: koSteps }), name: 'r', run_artifacts: [{ name: 'artifact', bytes: 1000, entries: [{ name: 'dist.tar.gz', size: 5000 }] }] }]], file: 'on: release\njobs:\n  r:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: softprops/action-gh-release@v2\n        with:\n          files: dist.tar.gz\n          overwrite_files: false\n      - uses: actions/upload-artifact@v4\n        with:\n          path: dist.tar.gz\n' }]);
+  assert.equal(find(ko, 'an artifact that duplicates another upload').length, 0, 'valid single-file evidence beside a release that kept its old asset confirms nothing');
   assert.equal(artifactNameOf({ with: { name: '${{ matrix.os }}-sarif' } }), null, 'a name set by an expression is not known');
   assert.equal(artifactNameOf({ with: { name: ' report ' } }), 'report');
   // A `gh release upload` in a script never counts: the shell's path to it and its directory are not the file's to establish.
