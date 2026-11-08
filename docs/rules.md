@@ -129,69 +129,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   version pinned in the host image, and no setup step. *Trade-off:* the job follows the host image's
   update schedule, and a job that needs another version keeps its step.
 
-## tests run twice
-
-- **Fires when** the workflow file has the same test step twice: two steps whose scripts are one
-  and the same test command and nothing else (`set` and `echo` aside; a `cd` is not aside, it
-  moves the tests, and an `export` is not aside, it changes their environment), under the same `if:`, in the same declared working directory (the
-  step's, else the job's, else the workflow's `defaults.run`), with the same step `env:` and
-  `shell:`. In one job, two such steps next to each other (a step between them, a setup, a build or a
-  write, can change what the second one tests); or in two jobs of the run that also share
-  `runs-on`, job `env:`, `container:`, `services:`, `defaults:`, `if:` and every step before the
-  test step (the same setup leads into the same tests), with no matrix. An `echo` is aside only
-  without a redirection or a pipe, which write a file or feed a command. Commands are compared
-  with their reporting flags removed (`--test-reporter`, `--reporter`, `-q`, `-v`, `--silent`):
-  the same tests reported differently are the same tests. Runners known: `node --test`,
-  `npm/pnpm/yarn/bun test` and `run test*`, jest, vitest, mocha, ava, tap, pytest, unittest, `go
-  test`, `cargo test`, rspec, `dotnet test`, mvn and gradle test, `make test`, ctest, phpunit,
-  pest. Anything the file can tell apart is no repeat: the same runner on other paths, in another
-  directory or after an export, against another environment or another runtime version, after a
-  configuration written to a file, beside a build or another suite, on another platform, or under
-  another condition. Two steps are two runs whatever their names (two
-  unnamed `run: npm test` steps are both "Run npm test"), and a step is in one finding at most.
-- **Confidence** confirmed: the file shows the same step twice.
-- **Estimate** the shorter step's time (the second run), times runs a week, each step priced from
-  the sampled runs of its own job (the file's job matched to the API's job names as the timeout
-  rule matches them); two steps with one display name share a timing list and are priced at its
-  minimum. A step the sample never timed adds nothing, and the evidence says so.
-- **Fix** run the suite once. Where the second run is wanted on one event (the push to the default
-  branch, a release), keep it and gate it on that event. *Trade-off:* gated, that run happens after
-  the merge instead of on the pull request.
-
-
-- **Fires when** a job's `actions/upload-artifact` step has one literal path naming one file (no
-  glob, no expression, one line, a file's extension and no trailing slash: a directory given to
-  `upload-sarif` sends its SARIF files while the artifact keeps everything in it) that another
-  action step of the same job already publishes with the same literal input: a SARIF file sent to code scanning (`github/codeql-action/upload-sarif` with the
-  same `sarif_file`), or a file attached to the release (`softprops/action-gh-release` with it in
-  `files`). Both read their input against the workspace, as upload-artifact does. An artifact step
-  that runs after a failure (`failure()`, `always()`, `!cancelled()`) keeps a failed run's file
-  for a look and would be the only copy when the destination is what failed: never a duplicate. A `gh release
-  upload` in a run script is not read: whether the shell reaches it (a `test … || exit 0`, an
-  `if`, a here-document) and from which directory (`working-directory`, a `cd`) is not the file's
-  to establish, and a wrong duplicate deletes the only copy. The other destination must run, and succeed, whenever the artifact step runs: a
-  release upload behind `if: startsWith(github.ref, 'refs/tags/')` leaves the artifact the only
-  copy on every other run, so a destination counts only under the artifact step's own condition
-  or with none, and never with `continue-on-error`, which lets it fail and leave the artifact the
-  only copy; and a destination after the artifact step counts only when it is the next step,
-  unless its own condition is exactly `always()` or `!cancelled()`, since any other condition,
-  `always() && success()` included, carries the implicit success() and a step between them that
-  fails would skip the destination after the artifact already went up. An upload that runs only on failure (`if: failure()`) is a crash's files kept for
-  a look, not a duplicate. The OSSF Scorecard starter workflow carries this pattern.
-- **Confidence** confirmed.
-- **Estimate** the artifact step's time, times runs a week; the retention it adds is not costed.
-  The finding stays under the noise floor: the file shows it and the fix is one deleted step.
-- **Fix** when the other upload comes first, drop the artifact step: an upload that fails fails
-  the job before the artifact goes up. When the artifact step comes first, the other upload can
-  fail after the artifact went up, so the fix is the order: move the artifact step behind that
-  upload under `if: failure()`, kept only on a run where the upload failed. *Trade-off:* none while
-  the other destination is browsable (code scanning shows the SARIF, the release its assets); keep
-  the artifact for one that is not.
-
 ## test output floods the log
 
 - **Fires when** the median log of the sampled jobs in a workflow's newest successful run is 100
-  KB or more, and the workflow file starts a test runner (the runners the rule above knows) or
+  KB or more, and the workflow file starts a test runner (node --test, npm test, pytest, go test, cargo test and the like) or
   most of the sampled jobs ran on self-hosted runners. A tool's own output on a hosted runner
   (CodeQL, a fuzzer, Dependabot) is not the workflow's to quiet and costs it nothing. Only the
   size is read, never the bytes: where the file starts a test runner, the evidence names its line

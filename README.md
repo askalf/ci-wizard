@@ -158,7 +158,6 @@ doesn't, such as a checkout step whose depth is set by an expression:
 | --- | --- |
 | cache dependencies, dependency installs dominate | installs that run uncached, or dominate the job |
 | slow checkout, toolchain setup | full history, LFS, submodules, a setup that could be cached, or a runtime setup on a self-hosted runner that has the runtime |
-| tests run twice, an artifact that duplicates another upload | the same test runner started twice in a job or a run; an artifact of a file another step already published |
 | test output floods the log | a passing job's log the size of a test listing, in megabytes a week |
 | the same commit runs twice, outdated runs keep going | push and pull request both firing; no cancel-in-progress |
 | runs far more often than code changes, many small scheduled jobs | fixed cost paid on every run |

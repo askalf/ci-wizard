@@ -9087,29 +9087,6 @@ var REPORTING = [
   /\s--(quiet|verbose|silent|no-color|color)\b/g,
   /\s-(q|v|vv)\b/g
 ];
-function survivesFailure(condition) {
-  return /^(\$\{\{\s*)?(always\(\)|!\s*cancelled\(\))(\s*\}\})?$/.test(String(condition ?? "").trim());
-}
-var HARMLESS = /* @__PURE__ */ new Set(["set", "echo", "true", ":", "pwd"]);
-function onlyCommand(script, command) {
-  const commands = shellCommands(script);
-  if (!commands.length) return false;
-  let hits = 0;
-  for (const words of commands) {
-    const ws = [...words];
-    while (ws.length && KEYWORDS.has(ws[0])) ws.shift();
-    if (!ws.length) continue;
-    let cmd = ws.join(" ");
-    if (TEST_RUNNERS.some((rx) => rx.test(cmd))) {
-      for (const rx of REPORTING) cmd = cmd.replace(rx, "");
-      if (cmd.replace(/\s+/g, " ").replace(/\s--$/, "").trim() !== command) return false;
-      hits++;
-      continue;
-    }
-    if (!HARMLESS.has(ws[0]) || ws.some((w) => /^(<|>|>>|\|)/.test(w) || /[<>|]/.test(w) && !/^['"]/.test(w) && w !== ws[0])) return false;
-  }
-  return hits > 0;
-}
 var KEYWORDS = /* @__PURE__ */ new Set(["then", "do", "else", "elif", "{", "(", "!", "time", "exec"]);
 function testCommands(script) {
   const out = [];
@@ -9134,90 +9111,6 @@ function stepName(st, i = 0) {
   if (st.uses) return `Run ${st.uses}`;
   if (st.run !== void 0) return `Run ${String(st.run).trim().split("\n")[0]}`;
   return `step ${i + 1}`;
-}
-function repeatedTests(doc) {
-  const found = [];
-  const byCommand = /* @__PURE__ */ new Map();
-  const used = /* @__PURE__ */ new Set();
-  const key = (job, index) => `${job}\0${index}`;
-  const text = (x) => JSON.stringify(x ?? null);
-  const cond = (x) => String(x?.if ?? "").replace(/\s+/g, " ").trim();
-  const dirOf = (st, job) => String(st["working-directory"] ?? job.defaults?.run?.["working-directory"] ?? doc.defaults?.run?.["working-directory"] ?? "").trim();
-  for (const [id, job] of jobsOf2(doc)) {
-    const inJob = /* @__PURE__ */ new Map();
-    stepsOf2(job).forEach((st, i) => {
-      if (st.run === void 0) return;
-      const commands = new Set(testCommands(st.run));
-      if (commands.size !== 1) return;
-      const [command] = commands;
-      if (!onlyCommand(st.run, command)) return;
-      const stepKey = [command, cond(st), dirOf(st, job), text(st.env), text(st.shell)].join("\0");
-      if (!inJob.has(stepKey)) inJob.set(stepKey, []);
-      inJob.get(stepKey).push({ index: i, name: stepName(st, i), command });
-    });
-    const all = stepsOf2(job);
-    for (const [stepKey, steps] of inJob) {
-      const runs = [];
-      for (const o of steps) {
-        const last = runs[runs.length - 1];
-        if (last && o.index === last[last.length - 1].index + 1) last.push(o);
-        else runs.push([o]);
-      }
-      for (const run of runs) {
-        if (run.length > 1) {
-          found.push({ scope: "job", jobs: [id], steps: run.map((o) => o.name), command: run[0].command, same: true });
-          for (const o of run) used.add(key(id, o.index));
-        }
-      }
-      const first = steps[0];
-      const before = text(all.slice(0, first.index).map((st) => ({ uses: st.uses ?? null, run: st.run ?? null, with: st.with ?? null, env: st.env ?? null, if: st.if ?? null })));
-      const jobKey = [stepKey, text(job["runs-on"]), text(job.env), text(job.container), text(job.services), text(job.defaults), cond(job), before].join("\0");
-      if (!byCommand.has(jobKey)) byCommand.set(jobKey, []);
-      byCommand.get(jobKey).push({ job: id, step: first.name, index: first.index, command: first.command, matrix: Boolean(job.strategy && job.strategy.matrix) });
-    }
-  }
-  for (const where2 of byCommand.values()) {
-    const ws = where2.filter((w) => !w.matrix && !used.has(key(w.job, w.index)));
-    if (ws.length > 1) {
-      found.push({ scope: "workflow", jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), command: ws[0].command, same: true });
-      for (const w of ws) used.add(key(w.job, w.index));
-    }
-  }
-  return found;
-}
-function duplicateUploads(doc) {
-  const found = [];
-  for (const [id, job] of jobsOf2(doc)) {
-    const steps = stepsOf2(job);
-    steps.forEach((st, i) => {
-      if (!/^actions\/upload-artifact@/.test(String(st.uses || ""))) return;
-      if (/failure\(\)|always\(\)|cancelled\(\)/.test(String(st.if ?? ""))) return;
-      const raw = st.with && typeof st.with === "object" ? String(st.with.path ?? "") : "";
-      const paths = raw.split("\n").map((p) => p.trim()).filter(Boolean);
-      if (paths.length !== 1 || /[*?[]/.test(paths[0]) || paths[0].includes("${{")) return;
-      const path = paths[0].replace(/^\.\//, "");
-      if (!/\.[A-Za-z0-9]+$/.test(path) || path.endsWith("/")) return;
-      const alsoTo = /* @__PURE__ */ new Set();
-      const same = (p) => String(p ?? "").split("\n").map((x) => x.trim().replace(/^\.\//, "")).includes(path);
-      const guard = (s) => String(s.if ?? "").replace(/\s+/g, " ").trim();
-      const mine = guard(st);
-      let after = false;
-      steps.forEach((other, j) => {
-        if (j === i) return;
-        if (guard(other) !== mine && guard(other) !== "") return;
-        if (other["continue-on-error"] !== void 0 && String(other["continue-on-error"]).trim().toLowerCase() !== "false") return;
-        if (j > i + 1 && !survivesFailure(guard(other))) return;
-        const uses = String(other.uses || "");
-        const w = other.with && typeof other.with === "object" ? other.with : {};
-        const hit = /^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file) ? "code scanning" : /^softprops\/action-gh-release@/.test(uses) && same(w.files) ? "the release" : null;
-        if (!hit) return;
-        alsoTo.add(hit);
-        if (j > i) after = true;
-      });
-      if (alsoTo.size) found.push({ job: id, step: stepName(st, i), path, alsoTo: [...alsoTo], after });
-    });
-  }
-  return found;
 }
 function startsTests(doc) {
   return jobsOf2(doc).some(([, job]) => stepsOf2(job).some((st) => st.run !== void 0 && testCommands(st.run).length > 0));
@@ -9712,10 +9605,10 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
   const timing = timeJobs(sampledRuns, stepCommands(doc));
   const shares = timeShares(timing);
   const jobRuns = assignJobRuns(allJobTimeouts(doc).map((t) => ({ id: t.id, name: t.name, reusable: Boolean(t.reusable) })), [...timing.jobDurations.keys()]);
-  const priced = (jobId, name, { low = false } = {}) => {
+  const priced = (jobId, name) => {
     const label = String(name).replace(/\s+/g, " ").trim();
     const xs = (jobRuns.get(jobId) || []).flatMap((api) => timing.stepSeconds.get(`${api}\0${label}`) || []);
-    return xs.length ? round(low ? Math.min(...xs) : median(xs), 1) : null;
+    return xs.length ? round(median(xs), 1) : null;
   };
   const logBytes = sampledRuns.flat().map((j) => j.log_bytes).filter((b) => Number.isFinite(b) && b >= 0);
   const sampledCount = sampledRuns.length;
@@ -9809,13 +9702,7 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     job_timeouts: allJobTimeouts(doc),
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3),
-    // Work done twice or shipped twice, as the file shows it, each step priced from the sample.
-    // Two steps with one display name ("Run npm test" twice) share one timing list; each is then
-    // priced at that list's minimum, the conservative reading of an ambiguous match.
-    repeated_tests: repeatedTests(doc).map((r) => {
-      return { ...r, seconds: r.steps.map((s, i) => priced(r.jobs[r.scope === "job" ? 0 : i], s, { low: new Set(r.steps).size !== r.steps.length })) };
-    }),
-    duplicate_uploads: duplicateUploads(doc).map((u) => ({ ...u, seconds: priced(u.job, u.step) })),
+    // A self-hosted setup step, priced from the sample by its job and step name.
     selfhosted_setups: selfHostedSetups(doc).map((s) => ({ ...s, seconds: priced(s.job, s.step) })),
     // A passing job's log size, median over the sampled jobs whose size was read (null when none was).
     log_bytes_p50: logBytes.length ? Math.round(median(logBytes)) : null,
@@ -9928,55 +9815,6 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
       `toolchain setup takes ${fmtS(restTc / jobs)} per job${note}`,
       "use runtime versions the runner image already has, or an image with the toolchain baked in",
       { confidence: "inferred", tradeoff: "pinning to the image's version ties the job to the image's update schedule", brief: `${fmtS(restTc / jobs)}${w.setup_cache ? " (with its dependency cache restore)" : ""}` }
-    );
-  }
-  const repeats = w.repeated_tests || [];
-  if (repeats.length) {
-    const secondsOf = (r) => {
-      const xs = r.seconds.filter((s) => s !== null);
-      return xs.length > 1 ? Math.min(...xs) * (xs.length - 1) : 0;
-    };
-    const saving = repeats.reduce((s, r) => s + secondsOf(r), 0) * w.runs_week / 60;
-    const describe = (r) => {
-      const steps = r.steps.map((s) => `"${s}"`).join(" and ");
-      const priced = r.seconds.every((s) => s !== null) ? ` (${r.seconds.map(fmtS).join(" and ")} a run)` : " (not every step was timed in the sample)";
-      if (r.scope === "job") return `job ${r.jobs[0]} runs the same test step twice, \`${r.command}\` in steps ${steps}${priced}`;
-      return `jobs ${r.jobs.join(" and ")} run the same test step, \`${r.command}\`, on the same runner, environment and directory${priced}`;
-    };
-    add(
-      saving,
-      "tests run twice",
-      repeats.slice(0, 3).map(describe).join("; ") + (repeats.length > 3 ? `; and ${repeats.length - 3} more` : ""),
-      "run the suite once; where the second run checks a transformed tree (an export, a built package), keep it and gate it on the event that needs it, such as the push to the default branch",
-      {
-        confidence: "confirmed",
-        tradeoff: "a second run on a transformed tree checks that transform; gated, it checks it after the merge instead of on the pull request",
-        example: `- name: Tests, second run
-  if: github.event_name == 'push'   # once, on main; the pull request ran them above
-  run: ${repeats[0].command}`
-      }
-    );
-  }
-  const dupes = w.duplicate_uploads || [];
-  if (dupes.length) {
-    const saving = dupes.reduce((s, u) => s + (u.seconds || 0), 0) * w.runs_week / 60;
-    const describe = (u) => `job ${u.job} uploads ${u.path} as an artifact in "${u.step}"${u.seconds !== null ? ` (${fmtS(u.seconds)} a run)` : ""} and sends the same file to ${u.alsoTo.join(" and ")}${u.after ? ", in a later step" : ""}`;
-    const later = dupes.some((u) => u.after);
-    add(
-      saving,
-      "an artifact that duplicates another upload",
-      dupes.slice(0, 3).map(describe).join("; "),
-      later ? "move the artifact step after the upload it duplicates and give it `if: failure()`, so the file is kept only on a run where that upload failed; where the upload comes first, drop the artifact step" : "drop the artifact step; the file is already where it is read",
-      { confidence: "confirmed", tradeoff: "none while the other destination is browsable (code scanning shows the SARIF, the release its assets); keep the artifact for a destination that is not", example: later ? `# after the step that sends ${dupes[0].path} to ${dupes[0].alsoTo[0]}
-- name: ${dupes[0].step}
-  if: failure()   # only when that upload failed
-  uses: actions/upload-artifact@...
-  with:
-    path: ${dupes[0].path}` : `# remove
-- name: ${dupes[0].step}
-  uses: actions/upload-artifact@...
-  with:
-    path: ${dupes[0].path}` }
     );
   }
   if (w.log_bytes_p50 !== null && w.log_bytes_p50 !== void 0 && w.log_bytes_p50 >= T.logBytesPerJob && (w.starts_tests || w.hosted_share < 0.5)) {
@@ -10302,7 +10140,7 @@ function analyseParsed(repo, data) {
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
   const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" ? true : data.visibility ? "private" : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || /* @__PURE__ */ new Map()), ...scanFindings(data.scanFiles || /* @__PURE__ */ new Map(), { repo }), ...gateFindings(data.gates, { scanFiles: data.scanFiles || /* @__PURE__ */ new Map(), scanned: data.scanned, visibility: data.visibility })];
-  const findings = groupFindings(raw).filter((f) => f.unit === "wait" || f.unit === "risk" || f.unit === "guard" || f.unit === "log" || f.what === "an artifact that duplicates another upload" || f.saving >= T.minSavingWeek).map((f) => ({
+  const findings = groupFindings(raw).filter((f) => f.unit === "wait" || f.unit === "risk" || f.unit === "guard" || f.unit === "log" || f.saving >= T.minSavingWeek).map((f) => ({
     saving_min_week: round(f.saving, 1),
     unit: f.unit || "job",
     workflow: f.workflow,
