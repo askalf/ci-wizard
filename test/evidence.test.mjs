@@ -194,6 +194,13 @@ jobs:
   assert.equal(parsed[0].if, "github.event_name == 'push' && github.ref == 'refs/heads/<default branch>'");
   // After a runner's `--` every word is an operand: `pytest -- -v` tests a directory named -v. A package manager's `--` forwards flags to the script instead.
   assert.deepEqual(testCommands('pytest -- -v\npytest -- -q\nnpm test -- --silent\nnode --test -- -v'), ['pytest -- -v', 'pytest -- -q', 'npm test', 'node --test -- -v']);
+  // A package manager's second `--` is the script's own terminator: `npm test -- -- -v` hands pytest a directory named -v.
+  assert.deepEqual(testCommands('npm test -- -- -v\nnpm test -- -- -q\nnpm test -- --silent -- -v'), ['npm test -- -- -v', 'npm test -- -- -q', 'npm test -- -- -v']);
+  assert.deepEqual(repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test -- -- -v\n      - run: npm test -- -- -q\n')), []);
+  const fwdSteps = [['Set up job', 1], ['Run npm test -- -- -v', 30], ['Run npm test -- -- -q', 30], ['Complete job', 0]];
+  const fwdDots = `${STAMP}............\n${STAMP}===== 12 passed in 0.3s =====`;
+  const fwd = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: fwdSteps }), name: 't', log_text: log([['npm test -- -- -v', fwdDots], ['npm test -- -- -q', fwdDots]]) }]], file: 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test -- -- -v\n      - run: npm test -- -- -q\n' }]);
+  assert.equal(find(fwd, 'tests run twice').length, 0);
   const terminated = 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pytest -- -v\n      - run: pytest -- -q\n';
   assert.deepEqual(repeatedTests(doc(terminated)), []);
   const tSteps = [['Set up job', 1], ['Run pytest -- -v', 30], ['Run pytest -- -q', 30], ['Complete job', 0]];

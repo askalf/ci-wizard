@@ -8492,6 +8492,7 @@ function testWords(words) {
   const out = [];
   const forwards = /^(npm|pnpm|yarn|bun)$/.test(ws[0]);
   let literal = false;
+  let separators = 0;
   for (let k = 0; k < ws.length; k++) {
     const w = ws[k];
     if (literal) {
@@ -8499,7 +8500,8 @@ function testWords(words) {
       continue;
     }
     if (w === "--") {
-      if (!forwards) literal = true;
+      separators++;
+      if (!forwards || separators > 1) literal = true;
       out.push(w);
       continue;
     }

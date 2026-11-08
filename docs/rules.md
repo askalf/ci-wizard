@@ -190,8 +190,9 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   nothing across jobs (within one job the context is one, and its two steps still compare). Commands are compared with their reporting flags
   removed (`--test-reporter`, `--reporter`, `-q`, `-v`, `--silent`): the same tests reported
   differently are the same tests. After a runner's `--` every word is an operand and stays
-  (`pytest -- -v` tests a directory named `-v`); a package manager's `--` hands the rest to the
-  test script, flags included, so `npm test -- --silent` is `npm test`. Runners known: `node --test`, `npm/pnpm/yarn/bun test` and `run
+  (`pytest -- -v` tests a directory named `-v`); a package manager's first `--` hands the rest to
+  the test script, flags included, so `npm test -- --silent` is `npm test`, and its second `--` is
+  the script's own terminator, so `npm test -- -- -v` keeps its `-v`. Runners known: `node --test`, `npm/pnpm/yarn/bun test` and `run
   test*`, jest, vitest, mocha, ava, tap, pytest, unittest, `go test`, `cargo test`, rspec, `dotnet
   test`, mvn and gradle test, `make test`, ctest, phpunit, pest. Anything the file can tell apart
   is no candidate: the same runner on other paths, in another directory or after an export,
