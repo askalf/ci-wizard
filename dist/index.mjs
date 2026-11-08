@@ -9130,17 +9130,17 @@ function repeatedTests(doc) {
         if (!inJob.has(command)) inJob.set(command, []);
         inJob.get(command).push(name);
         const runner = runnerOf(command);
-        if (!byRunner.has(runner)) byRunner.set(runner, /* @__PURE__ */ new Map());
-        byRunner.get(runner).set(name, command);
+        if (!byRunner.has(runner)) byRunner.set(runner, []);
+        byRunner.get(runner).push({ name, command });
       }
     });
     for (const [command, steps] of inJob) {
       if (!byCommand.has(command)) byCommand.set(command, []);
       byCommand.get(command).push({ job: id, step: steps[0], runsOn: JSON.stringify(job["runs-on"] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
-    for (const [runner, bySteps] of byRunner) {
-      const steps = [...bySteps.keys()];
-      const commands = [...new Set(bySteps.values())];
+    for (const [runner, occurrences] of byRunner) {
+      const steps = occurrences.map((o) => o.name);
+      const commands = [...new Set(occurrences.map((o) => o.command))];
       if (steps.length > 1) {
         found.push({ scope: "job", jobs: [id], steps, command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
         counted.add(`${id}\0${runner}`);
@@ -9175,10 +9175,11 @@ function duplicateUploads(doc) {
       const same = (p) => String(p ?? "").split("\n").map((x) => x.trim().replace(/^\.\//, "")).includes(path);
       const guard = (s) => String(s.if ?? "").replace(/\s+/g, " ").trim();
       const mine = guard(st);
-      const releaseUploads = (script) => shellCommands(script).filter((ws) => ws[0] === "gh" && ws[1] === "release" && ws[2] === "upload").map((ws) => ws.slice(3).map((x) => x.replace(/^\.\//, "")));
+      const afterFailure = /always\(\)|cancelled\(\)/.test(mine);
+      const releaseUploads = (script) => shellCommands(script).filter((ws) => ws[0] === "gh" && ws[1] === "release" && ws[2] === "upload").map((ws) => releaseFiles(ws.slice(3)));
       steps.forEach((other, j) => {
         if (j === i) return;
-        if (guard(other) && guard(other) !== mine) return;
+        if (guard(other) !== mine && (guard(other) !== "" || afterFailure)) return;
         const uses = String(other.uses || "");
         const w = other.with && typeof other.with === "object" ? other.with : {};
         if (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) alsoTo.add("code scanning");
@@ -9189,6 +9190,28 @@ function duplicateUploads(doc) {
     });
   }
   return found;
+}
+var RELEASE_UPLOAD_VALUED = /* @__PURE__ */ new Set(["-R", "--repo"]);
+function releaseFiles(args) {
+  const files = [];
+  let tag = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--") {
+      files.push(...args.slice(i + 1));
+      break;
+    }
+    if (a.startsWith("-")) {
+      if (RELEASE_UPLOAD_VALUED.has(a)) i++;
+      continue;
+    }
+    if (!tag) {
+      tag = true;
+      continue;
+    }
+    files.push(a.split("#")[0].replace(/^\.\//, ""));
+  }
+  return files;
 }
 function startsTests(doc) {
   return jobsOf2(doc).some(([, job]) => stepsOf2(job).some((st) => st.run !== void 0 && testCommands(st.run).length > 0));
@@ -9534,7 +9557,8 @@ var THRESHOLDS = {
   // On a self-hosted runner the host can carry the runtime, so a setup step that only restates a
   // version is worth dropping at a far lower cost than on a hosted image.
   toolchainPerJobSelfHosted: 2,
-  // A passing job's log over this is a test runner naming what passed, not information.
+  // A passing job's log over this is more than a job needs to say it passed; what fills it is
+  // inferred from the workflow file, never read from the bytes.
   logBytesPerJob: 100 * 1024,
   duplicateCommitsWeek: 3,
   supersededWeek: 2,
@@ -9678,10 +9702,10 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
   const timing = timeJobs(sampledRuns, stepCommands(doc));
   const shares = timeShares(timing);
   const jobRuns = assignJobRuns(allJobTimeouts(doc).map((t) => ({ id: t.id, name: t.name, reusable: Boolean(t.reusable) })), [...timing.jobDurations.keys()]);
-  const priced = (jobId, name) => {
+  const priced = (jobId, name, { low = false } = {}) => {
     const label = String(name).replace(/\s+/g, " ").trim();
     const xs = (jobRuns.get(jobId) || []).flatMap((api) => timing.stepSeconds.get(`${api}\0${label}`) || []);
-    return xs.length ? round(median(xs), 1) : null;
+    return xs.length ? round(low ? Math.min(...xs) : median(xs), 1) : null;
   };
   const logBytes = sampledRuns.flat().map((j) => j.log_bytes).filter((b) => Number.isFinite(b) && b >= 0);
   const sampledCount = sampledRuns.length;
@@ -9776,7 +9800,11 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3),
     // Work done twice or shipped twice, as the file shows it, each step priced from the sample.
-    repeated_tests: repeatedTests(doc).map((r) => ({ ...r, seconds: r.steps.map((s, i) => priced(r.jobs[r.scope === "job" ? 0 : i], s)) })),
+    // Two steps with one display name ("Run npm test" twice) share one timing list; each is then
+    // priced at that list's minimum, the conservative reading of an ambiguous match.
+    repeated_tests: repeatedTests(doc).map((r) => {
+      return { ...r, seconds: r.steps.map((s, i) => priced(r.jobs[r.scope === "job" ? 0 : i], s, { low: new Set(r.steps).size !== r.steps.length })) };
+    }),
     duplicate_uploads: duplicateUploads(doc).map((u) => ({ ...u, seconds: priced(u.job, u.step) })),
     selfhosted_setups: selfHostedSetups(doc).map((s) => ({ ...s, seconds: priced(s.job, s.step) })),
     // A passing job's log size, median over the sampled jobs whose size was read (null when none was).
@@ -9869,24 +9897,27 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
     }
   }
   const tc = perRun.toolchain || 0;
-  const selfSetups = w.selfhosted_setups || [];
-  if (selfSetups.length && w.hosted_share < 0.5 && tc / jobs >= T.toolchainPerJobSelfHosted) {
-    const names = [...new Set(selfSetups.map((s) => `${s.action} in job ${s.job}`))];
+  const selfSetups = (w.selfhosted_setups || []).filter((s) => s.seconds !== null && s.seconds !== void 0);
+  const selfSecs = selfSetups.reduce((s, x) => s + x.seconds, 0);
+  if (selfSetups.length && selfSecs / selfSetups.length >= T.toolchainPerJobSelfHosted) {
+    const names = selfSetups.slice(0, 4).map((s) => `${s.action} in job ${s.job}, ${fmtS(s.seconds)}`);
     add(
-      tc * w.runs_week / 60,
+      selfSecs * w.runs_week / 60,
       "toolchain setup",
-      `toolchain setup takes ${fmtS(tc / jobs)} per job on self-hosted runners (${names.slice(0, 4).join(", ")}${names.length > 4 ? " and more" : ""}), where the host can carry the runtime, so the step only restates its version`,
+      `toolchain setup on self-hosted runners takes ${fmtS(selfSecs)} a run (${names.join("; ")}${selfSetups.length > 4 ? "; and more" : ""}), where the host can carry the runtime, so the step only restates its version`,
       "use the runtime the host has, pin its version in the host image, and drop the setup step",
-      { confidence: "inferred", tradeoff: "the job follows the host image's update schedule, and a job that needs another version keeps its step", brief: `${fmtS(tc / jobs)} on self-hosted runners` }
+      { confidence: "inferred", tradeoff: "the job follows the host image's update schedule, and a job that needs another version keeps its step", brief: `${fmtS(selfSecs)} a run on self-hosted runners` }
     );
-  } else if (tc / jobs >= T.toolchainPerJob) {
+  }
+  const restTc = Math.max(0, tc - selfSecs);
+  if (restTc / jobs >= T.toolchainPerJob) {
     const note = w.setup_cache ? " (this includes restoring the dependency cache, which the setup step does)" : "";
     add(
-      0.5 * tc * w.runs_week / 60,
+      0.5 * restTc * w.runs_week / 60,
       "toolchain setup",
-      `toolchain setup takes ${fmtS(tc / jobs)} per job${note}`,
+      `toolchain setup takes ${fmtS(restTc / jobs)} per job${note}`,
       "use runtime versions the runner image already has, or an image with the toolchain baked in",
-      { confidence: "inferred", tradeoff: "pinning to the image's version ties the job to the image's update schedule", brief: `${fmtS(tc / jobs)}${w.setup_cache ? " (with its dependency cache restore)" : ""}` }
+      { confidence: "inferred", tradeoff: "pinning to the image's version ties the job to the image's update schedule", brief: `${fmtS(restTc / jobs)}${w.setup_cache ? " (with its dependency cache restore)" : ""}` }
     );
   }
   const repeats = w.repeated_tests || [];

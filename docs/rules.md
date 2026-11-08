@@ -117,11 +117,12 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **Estimate** 50% of setup time, times runs a week.
 - **Fix** runtime versions the runner image already has, or an image with the toolchain baked in.
   *Trade-off:* pinning to the image's version ties the job to the image's update schedule.
-- **On self-hosted runners** the rule fires at 2 s per job, when the workflow file has a
+- **On self-hosted runners** the rule fires at 2 s per step, when the workflow file has a
   `actions/setup-*` step (node, python, go, java, dotnet, ruby) on a job that runs on self-hosted
-  runners and most of the sampled jobs ran there. The host can carry the runtime, so the step only
-  restates a version: a tool-cache hit still costs the step, and a cold row downloads the runtime
-  again. **Estimate** the whole setup time, times runs a week. **Fix** the runtime the host has, its
+  runners, each such step priced from its own job's sampled runs. The host can carry the runtime,
+  so the step only restates a version: a tool-cache hit still costs the step, and a cold row
+  downloads the runtime again. **Estimate** those steps' time, times runs a week; the rest of the
+  workflow's toolchain time (hosted jobs' included) is judged by the 15 s rule above on its own. **Fix** the runtime the host has, its
   version pinned in the host image, and no setup step. *Trade-off:* the job follows the host image's
   update schedule, and a job that needs another version keeps its step.
 
@@ -132,7 +133,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   --test` on the checkout, then on an exported tree); or in two jobs of the run, the same command
   on the same kind of runner with no matrix. A matrix leg is one job to GitHub, and the same
   tests on two platforms are two results, so neither counts; a job already counted within itself
-  is left out of the cross-job scope, so no run is counted twice. Commands are compared with their
+  is left out of the cross-job scope, so no run is counted twice. Two steps are two runs whatever their names: two unnamed `run: npm test` steps are both
+  "Run npm test", and are priced at the lower of their shared timings. Commands are compared with their
   reporting flags removed (`--test-reporter`, `--reporter`, `-q`, `-v`, `--silent`): the same tests
   reported differently are the same tests. Runners known: `node --test`, `npm/pnpm/yarn/bun test`
   and `run test*`, jest, vitest, mocha, ava, tap, pytest, unittest, `go test`, `cargo test`, rspec,
@@ -154,9 +156,12 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   uploaded to the release (`gh release upload` naming it, or `softprops/action-gh-release` with it
   in `files`). The other destination must run whenever the artifact step runs: a release upload
   behind `if: startsWith(github.ref, 'refs/tags/')` leaves the artifact the only copy on every
-  other run, so a destination with a condition the artifact step does not share does not count,
-  and `gh release upload` is read as a parsed command, so an echo or a comment naming the path is
-  not an upload. An upload that runs only on failure (`if: failure()`) is a crash's files kept for
+  other run, and a destination with no condition runs only on success, so an artifact step with
+  `if: always()` or `!cancelled()` keeps the only copy of a failed run's file; a destination counts
+  only under the artifact step's own condition, or with none when the artifact step runs on
+  success alone. `gh release upload` is read as a parsed command, its tag and option values set
+  aside, so an echo or a comment naming the path, or a tag that happens to equal it, is not an
+  upload. An upload that runs only on failure (`if: failure()`) is a crash's files kept for
   a look, not a duplicate. The OSSF Scorecard starter workflow carries this pattern.
 - **Confidence** confirmed.
 - **Estimate** the artifact step's time, times runs a week; the retention it adds is not costed.
@@ -172,10 +177,11 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   (CodeQL, a fuzzer, Dependabot) is not the workflow's to quiet and costs it nothing. Only the
   size is read, never the bytes: where the file starts a test runner, the evidence names its line
   per passing test as the likely source, not the measured one. The size is read without the log: the job-logs endpoint answers with a redirect to
-  the file, and a HEAD of that address (no token) gives its length, one API call a job. A log that
-  size on a passing job is a test runner naming every test that passed. The runner streams every
-  line to GitHub as the job runs and uploads each step's log before it reports done; on a
-  self-hosted runner that upload is the wrap-up tail.
+  the file, and a HEAD of that address (no token) gives its length, one API call a job. What
+  fills a log that size is not read: where the file starts a test runner, its line per passing test
+  is the likely source, and otherwise the source is unknown. The runner streams every line to
+  GitHub as the job runs and uploads each step's log before it reports done; on a self-hosted
+  runner that upload is the wrap-up tail.
 - **Confidence** measured. Reported in megabytes a week (unit `log`), not minutes; it always
   stays, like a queue wait.
 - **Estimate** the median log size, times jobs a run, times runs a week.

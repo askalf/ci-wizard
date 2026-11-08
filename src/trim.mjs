@@ -96,18 +96,20 @@ export function repeatedTests(doc) {
       for (const command of new Set(testCommands(st.run))) {
         if (!inJob.has(command)) inJob.set(command, []);
         inJob.get(command).push(name);
+        // Occurrences by step, not by display name: two unnamed `run: npm test` steps are both
+        // "Run npm test", and are two runs.
         const runner = runnerOf(command);
-        if (!byRunner.has(runner)) byRunner.set(runner, new Map());
-        byRunner.get(runner).set(name, command);
+        if (!byRunner.has(runner)) byRunner.set(runner, []);
+        byRunner.get(runner).push({ name, command });
       }
     });
     for (const [command, steps] of inJob) {
       if (!byCommand.has(command)) byCommand.set(command, []);
       byCommand.get(command).push({ job: id, step: steps[0], runsOn: JSON.stringify(job['runs-on'] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
-    for (const [runner, bySteps] of byRunner) {
-      const steps = [...bySteps.keys()];
-      const commands = [...new Set(bySteps.values())];
+    for (const [runner, occurrences] of byRunner) {
+      const steps = occurrences.map((o) => o.name);
+      const commands = [...new Set(occurrences.map((o) => o.command))];
       // Two steps of this runner: the same command in both, or two commands (other paths, another directory).
       if (steps.length > 1) {
         found.push({ scope: 'job', jobs: [id], steps, command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
@@ -152,12 +154,16 @@ export function duplicateUploads(doc) {
       // run, so a destination with a condition the artifact step does not share does not count.
       const guard = (s) => String(s.if ?? '').replace(/\s+/g, ' ').trim();
       const mine = guard(st);
+      // A destination with no condition runs only on success (GitHub's implicit success()). An
+      // artifact step that runs after a failure too (always(), !cancelled()) then keeps the only
+      // copy of a failed run's file, so such a destination counts only under the same condition.
+      const afterFailure = /always\(\)|cancelled\(\)/.test(mine);
       // `gh release upload <tag> <files...>` as a parsed command, so an echo, a comment or another
       // command that names the path is not an upload.
-      const releaseUploads = (script) => shellCommands(script).filter((ws) => ws[0] === 'gh' && ws[1] === 'release' && ws[2] === 'upload').map((ws) => ws.slice(3).map((x) => x.replace(/^\.\//, '')));
+      const releaseUploads = (script) => shellCommands(script).filter((ws) => ws[0] === 'gh' && ws[1] === 'release' && ws[2] === 'upload').map((ws) => releaseFiles(ws.slice(3)));
       steps.forEach((other, j) => {
         if (j === i) return;
-        if (guard(other) && guard(other) !== mine) return;
+        if (guard(other) !== mine && (guard(other) !== '' || afterFailure)) return;
         const uses = String(other.uses || '');
         const w = other.with && typeof other.with === 'object' ? other.with : {};
         if (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) alsoTo.add('code scanning');
@@ -168,6 +174,30 @@ export function duplicateUploads(doc) {
     });
   }
   return found;
+}
+
+/** Options of `gh release upload` that take a value as the next word. */
+const RELEASE_UPLOAD_VALUED = new Set(['-R', '--repo']);
+
+/**
+ * The files of `gh release upload <tag> [flags] <files>...`: the first word that is not an option
+ * is the tag, an option with a value consumes it, and the rest are files (a `name#label` form
+ * keeps its name).
+ */
+export function releaseFiles(args) {
+  const files = [];
+  let tag = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--') { files.push(...args.slice(i + 1)); break; }
+    if (a.startsWith('-')) {
+      if (RELEASE_UPLOAD_VALUED.has(a)) i++;
+      continue;
+    }
+    if (!tag) { tag = true; continue; }
+    files.push(a.split('#')[0].replace(/^\.\//, ''));
+  }
+  return files;
 }
 
 /** Whether any step of the workflow starts a test runner. The bytes of a log are not read, so this is the file's word on what a large log is likely to be. */

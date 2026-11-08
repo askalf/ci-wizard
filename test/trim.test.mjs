@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { analyse } from '../src/analyse.mjs';
 import { createClient } from '../src/github.mjs';
 import { savingText } from '../src/report.mjs';
-import { duplicateUploads, repeatedTests, runnerOf, selfHostedSetups, stepName, testCommands } from '../src/trim.mjs';
+import { duplicateUploads, releaseFiles, repeatedTests, runnerOf, selfHostedSetups, stepName, testCommands } from '../src/trim.mjs';
 import { parseWorkflow } from '../src/workflow.mjs';
 import { data, find, job, runs } from './helpers.mjs';
 
@@ -97,6 +97,9 @@ jobs:
   const suites = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run test:unit\n      - run: npm run test:e2e\n');
   // Two scripts of one runner in one job: the file cannot say they are the same tests, and the finding says so.
   assert.deepEqual(repeatedTests(suites).map((r) => [r.scope, r.same, r.command]), [['job', false, 'npm run test']]);
+  // Two unnamed steps with the same command share a display name and are still two runs.
+  const unnamed = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n      - run: npm test\n');
+  assert.deepEqual(repeatedTests(unnamed), [{ scope: 'job', jobs: ['t'], steps: ['Run npm test', 'Run npm test'], command: 'npm test', same: true }]);
   // Two runners in one job: the one started twice is found, the one started once is not.
   const mixed = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: npm test\n      - name: B\n        run: npm test\n      - name: C\n        run: pytest tests\n');
   assert.deepEqual(repeatedTests(mixed), [{ scope: 'job', jobs: ['t'], steps: ['A', 'B'], command: 'npm test', same: true }]);
@@ -165,6 +168,53 @@ jobs:
         run: gh release upload "$TAG" dist.tar.gz
 `);
   assert.equal(duplicateUploads(bothOnTag).length, 1);
+  // An artifact kept after a failure beside a destination that runs on success alone: the artifact
+  // is the only copy of a failed run's file. Under one condition both are one path again.
+  const afterFailure = doc(`on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          path: results.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          path: results.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+`);
+  assert.deepEqual(duplicateUploads(afterFailure).map((u) => u.job), ['b']);
+  // The release tag and an option's value are not files.
+  const tagAndOption = doc(`on: push
+jobs:
+  r:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        with:
+          path: v1
+      - uses: actions/upload-artifact@v4
+        with:
+          path: o/r
+      - uses: actions/upload-artifact@v4
+        with:
+          path: dist.tar.gz
+      - run: gh release upload v1 -R o/r --clobber dist.tar.gz
+`);
+  assert.deepEqual(duplicateUploads(tagAndOption).map((u) => u.path), ['dist.tar.gz']);
+  assert.deepEqual(releaseFiles(['v1', '-R', 'o/r', '--clobber', './a.tgz', 'b.tgz#Label']), ['a.tgz', 'b.tgz']);
+  assert.deepEqual(releaseFiles(['v1', '--', '-weird.tgz']), ['-weird.tgz']);
   // An echo, a comment, or another command naming the path is not an upload.
   const mentions = doc(`on: push
 jobs:
@@ -294,6 +344,16 @@ jobs:
   assert.equal(find(unnamed, 'tests run twice').length, 0);
 });
 
+test('tests run twice: two steps with one display name share a timing list and are priced at its minimum', () => {
+  const file = 'on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n      - run: npm test\n';
+  const steps = [['Set up job', 1], ['Run npm test', 30], ['Run npm test', 10], ['Complete job', 0]];
+  const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'test' }]], file }]);
+  const [f] = find(a, 'tests run twice');
+  assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
+  assert.deepEqual(a.workflows[0].repeated_tests[0].seconds, [10, 10]);
+  assert.equal(f.saving_min_week, 5); // 10 s x 30 runs / 60, the lower of the two shared timings
+});
+
 test('an artifact that duplicates another upload: the artifact step\'s time is the saving, confirmed', () => {
   const file = `on: push
 jobs:
@@ -344,10 +404,43 @@ test('toolchain setup on a self-hosted runner fires at a few seconds a job, savi
   const [f] = find(a, 'toolchain setup');
   assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
   assert.equal(f.saving_min_week, 2); // 3 s x 40 runs / 60, the whole step
-  assert.match(f.evidence, /3 s per job on self-hosted runners \(setup-node in job test\)/);
+  assert.match(f.evidence, /on self-hosted runners takes 3 s a run \(setup-node in job test, 3 s\)/);
   assert.match(f.fix, /drop the setup step/);
   const hosted = audit([{ name: 'CI', runs: runs(40), jobsPerRun: [[job({ steps: SETUP(3) })]], file: setupFile('ubuntu-latest') }]);
   assert.equal(find(hosted, 'toolchain setup').length, 0);
+  // Mixed hosting: the self-hosted step is priced from its own job (3 s); the hosted jobs' 120 s
+  // setups are the general rule's, half of them, and never described as self-hosted.
+  const mixedFile = `on: push
+jobs:
+  box:
+    runs-on: [self-hosted, x]
+    steps:
+      - uses: actions/setup-node@v4
+      - name: Run tests
+        run: npm test
+  cloud:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+      - name: Run tests
+        run: npm test
+  cloud2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+      - name: Run tests
+        run: npm test
+`;
+  const mixed = audit([{ name: 'CI', runs: runs(40), jobsPerRun: [[
+    { ...job({ steps: SETUP(3), selfHosted: true }), name: 'box' },
+    { ...job({ steps: SETUP(120) }), name: 'cloud' },
+    { ...job({ steps: SETUP(120) }), name: 'cloud2' },
+  ]], file: mixedFile }]);
+  const ms = find(mixed, 'toolchain setup');
+  assert.equal(ms.length, 1); // one grouped finding for the workflow, two members
+  assert.match(ms[0].evidence, /3 s a run on self-hosted runners|on self-hosted runners takes 3 s a run \(setup-node in job box, 3 s\)/);
+  assert.doesNotMatch(ms[0].evidence, /2m 3s|123 s/);
+  assert.equal(ms[0].saving_min_week, 82); // 3 s x 40 / 60 = 2, plus 0.5 x 240 s x 40 / 60 = 80
   // A self-hosted job with no setup action in the file is the image's own setup, judged by the usual threshold.
   const plain = audit([{ name: 'CI', runs: runs(40), jobsPerRun: [[job({ steps: SETUP(3), selfHosted: true })]], file: setupFile('[self-hosted, box]').replace(/      - uses: actions\/setup-node@v4\n        with:\n          node-version: '22'\n/, '') }]);
   assert.equal(find(plain, 'toolchain setup').length, 0);

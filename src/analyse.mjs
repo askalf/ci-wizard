@@ -19,7 +19,8 @@ export const THRESHOLDS = {
   // On a self-hosted runner the host can carry the runtime, so a setup step that only restates a
   // version is worth dropping at a far lower cost than on a hosted image.
   toolchainPerJobSelfHosted: 2,
-  // A passing job's log over this is a test runner naming what passed, not information.
+  // A passing job's log over this is more than a job needs to say it passed; what fills it is
+  // inferred from the workflow file, never read from the bytes.
   logBytesPerJob: 100 * 1024,
   duplicateCommitsWeek: 3,
   supersededWeek: 2,
@@ -195,10 +196,10 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
   // matches them (a matrix leg "test (20)" is a run of job test). Null when the sample ran no such
   // step of that job (a renamed step, a job the sample never ran, a job name two jobs share).
   const jobRuns = assignJobRuns(allJobTimeouts(doc).map((t) => ({ id: t.id, name: t.name, reusable: Boolean(t.reusable) })), [...timing.jobDurations.keys()]);
-  const priced = (jobId, name) => {
+  const priced = (jobId, name, { low = false } = {}) => {
     const label = String(name).replace(/\s+/g, ' ').trim();
     const xs = (jobRuns.get(jobId) || []).flatMap((api) => timing.stepSeconds.get(`${api}\u0000${label}`) || []);
-    return xs.length ? round(median(xs), 1) : null;
+    return xs.length ? round(low ? Math.min(...xs) : median(xs), 1) : null;
   };
   const logBytes = sampledRuns.flat().map((j) => j.log_bytes).filter((b) => Number.isFinite(b) && b >= 0);
   const sampledCount = sampledRuns.length;
@@ -297,7 +298,11 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3),
     // Work done twice or shipped twice, as the file shows it, each step priced from the sample.
-    repeated_tests: repeatedTests(doc).map((r) => ({ ...r, seconds: r.steps.map((s, i) => priced(r.jobs[r.scope === 'job' ? 0 : i], s)) })),
+    // Two steps with one display name ("Run npm test" twice) share one timing list; each is then
+    // priced at that list's minimum, the conservative reading of an ambiguous match.
+    repeated_tests: repeatedTests(doc).map((r) => {
+      return { ...r, seconds: r.steps.map((s, i) => priced(r.jobs[r.scope === 'job' ? 0 : i], s, { low: new Set(r.steps).size !== r.steps.length })) };
+    }),
     duplicate_uploads: duplicateUploads(doc).map((u) => ({ ...u, seconds: priced(u.job, u.step) })),
     selfhosted_setups: selfHostedSetups(doc).map((s) => ({ ...s, seconds: priced(s.job, s.step) })),
     // A passing job's log size, median over the sampled jobs whose size was read (null when none was).
@@ -388,20 +393,24 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
   }
 
   const tc = perRun.toolchain || 0;
-  const selfSetups = w.selfhosted_setups || [];
-  if (selfSetups.length && w.hosted_share < 0.5 && tc / jobs >= T.toolchainPerJobSelfHosted) {
-    // On a self-hosted runner the setup step restates a version the host can carry itself: a tool
-    // cache hit still costs the step, and a cold row downloads the runtime again. The whole step
-    // goes, so the saving is all of it.
-    const names = [...new Set(selfSetups.map((s) => `${s.action} in job ${s.job}`))];
-    add(tc * w.runs_week / 60, 'toolchain setup', `toolchain setup takes ${fmtS(tc / jobs)} per job on self-hosted runners (${names.slice(0, 4).join(', ')}${names.length > 4 ? ' and more' : ''}), where the host can carry the runtime, so the step only restates its version`,
+  // Setup steps on self-hosted jobs, each priced from its own sampled runs: on a self-hosted
+  // runner the step restates a version the host can carry itself (a tool-cache hit still costs
+  // the step, a cold row downloads the runtime again), so the whole step is the saving. The
+  // general rule below judges the rest of the toolchain time, hosted jobs' included.
+  const selfSetups = (w.selfhosted_setups || []).filter((s) => s.seconds !== null && s.seconds !== undefined);
+  const selfSecs = selfSetups.reduce((s, x) => s + x.seconds, 0);
+  if (selfSetups.length && selfSecs / selfSetups.length >= T.toolchainPerJobSelfHosted) {
+    const names = selfSetups.slice(0, 4).map((s) => `${s.action} in job ${s.job}, ${fmtS(s.seconds)}`);
+    add(selfSecs * w.runs_week / 60, 'toolchain setup', `toolchain setup on self-hosted runners takes ${fmtS(selfSecs)} a run (${names.join('; ')}${selfSetups.length > 4 ? '; and more' : ''}), where the host can carry the runtime, so the step only restates its version`,
       'use the runtime the host has, pin its version in the host image, and drop the setup step',
-      { confidence: 'inferred', tradeoff: "the job follows the host image's update schedule, and a job that needs another version keeps its step", brief: `${fmtS(tc / jobs)} on self-hosted runners` });
-  } else if (tc / jobs >= T.toolchainPerJob) {
+      { confidence: 'inferred', tradeoff: "the job follows the host image's update schedule, and a job that needs another version keeps its step", brief: `${fmtS(selfSecs)} a run on self-hosted runners` });
+  }
+  const restTc = Math.max(0, tc - selfSecs);
+  if (restTc / jobs >= T.toolchainPerJob) {
     const note = w.setup_cache ? ' (this includes restoring the dependency cache, which the setup step does)' : '';
-    add(0.5 * tc * w.runs_week / 60, 'toolchain setup', `toolchain setup takes ${fmtS(tc / jobs)} per job${note}`,
+    add(0.5 * restTc * w.runs_week / 60, 'toolchain setup', `toolchain setup takes ${fmtS(restTc / jobs)} per job${note}`,
       'use runtime versions the runner image already has, or an image with the toolchain baked in',
-      { confidence: 'inferred', tradeoff: "pinning to the image's version ties the job to the image's update schedule", brief: `${fmtS(tc / jobs)}${w.setup_cache ? ' (with its dependency cache restore)' : ''}` });
+      { confidence: 'inferred', tradeoff: "pinning to the image's version ties the job to the image's update schedule", brief: `${fmtS(restTc / jobs)}${w.setup_cache ? ' (with its dependency cache restore)' : ''}` });
   }
 
   // Tests started twice: the second run is the saving (the shorter of the two steps; a step the
