@@ -108,6 +108,17 @@ jobs:
   const aside = repeatedTests(doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          set -euo pipefail\n          npm test\n      - run: npm test\n'));
   assert.deepEqual(aside.map((r) => r.headers), [['set -euo pipefail', 'npm test']]);
   assert.equal(onlyCommand('set -euo pipefail\nnpm test -- --silent', 'npm test'), true);
+  assert.equal(onlyCommand('set -o pipefail\nset +x\nnpm test', 'npm test'), true);
+  // `set --` assigns the positional parameters the test command reads: not an aside, and a bare `set` is not either.
+  assert.equal(onlyCommand('set -- --base-url=https://staging.example\npytest "$@"', 'pytest "$@"'), false);
+  assert.equal(onlyCommand('set\nnpm test', 'npm test'), false);
+  assert.equal(onlyCommand('set -e --\nnpm test', 'npm test'), false);
+  const positional = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          set -- --base-url=https://staging.example\n          pytest "$@"\n      - run: |\n          set -- --base-url=https://production.example\n          pytest "$@"\n');
+  assert.deepEqual(repeatedTests(positional), []);
+  const setSteps = [['Set up job', 1], ['Run set -- --base-url=https://staging.example', 30], ['Run set -- --base-url=https://production.example', 30], ['Complete job', 0]];
+  const setLog = log([['set -- --base-url=https://staging.example', tap(A)], ['set -- --base-url=https://production.example', tap(A)]]);
+  const e = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: setSteps }), name: 't', log_text: setLog }]], file: 'on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          set -- --base-url=https://staging.example\n          pytest "$@"\n      - run: |\n          set -- --base-url=https://production.example\n          pytest "$@"\n' }]);
+  assert.equal(find(e, 'tests run twice').length, 0, 'identical listings against two endpoints are two results');
   assert.equal(onlyCommand('cd pkg\nnpm test', 'npm test'), false); // a cd moves the tests: not the same step
   assert.equal(onlyCommand('export DB_BACKEND=sqlite\nnpm test', 'npm test'), false); // an export changes their environment
   assert.equal(onlyCommand('echo postgres > backend.conf\nnpm test', 'npm test'), false); // a redirection writes a file

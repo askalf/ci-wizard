@@ -8509,7 +8509,12 @@ var REPORTING = [
 function survivesFailure(condition) {
   return /^(\$\{\{\s*)?(always\(\)|!\s*cancelled\(\))(\s*\}\})?$/.test(String(condition ?? "").trim());
 }
-var HARMLESS = /* @__PURE__ */ new Set(["set", "echo", "true", ":", "pwd"]);
+var HARMLESS = /* @__PURE__ */ new Set(["echo", "true", ":", "pwd"]);
+function setsOptionsOnly(words) {
+  const rest = words.slice(1);
+  if (!rest.length) return false;
+  return rest.every((w, k) => /^[-+][a-zA-Z]+$/.test(w) || /^[-+][a-zA-Z]*o$/.test(rest[k - 1] ?? "") && /^[a-z]+$/.test(w));
+}
 var KEYWORDS = /* @__PURE__ */ new Set(["then", "do", "else", "elif", "{", "(", "!", "time", "exec"]);
 function testCommands(script) {
   const out = [];
@@ -8537,6 +8542,10 @@ function onlyCommand(script, command) {
       for (const rx of REPORTING) cmd = cmd.replace(rx, "");
       if (cmd.replace(/\s+/g, " ").replace(/\s--$/, "").trim() !== command) return false;
       hits++;
+      continue;
+    }
+    if (ws[0] === "set") {
+      if (!setsOptionsOnly(ws)) return false;
       continue;
     }
     if (!HARMLESS.has(ws[0]) || ws.some((w) => /^(<|>|>>|\|)/.test(w) || /[<>|]/.test(w) && !/^['"]/.test(w) && w !== ws[0])) return false;

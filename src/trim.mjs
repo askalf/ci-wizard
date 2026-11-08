@@ -43,8 +43,19 @@ export function survivesFailure(condition) {
   return /^(\$\{\{\s*)?(always\(\)|!\s*cancelled\(\))(\s*\}\})?$/.test(String(condition ?? '').trim());
 }
 
-/** Shell commands a test step may carry beside its tests without changing what the tests are or where and how they run (an export changes the environment, a cd the directory: neither is here). */
-const HARMLESS = new Set(['set', 'echo', 'true', ':', 'pwd']);
+/** Shell commands a test step may carry beside its tests without changing what the tests are or where and how they run (an export changes the environment, a cd the directory: neither is here; `set` is read apart). */
+const HARMLESS = new Set(['echo', 'true', ':', 'pwd']);
+
+/**
+ * Whether a `set` line only sets shell options (`set -e`, `set -euo pipefail`, `set -o pipefail`,
+ * `set +x`). `set -- --base-url=…` assigns the positional parameters a following `pytest "$@"`
+ * reads, and a bare `set` prints the environment: neither is an aside.
+ */
+function setsOptionsOnly(words) {
+  const rest = words.slice(1);
+  if (!rest.length) return false;
+  return rest.every((w, k) => /^[-+][a-zA-Z]+$/.test(w) || (/^[-+][a-zA-Z]*o$/.test(rest[k - 1] ?? '') && /^[a-z]+$/.test(w)));
+}
 
 /** Words a shell reads as structure before the command: a command after one is still that command. */
 const KEYWORDS = new Set(['then', 'do', 'else', 'elif', '{', '(', '!', 'time', 'exec']);
@@ -89,6 +100,10 @@ export function onlyCommand(script, command) {
       for (const rx of REPORTING) cmd = cmd.replace(rx, '');
       if (cmd.replace(/\s+/g, ' ').replace(/\s--$/, '').trim() !== command) return false;
       hits++;
+      continue;
+    }
+    if (ws[0] === 'set') {
+      if (!setsOptionsOnly(ws)) return false;
       continue;
     }
     // A command aside only while it touches nothing: a redirection or a pipe writes a file or
