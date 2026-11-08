@@ -104,41 +104,53 @@ export function repeatedTests(doc) {
       }
     });
     for (const [command, steps] of inJob) {
+      const first = byRunner.get(runnerOf(command)).find((o) => o.command === command);
       if (!byCommand.has(command)) byCommand.set(command, []);
-      byCommand.get(command).push({ job: id, step: steps[0], runsOn: JSON.stringify(job['runs-on'] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
+      byCommand.get(command).push({ job: id, step: steps[0], index: first.index, runsOn: JSON.stringify(job['runs-on'] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
+    // A step is priced once: a step that starts two runners (or two suites of one) joins the first
+    // finding that takes it and no other, so no step's time is claimed twice.
+    const used = new Set();
     for (const [runner, occurrences] of byRunner) {
-      // One step that starts two suites of one runner is one step: distinct steps by index, each
-      // named once, so a step is never priced twice for two commands inside it.
       const byIndex = new Map();
-      for (const o of occurrences) if (!byIndex.has(o.index)) byIndex.set(o.index, o.name);
+      for (const o of occurrences) if (!byIndex.has(o.index) && !used.has(o.index)) byIndex.set(o.index, o.name);
       const steps = [...byIndex.values()];
-      const commands = [...new Set(occurrences.map((o) => o.command))];
+      const commands = [...new Set(occurrences.filter((o) => byIndex.has(o.index)).map((o) => o.command))];
       // Two steps of this runner: the same command in both, or two commands (other paths, another directory).
       if (steps.length > 1) {
         found.push({ scope: 'job', jobs: [id], steps, command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
+        for (const i of byIndex.keys()) used.add(i);
         counted.add(`${id}\u0000${runner}`);
       }
     }
   }
+  // Across jobs the same: a step already in a cross-job finding (two suites in one step, two
+  // commands of two runners) is not priced again under its other command.
+  const usedAcross = new Set();
   for (const [command, where] of byCommand) {
     const groups = new Map();
     for (const w of where) {
-      if (w.matrix || counted.has(`${w.job}\u0000${runnerOf(command)}`)) continue;
+      if (w.matrix || counted.has(`${w.job}\u0000${runnerOf(command)}`) || usedAcross.has(`${w.job}\u0000${w.index}`)) continue;
       if (!groups.has(w.runsOn)) groups.set(w.runsOn, []);
       groups.get(w.runsOn).push(w);
     }
     for (const ws of groups.values()) {
-      if (ws.length > 1) found.push({ scope: 'workflow', jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), command, same: true });
+      if (ws.length > 1) {
+        found.push({ scope: 'workflow', jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), command, same: true });
+        for (const w of ws) usedAcross.add(`${w.job}\u0000${w.index}`);
+      }
     }
   }
   return found;
 }
 
 /**
- * An actions/upload-artifact step whose one literal path another step of the same job already
- * publishes: a SARIF file sent to code scanning, or a file uploaded to the release. An upload that
- * runs only on failure is a crash's files kept for a look, not a duplicate.
+ * An actions/upload-artifact step whose one literal path another action step of the same job
+ * already publishes with the same literal input: a SARIF file sent to code scanning
+ * (github/codeql-action/upload-sarif), or a file attached to the release
+ * (softprops/action-gh-release). Both actions read their input against the workspace, as
+ * upload-artifact does. An upload that runs only on failure is a crash's files kept for a look,
+ * not a duplicate.
  */
 export function duplicateUploads(doc) {
   const found = [];
@@ -162,9 +174,6 @@ export function duplicateUploads(doc) {
       // artifact step that runs after a failure too (always(), !cancelled()) then keeps the only
       // copy of a failed run's file, so such a destination counts only under the same condition.
       const afterFailure = /always\(\)|cancelled\(\)/.test(mine);
-      // `gh release upload <tag> <files...>` as a parsed command, so an echo, a comment or another
-      // command that names the path is not an upload.
-      const releaseUploads = unconditionalReleaseUploads;
       steps.forEach((other, j) => {
         if (j === i) return;
         if (guard(other) !== mine && (guard(other) !== '' || afterFailure)) return;
@@ -172,62 +181,14 @@ export function duplicateUploads(doc) {
         const w = other.with && typeof other.with === 'object' ? other.with : {};
         if (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) alsoTo.add('code scanning');
         if (/^softprops\/action-gh-release@/.test(uses) && same(w.files)) alsoTo.add('the release');
-        if (other.run !== undefined && releaseUploads(String(other.run)).some((files) => files.includes(path))) alsoTo.add('the release');
+        // A `gh release upload` in a run script is not read: whether the shell reaches it (a
+        // `test ... || exit 0`, an if, a here-document) and from which directory (working-directory,
+        // a cd) is not the file's to establish, and a wrong "duplicate" deletes the only copy.
       });
       if (alsoTo.size) found.push({ job: id, step: stepName(st, i), path, alsoTo: [...alsoTo] });
     });
   }
   return found;
-}
-
-/** Options of `gh release upload` that take a value as the next word. */
-const RELEASE_UPLOAD_VALUED = new Set(['-R', '--repo']);
-
-/**
- * The files of `gh release upload <tag> [flags] <files>...`: the first word that is not an option
- * is the tag, an option with a value consumes it, and the rest are files (a `name#label` form
- * keeps its name).
- */
-export function releaseFiles(args) {
-  const files = [];
-  let tag = false;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === '--') { files.push(...args.slice(i + 1)); break; }
-    if (a.startsWith('-')) {
-      if (RELEASE_UPLOAD_VALUED.has(a)) i++;
-      continue;
-    }
-    if (!tag) { tag = true; continue; }
-    files.push(a.split('#')[0].replace(/^\.\//, ''));
-  }
-  return files;
-}
-
-/** A line that opens shell control flow; everything after it may or may not run. */
-const CONTROL_FLOW = /^(if|case|while|until|for|select|elif|else)\b|^\{|^\(/;
-
-/**
- * The files of each `gh release upload` the script runs on every path through it: a line that is
- * the upload command and nothing else, before any control flow. An upload behind `&&`, `||`, `;`,
- * an `if` or a `case`, or after one, may not run (a tag-only upload on a branch run), and the
- * artifact beside it would be the only copy, so it does not count.
- */
-export function unconditionalReleaseUploads(script) {
-  const out = [];
-  for (const raw of String(script || '').split('\n')) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    if (CONTROL_FLOW.test(line)) break;
-    if (/^(exec\s+)?gh\s+release\s+upload\b/.test(line) && !/&&|\|\||;/.test(line)) {
-      const [ws] = shellCommands(line);
-      if (ws && ws[0] === 'gh' && ws[1] === 'release' && ws[2] === 'upload') out.push(releaseFiles(ws.slice(3)));
-      continue;
-    }
-    // Any other line that carries the command is a guarded one: a `test ... && gh release upload`.
-    if (/\bgh\s+release\s+upload\b/.test(line)) continue;
-  }
-  return out;
 }
 
 /** Whether any step of the workflow starts a test runner. The bytes of a log are not read, so this is the file's word on what a large log is likely to be. */

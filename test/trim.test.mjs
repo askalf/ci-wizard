@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { analyse } from '../src/analyse.mjs';
 import { createClient } from '../src/github.mjs';
 import { savingText } from '../src/report.mjs';
-import { duplicateUploads, releaseFiles, repeatedTests, runnerOf, selfHostedSetups, stepName, testCommands, unconditionalReleaseUploads } from '../src/trim.mjs';
+import { duplicateUploads, repeatedTests, runnerOf, selfHostedSetups, stepName, testCommands } from '../src/trim.mjs';
 import { parseWorkflow } from '../src/workflow.mjs';
 import { data, find, job, runs } from './helpers.mjs';
 
@@ -137,9 +137,28 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           path: ./dist.tar.gz
-      - run: gh release upload "$TAG" dist.tar.gz --clobber
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist.tar.gz
+            checksums.txt
 `);
   assert.deepEqual(duplicateUploads(release), [{ job: 'r', step: 'Run actions/upload-artifact@v4', path: 'dist.tar.gz', alsoTo: ['the release'] }]);
+  // A `gh release upload` in a script never counts: the shell's path to it and its directory are not the file's to establish.
+  const shell = doc(`on: release
+jobs:
+  r:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        with:
+          path: dist.tar.gz
+      - run: gh release upload "$TAG" dist.tar.gz --clobber
+      - run: test "$GITHUB_REF_TYPE" = tag || exit 0; gh release upload "$TAG" dist.tar.gz
+      - run: gh release upload v1 dist.tar.gz
+        working-directory: package
+`);
+  assert.deepEqual(duplicateUploads(shell), []);
   // A release upload only on a tag leaves the artifact the only copy on every other run.
   const tagOnly = doc(`on: push
 jobs:
@@ -149,10 +168,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           path: dist.tar.gz
-      - if: startsWith(github.ref, 'refs/tags/')
-        run: gh release upload "$TAG" dist.tar.gz
       - uses: softprops/action-gh-release@v2
-        if: github.event_name == 'release'
+        if: startsWith(github.ref, 'refs/tags/')
         with:
           files: dist.tar.gz
 `);
@@ -167,8 +184,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           path: dist.tar.gz
-      - if: startsWith(github.ref, 'refs/tags/')
-        run: gh release upload "$TAG" dist.tar.gz
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist.tar.gz
 `);
   assert.equal(duplicateUploads(bothOnTag).length, 1);
   // An artifact kept after a failure beside a destination that runs on success alone: the artifact
@@ -198,96 +217,6 @@ jobs:
           sarif_file: results.sarif
 `);
   assert.deepEqual(duplicateUploads(afterFailure).map((u) => u.job), ['b']);
-  // The release tag and an option's value are not files.
-  const tagAndOption = doc(`on: push
-jobs:
-  r:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/upload-artifact@v4
-        with:
-          path: v1
-      - uses: actions/upload-artifact@v4
-        with:
-          path: o/r
-      - uses: actions/upload-artifact@v4
-        with:
-          path: dist.tar.gz
-      - run: gh release upload v1 -R o/r --clobber dist.tar.gz
-`);
-  assert.deepEqual(duplicateUploads(tagAndOption).map((u) => u.path), ['dist.tar.gz']);
-  assert.deepEqual(releaseFiles(['v1', '-R', 'o/r', '--clobber', './a.tgz', 'b.tgz#Label']), ['a.tgz', 'b.tgz']);
-  assert.deepEqual(releaseFiles(['v1', '--', '-weird.tgz']), ['-weird.tgz']);
-  // An upload the script can skip (a condition inside run:) is not a destination.
-  const guardedInRun = doc(`on: push
-jobs:
-  r:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/upload-artifact@v4
-        with:
-          path: dist.tar.gz
-      - run: test "$GITHUB_REF_TYPE" = tag && gh release upload "$TAG" dist.tar.gz
-      - run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            gh release upload "$TAG" dist.tar.gz
-          fi
-      - run: |
-          case "$GITHUB_REF" in refs/tags/*) ;; *) exit 0 ;; esac
-          gh release upload "$TAG" dist.tar.gz
-`);
-  assert.deepEqual(duplicateUploads(guardedInRun), []);
-  assert.deepEqual(unconditionalReleaseUploads('set -euo pipefail\ncp a b\n# gh release upload v0 x\ngh release upload "$TAG" --clobber dist.tar.gz\n'), [['dist.tar.gz']]);
-  assert.deepEqual(unconditionalReleaseUploads('gh release upload v1 a.tgz; rm a.tgz'), []);
-  assert.deepEqual(unconditionalReleaseUploads('if true; then :; fi\ngh release upload v1 a.tgz'), []);
-  // An echo, a comment, or another command naming the path is not an upload.
-  const mentions = doc(`on: push
-jobs:
-  r:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/upload-artifact@v4
-        with:
-          path: dist.tar.gz
-      - run: |
-          echo "gh release upload v1 dist.tar.gz"
-          # gh release upload v1 dist.tar.gz
-          ls -l dist.tar.gz
-          gh release upload v1 other.tar.gz
-`);
-  assert.deepEqual(duplicateUploads(mentions), []);
-  const quiet = doc(`on: push
-jobs:
-  a:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          path: results.sarif
-      - uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: results.sarif
-  b:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/upload-artifact@v4
-        with:
-          path: out/*.sarif
-      - uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: out/a.sarif
-  c:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/upload-artifact@v4
-        with:
-          path: coverage/lcov.info
-      - uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: results.sarif
-`);
-  assert.deepEqual(duplicateUploads(quiet), []);
 });
 
 test('selfHostedSetups: a setup action on a self-hosted job, not on a hosted one', () => {
@@ -367,6 +296,33 @@ jobs:
   // An API job no file job claims prices nothing.
   const unnamed = audit([{ name: 'CI', runs: runs(60), jobsPerRun: [[job({ steps: stepsOf(10) })]], file }]);
   assert.equal(find(unnamed, 'tests run twice').length, 0);
+});
+
+test('tests run twice: two jobs with one identical two-suite step are one cross-job finding, priced once', () => {
+  const file = `on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Suites
+        run: |
+          pytest tests/unit
+          pytest tests/integration
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Suites
+        run: |
+          pytest tests/unit
+          pytest tests/integration
+`;
+  const steps = [['Set up job', 1], ['Suites', 60], ['Complete job', 0]];
+  const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'a' }, { ...job({ steps }), name: 'b' }]], file }]);
+  assert.deepEqual(a.workflows[0].repeated_tests.map((r) => [r.scope, r.jobs, r.command]), [['workflow', ['a', 'b'], 'pytest tests/unit']]);
+  assert.equal(find(a, 'tests run twice')[0].saving_min_week, 30); // one 60 s step x 30 runs / 60, not two
+  // One step of two runners beside another such step: one finding, each step priced once.
+  const twoRunners = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: |\n          npm test\n          pytest tests\n      - name: B\n        run: |\n          npm test\n          pytest tests\n');
+  assert.deepEqual(repeatedTests(twoRunners).map((r) => [r.steps, r.command]), [[['A', 'B'], 'npm test']]);
 });
 
 test('tests run twice: two steps with one display name share a timing list and are priced at its minimum', () => {

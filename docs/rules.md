@@ -135,7 +135,8 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   tests on two platforms are two results, so neither counts; a job already counted within itself
   is left out of the cross-job scope, so no run is counted twice. Two steps are two runs whatever their names: two unnamed `run: npm test` steps are both
   "Run npm test", and are priced at the lower of their shared timings; one step that starts two
-  suites of one runner is one step. Commands are compared with their
+  suites of one runner is one step, and a step is priced once, in the first finding that takes it,
+  within a job and across jobs alike. Commands are compared with their
   reporting flags removed (`--test-reporter`, `--reporter`, `-q`, `-v`, `--silent`): the same tests
   reported differently are the same tests. Runners known: `node --test`, `npm/pnpm/yarn/bun test`
   and `run test*`, jest, vitest, mocha, ava, tap, pytest, unittest, `go test`, `cargo test`, rspec,
@@ -152,18 +153,18 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 ## an artifact that duplicates another upload
 
 - **Fires when** a job's `actions/upload-artifact` step has one literal path (no glob, no
-  expression, one line) that another step of the same job already publishes: a SARIF file sent to
-  code scanning (`github/codeql-action/upload-sarif` with the same `sarif_file`), or a file
-  uploaded to the release (`gh release upload` naming it, or `softprops/action-gh-release` with it
-  in `files`). The other destination must run whenever the artifact step runs: a release upload
+  expression, one line) that another action step of the same job already publishes with the same
+  literal input: a SARIF file sent to code scanning (`github/codeql-action/upload-sarif` with the
+  same `sarif_file`), or a file attached to the release (`softprops/action-gh-release` with it in
+  `files`). Both read their input against the workspace, as upload-artifact does. A `gh release
+  upload` in a run script is not read: whether the shell reaches it (a `test … || exit 0`, an
+  `if`, a here-document) and from which directory (`working-directory`, a `cd`) is not the file's
+  to establish, and a wrong duplicate deletes the only copy. The other destination must run whenever the artifact step runs: a release upload
   behind `if: startsWith(github.ref, 'refs/tags/')` leaves the artifact the only copy on every
   other run, and a destination with no condition runs only on success, so an artifact step with
   `if: always()` or `!cancelled()` keeps the only copy of a failed run's file; a destination counts
   only under the artifact step's own condition, or with none when the artifact step runs on
-  success alone. `gh release upload` is read as a parsed command, its tag and option values set
-  aside, so an echo or a comment naming the path, or a tag that happens to equal it, is not an
-  upload; and it counts only as a line of its own before any shell control flow, since an upload
-  behind `&&`, `;`, an `if` or a `case` may not run on the run the artifact ran on. An upload that runs only on failure (`if: failure()`) is a crash's files kept for
+  success alone. An upload that runs only on failure (`if: failure()`) is a crash's files kept for
   a look, not a duplicate. The OSSF Scorecard starter workflow carries this pattern.
 - **Confidence** confirmed.
 - **Estimate** the artifact step's time, times runs a week; the retention it adds is not costed.

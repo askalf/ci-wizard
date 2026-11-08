@@ -9135,29 +9135,36 @@ function repeatedTests(doc) {
       }
     });
     for (const [command, steps] of inJob) {
+      const first = byRunner.get(runnerOf(command)).find((o) => o.command === command);
       if (!byCommand.has(command)) byCommand.set(command, []);
-      byCommand.get(command).push({ job: id, step: steps[0], runsOn: JSON.stringify(job["runs-on"] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
+      byCommand.get(command).push({ job: id, step: steps[0], index: first.index, runsOn: JSON.stringify(job["runs-on"] ?? null), matrix: Boolean(job.strategy && job.strategy.matrix) });
     }
+    const used = /* @__PURE__ */ new Set();
     for (const [runner, occurrences] of byRunner) {
       const byIndex = /* @__PURE__ */ new Map();
-      for (const o of occurrences) if (!byIndex.has(o.index)) byIndex.set(o.index, o.name);
+      for (const o of occurrences) if (!byIndex.has(o.index) && !used.has(o.index)) byIndex.set(o.index, o.name);
       const steps = [...byIndex.values()];
-      const commands = [...new Set(occurrences.map((o) => o.command))];
+      const commands = [...new Set(occurrences.filter((o) => byIndex.has(o.index)).map((o) => o.command))];
       if (steps.length > 1) {
         found.push({ scope: "job", jobs: [id], steps, command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
+        for (const i of byIndex.keys()) used.add(i);
         counted.add(`${id}\0${runner}`);
       }
     }
   }
+  const usedAcross = /* @__PURE__ */ new Set();
   for (const [command, where2] of byCommand) {
     const groups = /* @__PURE__ */ new Map();
     for (const w of where2) {
-      if (w.matrix || counted.has(`${w.job}\0${runnerOf(command)}`)) continue;
+      if (w.matrix || counted.has(`${w.job}\0${runnerOf(command)}`) || usedAcross.has(`${w.job}\0${w.index}`)) continue;
       if (!groups.has(w.runsOn)) groups.set(w.runsOn, []);
       groups.get(w.runsOn).push(w);
     }
     for (const ws of groups.values()) {
-      if (ws.length > 1) found.push({ scope: "workflow", jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), command, same: true });
+      if (ws.length > 1) {
+        found.push({ scope: "workflow", jobs: ws.map((w) => w.job), steps: ws.map((w) => w.step), command, same: true });
+        for (const w of ws) usedAcross.add(`${w.job}\0${w.index}`);
+      }
     }
   }
   return found;
@@ -9178,7 +9185,6 @@ function duplicateUploads(doc) {
       const guard = (s) => String(s.if ?? "").replace(/\s+/g, " ").trim();
       const mine = guard(st);
       const afterFailure = /always\(\)|cancelled\(\)/.test(mine);
-      const releaseUploads = unconditionalReleaseUploads;
       steps.forEach((other, j) => {
         if (j === i) return;
         if (guard(other) !== mine && (guard(other) !== "" || afterFailure)) return;
@@ -9186,50 +9192,11 @@ function duplicateUploads(doc) {
         const w = other.with && typeof other.with === "object" ? other.with : {};
         if (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) alsoTo.add("code scanning");
         if (/^softprops\/action-gh-release@/.test(uses) && same(w.files)) alsoTo.add("the release");
-        if (other.run !== void 0 && releaseUploads(String(other.run)).some((files) => files.includes(path))) alsoTo.add("the release");
       });
       if (alsoTo.size) found.push({ job: id, step: stepName(st, i), path, alsoTo: [...alsoTo] });
     });
   }
   return found;
-}
-var RELEASE_UPLOAD_VALUED = /* @__PURE__ */ new Set(["-R", "--repo"]);
-function releaseFiles(args) {
-  const files = [];
-  let tag = false;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === "--") {
-      files.push(...args.slice(i + 1));
-      break;
-    }
-    if (a.startsWith("-")) {
-      if (RELEASE_UPLOAD_VALUED.has(a)) i++;
-      continue;
-    }
-    if (!tag) {
-      tag = true;
-      continue;
-    }
-    files.push(a.split("#")[0].replace(/^\.\//, ""));
-  }
-  return files;
-}
-var CONTROL_FLOW = /^(if|case|while|until|for|select|elif|else)\b|^\{|^\(/;
-function unconditionalReleaseUploads(script) {
-  const out = [];
-  for (const raw of String(script || "").split("\n")) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    if (CONTROL_FLOW.test(line)) break;
-    if (/^(exec\s+)?gh\s+release\s+upload\b/.test(line) && !/&&|\|\||;/.test(line)) {
-      const [ws] = shellCommands(line);
-      if (ws && ws[0] === "gh" && ws[1] === "release" && ws[2] === "upload") out.push(releaseFiles(ws.slice(3)));
-      continue;
-    }
-    if (/\bgh\s+release\s+upload\b/.test(line)) continue;
-  }
-  return out;
 }
 function startsTests(doc) {
   return jobsOf2(doc).some(([, job]) => stepsOf2(job).some((st) => st.run !== void 0 && testCommands(st.run).length > 0));
