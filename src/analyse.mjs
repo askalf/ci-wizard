@@ -111,8 +111,9 @@ export function timeJobs(sampledRuns, commands) {
         const seconds = secs(step.started_at, step.completed_at);
         t.secondsByCategory[kind] = (t.secondsByCategory[kind] || 0) + seconds;
         if (kind === 'cache') t.sawCacheStep = true;
-        // Every step by the name GitHub shows, so a rule that names a step in the file can price it.
-        const label = String(step.name).replace(/\s+/g, ' ').trim();
+        // Every step by its job and the name GitHub shows, so a rule that names a step in the file
+        // can price that step of that job: two jobs' "Run npm test" steps are two timings.
+        const label = `${jobName}\u0000${String(step.name).replace(/\s+/g, ' ').trim()}`;
         if (!t.stepSeconds.has(label)) t.stepSeconds.set(label, []);
         t.stepSeconds.get(label).push(seconds);
         if (kind === 'work') {
@@ -189,11 +190,15 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
   const facts = workflowFacts(doc);
   const timing = timeJobs(sampledRuns, stepCommands(doc));
   const shares = timeShares(timing);
-  // A step the file names, priced from its sampled runs (median seconds), or null when no sampled
-  // job ran a step of that name (a renamed step, a job the sample never ran).
-  const priced = (name) => {
-    const xs = timing.stepSeconds.get(String(name).replace(/\s+/g, ' ').trim());
-    return xs && xs.length ? round(median(xs), 1) : null;
+  // A step the file names, in a job the file names, priced from the sampled runs of that job
+  // (median seconds): the file's jobs are matched to the API's job names as the timeout rule
+  // matches them (a matrix leg "test (20)" is a run of job test). Null when the sample ran no such
+  // step of that job (a renamed step, a job the sample never ran, a job name two jobs share).
+  const jobRuns = assignJobRuns(allJobTimeouts(doc).map((t) => ({ id: t.id, name: t.name, reusable: Boolean(t.reusable) })), [...timing.jobDurations.keys()]);
+  const priced = (jobId, name) => {
+    const label = String(name).replace(/\s+/g, ' ').trim();
+    const xs = (jobRuns.get(jobId) || []).flatMap((api) => timing.stepSeconds.get(`${api}\u0000${label}`) || []);
+    return xs.length ? round(median(xs), 1) : null;
   };
   const logBytes = sampledRuns.flat().map((j) => j.log_bytes).filter((b) => Number.isFinite(b) && b >= 0);
   const sampledCount = sampledRuns.length;
@@ -292,9 +297,9 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3),
     // Work done twice or shipped twice, as the file shows it, each step priced from the sample.
-    repeated_tests: repeatedTests(doc).map((r) => ({ ...r, seconds: r.steps.map(priced) })),
-    duplicate_uploads: duplicateUploads(doc).map((u) => ({ ...u, seconds: priced(u.step) })),
-    selfhosted_setups: selfHostedSetups(doc).map((s) => ({ ...s, seconds: priced(s.step) })),
+    repeated_tests: repeatedTests(doc).map((r) => ({ ...r, seconds: r.steps.map((s, i) => priced(r.jobs[r.scope === 'job' ? 0 : i], s)) })),
+    duplicate_uploads: duplicateUploads(doc).map((u) => ({ ...u, seconds: priced(u.job, u.step) })),
+    selfhosted_setups: selfHostedSetups(doc).map((s) => ({ ...s, seconds: priced(s.job, s.step) })),
     // A passing job's log size, median over the sampled jobs whose size was read (null when none was).
     log_bytes_p50: logBytes.length ? Math.round(median(logBytes)) : null,
     log_jobs_read: logBytes.length,
@@ -445,9 +450,9 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
     const mbWeek = round((w.log_bytes_p50 * jobs * w.runs_week) / 1048576, 1);
     F.push({
       saving: 0, unit: 'log', confidence: 'measured', what: 'test output floods the log', workflow: w.workflow,
-      evidence: `a passing job's log is ${kb} KB (median of ${w.log_jobs_read} sampled job${w.log_jobs_read === 1 ? '' : 's'}), about ${mbWeek} MB a week over ${jobs} job${jobs === 1 ? '' : 's'} a run and ${Math.round(w.runs_week)} runs${w.starts_tests ? ', most of it a test runner naming what passed' : ''}; the runner streams every line to GitHub as the job runs and uploads each step's log before it reports done${w.hosted_share < 0.5 ? ', from a self-hosted runner' : ''}` + thin,
-      fix: 'a quiet reporter that prints one character a test and the failures in full: node --test --test-reporter=dot, pytest -q, jest --silent, cargo test -q, go test without -v',
-      tradeoff: 'a passing run shows no list of what ran; the count and the failures remain',
+      evidence: `a passing job's log is ${kb} KB (median of ${w.log_jobs_read} sampled job${w.log_jobs_read === 1 ? '' : 's'}), about ${mbWeek} MB a week over ${jobs} job${jobs === 1 ? '' : 's'} a run and ${Math.round(w.runs_week)} runs${w.starts_tests ? '; the workflow starts a test runner, whose line for each passing test is the likely source (the bytes themselves were not read)' : ''}; the runner streams every line to GitHub as the job runs and uploads each step's log before it reports done${w.hosted_share < 0.5 ? ', from a self-hosted runner' : ''}` + thin,
+      fix: 'a quiet reporter: node --test --test-reporter=dot (one character a test; Node 22 then lists each failed test with its assertion and stack, and prints no count of passing tests), pytest -q, jest --silent, cargo test -q, go test without -v',
+      tradeoff: 'a passing run shows no list and no count of what ran; the failures stay in full, and a reporter that drops them is the wrong one',
       example: 'run: node --test --test-reporter=dot --test-reporter-destination=stdout test/*.test.mjs',
       parts: null, brief: `${kb} KB a job`, size: w.log_bytes_p50, thin: w.thin_sample ? w.sampled_runs : null, log_mb_week: mbWeek,
     });

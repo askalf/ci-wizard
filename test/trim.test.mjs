@@ -97,6 +97,9 @@ jobs:
   const suites = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run test:unit\n      - run: npm run test:e2e\n');
   // Two scripts of one runner in one job: the file cannot say they are the same tests, and the finding says so.
   assert.deepEqual(repeatedTests(suites).map((r) => [r.scope, r.same, r.command]), [['job', false, 'npm run test']]);
+  // Two runners in one job: the one started twice is found, the one started once is not.
+  const mixed = doc('on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - name: A\n        run: npm test\n      - name: B\n        run: npm test\n      - name: C\n        run: pytest tests\n');
+  assert.deepEqual(repeatedTests(mixed), [{ scope: 'job', jobs: ['t'], steps: ['A', 'B'], command: 'npm test', same: true }]);
 });
 
 test('duplicateUploads: a SARIF uploaded as an artifact and to code scanning; a release asset uploaded twice; a failure-only or globbed artifact is not a duplicate', () => {
@@ -131,6 +134,53 @@ jobs:
       - run: gh release upload "$TAG" dist.tar.gz --clobber
 `);
   assert.deepEqual(duplicateUploads(release), [{ job: 'r', step: 'Run actions/upload-artifact@v4', path: 'dist.tar.gz', alsoTo: ['the release'] }]);
+  // A release upload only on a tag leaves the artifact the only copy on every other run.
+  const tagOnly = doc(`on: push
+jobs:
+  r:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        with:
+          path: dist.tar.gz
+      - if: startsWith(github.ref, 'refs/tags/')
+        run: gh release upload "$TAG" dist.tar.gz
+      - uses: softprops/action-gh-release@v2
+        if: github.event_name == 'release'
+        with:
+          files: dist.tar.gz
+`);
+  assert.deepEqual(duplicateUploads(tagOnly), []);
+  // The same condition on both steps is one path through the run: a duplicate again.
+  const bothOnTag = doc(`on: push
+jobs:
+  r:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          path: dist.tar.gz
+      - if: startsWith(github.ref, 'refs/tags/')
+        run: gh release upload "$TAG" dist.tar.gz
+`);
+  assert.equal(duplicateUploads(bothOnTag).length, 1);
+  // An echo, a comment, or another command naming the path is not an upload.
+  const mentions = doc(`on: push
+jobs:
+  r:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        with:
+          path: dist.tar.gz
+      - run: |
+          echo "gh release upload v1 dist.tar.gz"
+          # gh release upload v1 dist.tar.gz
+          ls -l dist.tar.gz
+          gh release upload v1 other.tar.gz
+`);
+  assert.deepEqual(duplicateUploads(mentions), []);
   const quiet = doc(`on: push
 jobs:
   a:
@@ -198,7 +248,7 @@ jobs:
 const TWICE = [['Set up job', 1], ['Run actions/checkout@v4', 2], ['Unit tests', 30], ['Tests again', 20], ['Complete job', 0]];
 
 test('tests run twice: the shorter run is the saving, priced from the sample, confirmed when the command is the same', () => {
-  const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[job({ steps: TWICE })]], file: twiceFile }]);
+  const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: TWICE }), name: 'test' }]], file: twiceFile }]);
   const [f] = find(a, 'tests run twice');
   assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
   assert.equal(f.confidence, 'confirmed');
@@ -209,9 +259,39 @@ test('tests run twice: the shorter run is the saving, priced from the sample, co
 });
 
 test('tests run twice: a second step the sample never timed adds nothing to the estimate, and the evidence says so', () => {
-  const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[job({ steps: TWICE.filter(([n]) => n !== 'Tests again') })]], file: twiceFile }]);
+  const a = audit([{ name: 'CI', runs: runs(30), jobsPerRun: [[{ ...job({ steps: TWICE.filter(([n]) => n !== 'Tests again') }), name: 'test' }]], file: twiceFile }]);
   // Under the noise floor with no priced second step: the finding is left out rather than claiming a saving.
   assert.equal(find(a, 'tests run twice').length, 0);
+});
+
+test("tests run twice: each job's steps are priced from that job's own runs, not pooled by step name", () => {
+  const file = `on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Unit tests
+        run: npm test
+      - name: Again
+        run: npm test
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Unit tests
+        run: npm test
+      - name: Again
+        run: npm test
+`;
+  const stepsOf = (s) => [['Set up job', 1], ['Unit tests', s], ['Again', s], ['Complete job', 0]];
+  const a = audit([{ name: 'CI', runs: runs(60), jobsPerRun: [[{ ...job({ steps: stepsOf(10) }), name: 'a' }, { ...job({ steps: stepsOf(100) }), name: 'b' }]], file }]);
+  const [f] = find(a, 'tests run twice');
+  assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
+  // Each job's second run at its own job's seconds, and no cross-job entry on top: a run counts once.
+  assert.deepEqual(a.workflows[0].repeated_tests.map((r) => [r.scope, r.jobs, r.seconds]), [['job', ['a'], [10, 10]], ['job', ['b'], [100, 100]]]);
+  assert.equal(f.saving_min_week, 110); // (10 + 100) s x 60 runs / 60, not 2 x 55 and not a third entry across the jobs
+  // An API job no file job claims prices nothing.
+  const unnamed = audit([{ name: 'CI', runs: runs(60), jobsPerRun: [[job({ steps: stepsOf(10) })]], file }]);
+  assert.equal(find(unnamed, 'tests run twice').length, 0);
 });
 
 test('an artifact that duplicates another upload: the artifact step\'s time is the saving, confirmed', () => {
@@ -233,10 +313,10 @@ jobs:
           sarif_file: results.sarif
 `;
   const steps = [['Set up job', 1], ['Run actions/checkout@v4', 2], ['Run analysis', 30], ['Upload artifact', 4], ['Upload to code scanning', 3], ['Complete job', 0]];
-  const a = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[job({ steps })]], file }]);
+  const a = audit([{ name: 'Scorecard', runs: runs(30), jobsPerRun: [[{ ...job({ steps }), name: 'analysis' }]], file }]);
   const [f] = find(a, 'an artifact that duplicates another upload');
   // At one run a week the saving is under the noise floor; a duplicate upload stays all the same.
-  const rare = audit([{ name: 'Scorecard', runs: runs(1), jobsPerRun: [[job({ steps })]], file }]);
+  const rare = audit([{ name: 'Scorecard', runs: runs(1), jobsPerRun: [[{ ...job({ steps }), name: 'analysis' }]], file }]);
   assert.equal(find(rare, 'an artifact that duplicates another upload').length, 1);
   assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
   assert.equal(f.confidence, 'confirmed');
@@ -260,7 +340,7 @@ jobs:
 const SETUP = (secs) => [['Set up job', 1], ['Run actions/checkout@v4', 2], ['Run actions/setup-node@v4', secs], ['Run tests', 30], ['Complete job', 0]];
 
 test('toolchain setup on a self-hosted runner fires at a few seconds a job, saving the whole step; the same seconds on a hosted runner do not', () => {
-  const a = audit([{ name: 'CI', runs: runs(40), jobsPerRun: [[job({ steps: SETUP(3), selfHosted: true })]], file: setupFile('[self-hosted, box]') }]);
+  const a = audit([{ name: 'CI', runs: runs(40), jobsPerRun: [[{ ...job({ steps: SETUP(3), selfHosted: true }), name: 'test' }]], file: setupFile('[self-hosted, box]') }]);
   const [f] = find(a, 'toolchain setup');
   assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
   assert.equal(f.saving_min_week, 2); // 3 s x 40 runs / 60, the whole step
@@ -280,7 +360,8 @@ test('test output floods the log: a passing job\'s log over the threshold, in me
   assert.ok(f, JSON.stringify(a.findings.map((x) => x.what)));
   assert.equal(f.unit, 'log');
   assert.equal(f.confidence, 'measured');
-  assert.match(f.evidence, /log is 461 KB \(median of 3 sampled jobs\), about 31.5 MB a week over 1 job a run and 70 runs, most of it a test runner naming what passed/);
+  assert.match(f.evidence, /log is 461 KB \(median of 3 sampled jobs\), about 31.5 MB a week over 1 job a run and 70 runs; the workflow starts a test runner, whose line for each passing test is the likely source \(the bytes themselves were not read\)/);
+  assert.match(f.fix, /lists each failed test with its assertion and stack/);
   assert.match(f.evidence, /from a self-hosted runner/);
   assert.equal(savingText(f), 'about 31.5 MB of log a week (measured), not minutes');
   assert.match(f.fix, /--test-reporter=dot/);
@@ -290,7 +371,7 @@ test('test output floods the log: a passing job\'s log over the threshold, in me
   // The same output from a self-hosted runner is uploaded from the host, and counts.
   const box = audit([{ name: 'Build', runs: runs(70), jobsPerRun: [[{ ...job({ selfHosted: true }), log_bytes: 210 * 1024 }]], file: 'on: push\njobs:\n  build:\n    runs-on: [self-hosted, x]\n    steps:\n      - run: make\n' }]);
   assert.equal(find(box, 'test output floods the log').length, 1);
-  assert.doesNotMatch(find(box, 'test output floods the log')[0].evidence, /naming what passed/);
+  assert.doesNotMatch(find(box, 'test output floods the log')[0].evidence, /test runner/);
   const small = audit([{ name: 'ci', runs: runs(70), jobsPerRun: [[{ ...job(), log_bytes: 50 * 1024 }]] }]);
   assert.equal(find(small, 'test output floods the log').length, 0);
   const unread = audit([{ name: 'ci', runs: runs(70), jobsPerRun: [[job()]] }]);
@@ -306,6 +387,8 @@ test('client.sizeOf: the redirect costs one API call, the size comes from a HEAD
     const api = { 'x-ratelimit-remaining': '4000', 'x-ratelimit-reset': '1767607200', 'x-ratelimit-limit': '5000' };
     if (url.endsWith('/actions/jobs/1/logs')) return new Response(null, { status: 302, headers: { ...api, location: 'https://blobs.example/logs/1' } });
     if (url === 'https://blobs.example/logs/1') return new Response(null, { status: 200, headers: { 'content-length': '471642' } });
+    if (url.endsWith('/actions/jobs/3/logs')) return new Response(null, { status: 302, headers: { ...api, location: 'https://blobs.example/logs/3' } });
+    if (url === 'https://blobs.example/logs/3') return new Response(null, { status: 200 }); // no Content-Length: no size, not an empty log
     if (url.endsWith('/actions/jobs/2/logs')) return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404, headers: api });
     return new Response(JSON.stringify({}), { status: 200, headers: api });
   };
@@ -314,5 +397,6 @@ test('client.sizeOf: the redirect costs one API call, the size comes from a HEAD
   assert.equal(client.calls, 1);
   assert.deepEqual(seen.map((s) => [s.method, s.auth, s.redirect]), [['GET', true, 'manual'], ['HEAD', false, undefined]]);
   assert.equal(await client.sizeOf('repos/o/r/actions/jobs/2/logs'), null);
+  assert.equal(await client.sizeOf('repos/o/r/actions/jobs/3/logs'), null);
   assert.equal(await client.sizeOf('repos/o/r'), null);
 });

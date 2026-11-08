@@ -7527,7 +7527,9 @@ function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = "https://
     if (typeof location !== "string" || !/^https:\/\//.test(location)) return null;
     try {
       const head = await fetchImpl(location, { method: "HEAD", signal: AbortSignal.timeout(timeoutMs) });
-      const n = Number(head.headers.get("content-length"));
+      const raw = head.headers.get("content-length");
+      if (raw === null) return null;
+      const n = Number(raw);
       return head.ok && Number.isFinite(n) && n >= 0 ? n : null;
     } catch {
       return null;
@@ -9117,6 +9119,7 @@ function stepName(st, i = 0) {
 function repeatedTests(doc) {
   const found = [];
   const byCommand = /* @__PURE__ */ new Map();
+  const counted = /* @__PURE__ */ new Set();
   for (const [id, job] of jobsOf2(doc)) {
     const inJob = /* @__PURE__ */ new Map();
     const byRunner = /* @__PURE__ */ new Map();
@@ -9138,14 +9141,16 @@ function repeatedTests(doc) {
     for (const [runner, bySteps] of byRunner) {
       const steps = [...bySteps.keys()];
       const commands = [...new Set(bySteps.values())];
-      const sameCommand = [...inJob.values()].some((xs) => xs.length > 1);
-      if (steps.length > 1 || sameCommand) found.push({ scope: "job", jobs: [id], steps: steps.length > 1 ? steps : inJob.get(commands[0]), command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
+      if (steps.length > 1) {
+        found.push({ scope: "job", jobs: [id], steps, command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
+        counted.add(`${id}\0${runner}`);
+      }
     }
   }
   for (const [command, where2] of byCommand) {
     const groups = /* @__PURE__ */ new Map();
     for (const w of where2) {
-      if (w.matrix) continue;
+      if (w.matrix || counted.has(`${w.job}\0${runnerOf(command)}`)) continue;
       if (!groups.has(w.runsOn)) groups.set(w.runsOn, []);
       groups.get(w.runsOn).push(w);
     }
@@ -9155,7 +9160,6 @@ function repeatedTests(doc) {
   }
   return found;
 }
-var escapeRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function duplicateUploads(doc) {
   const found = [];
   for (const [id, job] of jobsOf2(doc)) {
@@ -9169,14 +9173,17 @@ function duplicateUploads(doc) {
       const path = paths[0].replace(/^\.\//, "");
       const alsoTo = /* @__PURE__ */ new Set();
       const same = (p) => String(p ?? "").split("\n").map((x) => x.trim().replace(/^\.\//, "")).includes(path);
-      const mentions = new RegExp(`(^|[\\s"'])(\\./)?${escapeRx(path)}([\\s"']|$)`, "m");
+      const guard = (s) => String(s.if ?? "").replace(/\s+/g, " ").trim();
+      const mine = guard(st);
+      const releaseUploads = (script) => shellCommands(script).filter((ws) => ws[0] === "gh" && ws[1] === "release" && ws[2] === "upload").map((ws) => ws.slice(3).map((x) => x.replace(/^\.\//, "")));
       steps.forEach((other, j) => {
         if (j === i) return;
+        if (guard(other) && guard(other) !== mine) return;
         const uses = String(other.uses || "");
         const w = other.with && typeof other.with === "object" ? other.with : {};
         if (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) alsoTo.add("code scanning");
         if (/^softprops\/action-gh-release@/.test(uses) && same(w.files)) alsoTo.add("the release");
-        if (other.run !== void 0 && /\bgh release upload\b/.test(String(other.run)) && mentions.test(String(other.run))) alsoTo.add("the release");
+        if (other.run !== void 0 && releaseUploads(String(other.run)).some((files) => files.includes(path))) alsoTo.add("the release");
       });
       if (alsoTo.size) found.push({ job: id, step: stepName(st, i), path, alsoTo: [...alsoTo] });
     });
@@ -9607,7 +9614,7 @@ function timeJobs(sampledRuns, commands) {
         const seconds = secs(step.started_at, step.completed_at);
         t.secondsByCategory[kind] = (t.secondsByCategory[kind] || 0) + seconds;
         if (kind === "cache") t.sawCacheStep = true;
-        const label = String(step.name).replace(/\s+/g, " ").trim();
+        const label = `${jobName}\0${String(step.name).replace(/\s+/g, " ").trim()}`;
         if (!t.stepSeconds.has(label)) t.stepSeconds.set(label, []);
         t.stepSeconds.get(label).push(seconds);
         if (kind === "work") {
@@ -9670,9 +9677,11 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
   const facts = workflowFacts(doc);
   const timing = timeJobs(sampledRuns, stepCommands(doc));
   const shares = timeShares(timing);
-  const priced = (name) => {
-    const xs = timing.stepSeconds.get(String(name).replace(/\s+/g, " ").trim());
-    return xs && xs.length ? round(median(xs), 1) : null;
+  const jobRuns = assignJobRuns(allJobTimeouts(doc).map((t) => ({ id: t.id, name: t.name, reusable: Boolean(t.reusable) })), [...timing.jobDurations.keys()]);
+  const priced = (jobId, name) => {
+    const label = String(name).replace(/\s+/g, " ").trim();
+    const xs = (jobRuns.get(jobId) || []).flatMap((api) => timing.stepSeconds.get(`${api}\0${label}`) || []);
+    return xs.length ? round(median(xs), 1) : null;
   };
   const logBytes = sampledRuns.flat().map((j) => j.log_bytes).filter((b) => Number.isFinite(b) && b >= 0);
   const sampledCount = sampledRuns.length;
@@ -9767,9 +9776,9 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     checkout: facts.checkout,
     fixed_share: round((shares.overhead || 0) + (shares.head || 0) + (shares.tail || 0) + (shares.checkout || 0), 3),
     // Work done twice or shipped twice, as the file shows it, each step priced from the sample.
-    repeated_tests: repeatedTests(doc).map((r) => ({ ...r, seconds: r.steps.map(priced) })),
-    duplicate_uploads: duplicateUploads(doc).map((u) => ({ ...u, seconds: priced(u.step) })),
-    selfhosted_setups: selfHostedSetups(doc).map((s) => ({ ...s, seconds: priced(s.step) })),
+    repeated_tests: repeatedTests(doc).map((r) => ({ ...r, seconds: r.steps.map((s, i) => priced(r.jobs[r.scope === "job" ? 0 : i], s)) })),
+    duplicate_uploads: duplicateUploads(doc).map((u) => ({ ...u, seconds: priced(u.job, u.step) })),
+    selfhosted_setups: selfHostedSetups(doc).map((s) => ({ ...s, seconds: priced(s.job, s.step) })),
     // A passing job's log size, median over the sampled jobs whose size was read (null when none was).
     log_bytes_p50: logBytes.length ? Math.round(median(logBytes)) : null,
     log_jobs_read: logBytes.length,
@@ -9932,9 +9941,9 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
       confidence: "measured",
       what: "test output floods the log",
       workflow: w.workflow,
-      evidence: `a passing job's log is ${kb} KB (median of ${w.log_jobs_read} sampled job${w.log_jobs_read === 1 ? "" : "s"}), about ${mbWeek} MB a week over ${jobs} job${jobs === 1 ? "" : "s"} a run and ${Math.round(w.runs_week)} runs${w.starts_tests ? ", most of it a test runner naming what passed" : ""}; the runner streams every line to GitHub as the job runs and uploads each step's log before it reports done${w.hosted_share < 0.5 ? ", from a self-hosted runner" : ""}` + thin,
-      fix: "a quiet reporter that prints one character a test and the failures in full: node --test --test-reporter=dot, pytest -q, jest --silent, cargo test -q, go test without -v",
-      tradeoff: "a passing run shows no list of what ran; the count and the failures remain",
+      evidence: `a passing job's log is ${kb} KB (median of ${w.log_jobs_read} sampled job${w.log_jobs_read === 1 ? "" : "s"}), about ${mbWeek} MB a week over ${jobs} job${jobs === 1 ? "" : "s"} a run and ${Math.round(w.runs_week)} runs${w.starts_tests ? "; the workflow starts a test runner, whose line for each passing test is the likely source (the bytes themselves were not read)" : ""}; the runner streams every line to GitHub as the job runs and uploads each step's log before it reports done${w.hosted_share < 0.5 ? ", from a self-hosted runner" : ""}` + thin,
+      fix: "a quiet reporter: node --test --test-reporter=dot (one character a test; Node 22 then lists each failed test with its assertion and stack, and prints no count of passing tests), pytest -q, jest --silent, cargo test -q, go test without -v",
+      tradeoff: "a passing run shows no list and no count of what ran; the failures stay in full, and a reporter that drops them is the wrong one",
       example: "run: node --test --test-reporter=dot --test-reporter-destination=stdout test/*.test.mjs",
       parts: null,
       brief: `${kb} KB a job`,

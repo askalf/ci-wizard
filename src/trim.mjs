@@ -84,6 +84,9 @@ export function stepName(st, i = 0) {
 export function repeatedTests(doc) {
   const found = [];
   const byCommand = new Map();
+  // Jobs already counted for a runner within themselves: the cross-job scope leaves them out, so a
+  // run is never counted twice (the estimate then understates a suite run in two jobs twice each).
+  const counted = new Set();
   for (const [id, job] of jobsOf(doc)) {
     const inJob = new Map();
     const byRunner = new Map();
@@ -105,15 +108,17 @@ export function repeatedTests(doc) {
     for (const [runner, bySteps] of byRunner) {
       const steps = [...bySteps.keys()];
       const commands = [...new Set(bySteps.values())];
-      // The same command in two steps counts once; two commands under one runner count once more.
-      const sameCommand = [...inJob.values()].some((xs) => xs.length > 1);
-      if (steps.length > 1 || sameCommand) found.push({ scope: 'job', jobs: [id], steps: steps.length > 1 ? steps : inJob.get(commands[0]), command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
+      // Two steps of this runner: the same command in both, or two commands (other paths, another directory).
+      if (steps.length > 1) {
+        found.push({ scope: 'job', jobs: [id], steps, command: commands.length === 1 ? commands[0] : runner, same: commands.length === 1 });
+        counted.add(`${id}\u0000${runner}`);
+      }
     }
   }
   for (const [command, where] of byCommand) {
     const groups = new Map();
     for (const w of where) {
-      if (w.matrix) continue;
+      if (w.matrix || counted.has(`${w.job}\u0000${runnerOf(command)}`)) continue;
       if (!groups.has(w.runsOn)) groups.set(w.runsOn, []);
       groups.get(w.runsOn).push(w);
     }
@@ -123,8 +128,6 @@ export function repeatedTests(doc) {
   }
   return found;
 }
-
-const escapeRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * An actions/upload-artifact step whose one literal path another step of the same job already
@@ -144,14 +147,22 @@ export function duplicateUploads(doc) {
       const path = paths[0].replace(/^\.\//, '');
       const alsoTo = new Set();
       const same = (p) => String(p ?? '').split('\n').map((x) => x.trim().replace(/^\.\//, '')).includes(path);
-      const mentions = new RegExp(`(^|[\\s"'])(\\./)?${escapeRx(path)}([\\s"']|$)`, 'm');
+      // The other destination must run whenever the artifact step runs: a release upload behind
+      // `if: startsWith(github.ref, 'refs/tags/')` leaves the artifact the only copy on every other
+      // run, so a destination with a condition the artifact step does not share does not count.
+      const guard = (s) => String(s.if ?? '').replace(/\s+/g, ' ').trim();
+      const mine = guard(st);
+      // `gh release upload <tag> <files...>` as a parsed command, so an echo, a comment or another
+      // command that names the path is not an upload.
+      const releaseUploads = (script) => shellCommands(script).filter((ws) => ws[0] === 'gh' && ws[1] === 'release' && ws[2] === 'upload').map((ws) => ws.slice(3).map((x) => x.replace(/^\.\//, '')));
       steps.forEach((other, j) => {
         if (j === i) return;
+        if (guard(other) && guard(other) !== mine) return;
         const uses = String(other.uses || '');
         const w = other.with && typeof other.with === 'object' ? other.with : {};
         if (/^github\/codeql-action\/upload-sarif@/.test(uses) && same(w.sarif_file)) alsoTo.add('code scanning');
         if (/^softprops\/action-gh-release@/.test(uses) && same(w.files)) alsoTo.add('the release');
-        if (other.run !== undefined && /\bgh release upload\b/.test(String(other.run)) && mentions.test(String(other.run))) alsoTo.add('the release');
+        if (other.run !== undefined && releaseUploads(String(other.run)).some((files) => files.includes(path))) alsoTo.add('the release');
       });
       if (alsoTo.size) found.push({ job: id, step: stepName(st, i), path, alsoTo: [...alsoTo] });
     });
@@ -159,7 +170,7 @@ export function duplicateUploads(doc) {
   return found;
 }
 
-/** Whether any step of the workflow starts a test runner: a large log is then a test listing, not a tool's own output. */
+/** Whether any step of the workflow starts a test runner. The bytes of a log are not read, so this is the file's word on what a large log is likely to be. */
 export function startsTests(doc) {
   return jobsOf(doc).some(([, job]) => stepsOf(job).some((st) => st.run !== undefined && testCommands(st.run).length > 0));
 }

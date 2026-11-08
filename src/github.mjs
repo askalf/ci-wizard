@@ -241,7 +241,9 @@ export function createClient({ token, fetchImpl = globalThis.fetch, baseUrl = 'h
     if (typeof location !== 'string' || !/^https:\/\//.test(location)) return null;
     try {
       const head = await fetchImpl(location, { method: 'HEAD', signal: AbortSignal.timeout(timeoutMs) });
-      const n = Number(head.headers.get('content-length'));
+      const raw = head.headers.get('content-length');
+      if (raw === null) return null; // no length is no size, not an empty log
+      const n = Number(raw);
       return head.ok && Number.isFinite(n) && n >= 0 ? n : null;
     } catch {
       return null;
