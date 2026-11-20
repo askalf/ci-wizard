@@ -9515,11 +9515,13 @@ function calledScoped(uses, base, { files, reusable }, path = /* @__PURE__ */ ne
   const text = calledText(key, { files, remote: reusable });
   if (typeof text !== "string") return false;
   const doc = parseWorkflow(text);
-  const narrows = (p) => p !== void 0 && !isWriteAll(p);
-  if (doc.permissions !== void 0) return narrows(doc.permissions);
   const jobs = jobsOf2(doc);
   const chain = /* @__PURE__ */ new Set([...path, key]);
-  return jobs.length > 0 && jobs.every(([, j]) => j.permissions !== void 0 ? narrows(j.permissions) : typeof j.uses === "string" && calledScoped(j.uses, baseOf(key), { files, reusable }, chain, depth + 1));
+  return jobs.length > 0 && jobs.every(([, j]) => {
+    const effective = j.permissions !== void 0 ? j.permissions : doc.permissions;
+    if (effective !== void 0 && !isWriteAll(effective)) return true;
+    return typeof j.uses === "string" && calledScoped(j.uses, baseOf(key), { files, reusable }, chain, depth + 1);
+  });
 }
 function scanFindings(files, { repo = null, reusable = /* @__PURE__ */ new Map() } = {}) {
   const scans = [...files].map(([path, text]) => {

@@ -303,13 +303,14 @@ const list = (xs, n = 5) => `${xs.slice(0, n).join('; ')}${xs.length > n ? ` and
 const where = (paths) => (paths.length === 1 ? paths[0] : `${paths.length} workflow files: ${list(paths, 4)}`);
 
 /**
- * Whether the reusable workflow a call names scopes the token itself: a permissions block at its
- * top, or on every job of it (a job that is itself a call counts when the file it calls does). The
- * caller's token is the most the called jobs get, and the called file can only narrow it; write-all
- * narrows nothing, so a file or job that declares it does not count. False when the file is not
- * held (a remote file collect did not read, or one it could not). `path` holds the
- * files on this chain of calls, so a call back into one of them stops; each job follows its own
- * chain, so two jobs calling the same file are each judged. Pure.
+ * Whether the reusable workflow a call names scopes the token itself, job by job: every job of it
+ * has narrowed permissions, its own block or else the file's top-level one (a job's block overrides
+ * the file's default either way), or is itself a call to a file that does. The caller's token is the
+ * most the called jobs get, and the called file can only narrow it; write-all narrows nothing. So a
+ * read-all file with one write-all job is not scoped, and a write-all file whose every job narrows
+ * is. False when the file is not held (a remote file collect did not read, or one it could not).
+ * `path` holds the files on this chain of calls, so a call back into one of them stops; each job
+ * follows its own chain, so two jobs calling the same file are each judged. Pure.
  */
 function calledScoped(uses, base, { files, reusable }, path = new Set(), depth = 0) {
   const key = callKey(uses, base);
@@ -317,12 +318,14 @@ function calledScoped(uses, base, { files, reusable }, path = new Set(), depth =
   const text = calledText(key, { files, remote: reusable });
   if (typeof text !== 'string') return false;
   const doc = parseWorkflow(text);
-  const narrows = (p) => p !== undefined && !isWriteAll(p);
-  if (doc.permissions !== undefined) return narrows(doc.permissions);
   const jobs = jobsOf(doc);
   const chain = new Set([...path, key]);
-  return jobs.length > 0 && jobs.every(([, j]) => (j.permissions !== undefined ? narrows(j.permissions)
-    : typeof j.uses === 'string' && calledScoped(j.uses, baseOf(key), { files, reusable }, chain, depth + 1)));
+  return jobs.length > 0 && jobs.every(([, j]) => {
+    const effective = j.permissions !== undefined ? j.permissions : doc.permissions;
+    if (effective !== undefined && !isWriteAll(effective)) return true;
+    // No narrowed grant on the job: a call still counts when the file it calls narrows its own jobs.
+    return typeof j.uses === 'string' && calledScoped(j.uses, baseOf(key), { files, reusable }, chain, depth + 1);
+  });
 }
 
 /** The scan findings for a repository's workflow files (path -> text), one per kind. */

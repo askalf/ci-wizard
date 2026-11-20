@@ -529,8 +529,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   February 2023). A job that calls a reusable workflow with no permissions of its own hands the
   called workflow the caller's token, and the called workflow can narrow it: the called file is
   read (this repository's own, or another repository's at the called ref, up to four calls deep),
-  and the call is left alone when that file sets permissions other than `write-all` at its top or
-  on every job (`write-all` narrows nothing). A call whose file could not be read counts as unscoped. The evidence names the jobs.
+  and the call is left alone when every job of that file has narrowed permissions: its own block,
+  or else the file's top-level one (a job's block overrides the default either way), and never
+  `write-all`, which narrows nothing. A job of it that is itself a call counts when the file it
+  calls does. A call whose file could not be read counts as unscoped. The evidence names the jobs.
 - **Fix** a read-only default at the top of each workflow (`contents: read`) and each job granted
   only what it uses. *Trade-off:* a job that needs more must name it, so a missing grant shows as a
   403 the first time it runs.

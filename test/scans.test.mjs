@@ -231,6 +231,12 @@ test('scanFindings: a call to a reusable workflow that scopes the token itself i
   for (const called of [writeAllTop, writeAllJobs, mixed]) {
     assert.match(token(remote, new Map([[remoteKey, called]])).evidence, /\(job test\)/);
   }
+  // A job's own block overrides the file's default, either way: a read-all default with a write-all
+  // job is not scoped; a write-all default with every job narrowed is.
+  const readAllTopWriteJob = 'on: workflow_call\npermissions: read-all\njobs:\n  unit:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make test\n  publish:\n    runs-on: ubuntu-latest\n    permissions: write-all\n    steps:\n      - run: make publish\n';
+  assert.match(token(remote, new Map([[remoteKey, readAllTopWriteJob]])).evidence, /\(job test\)/);
+  const writeAllTopNarrowJobs = 'on: workflow_call\npermissions: write-all\njobs:\n  unit:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n    steps:\n      - run: make test\n';
+  assert.equal(token(remote, new Map([[remoteKey, writeAllTopNarrowJobs]])), undefined);
   // Two jobs of the called file that both call the same scoped file: each is judged on its own chain.
   const twice = new Map([[remoteKey, 'on: workflow_call\njobs:\n  a:\n    uses: ./.github/workflows/inner.yml\n  b:\n    uses: ./.github/workflows/inner.yml\n'], [`owner/shared/.github/workflows/inner.yml@${SHA}`, scoped]]);
   assert.equal(token(remote, twice), undefined);

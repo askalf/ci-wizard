@@ -39,7 +39,8 @@ Fixed:
   public repository audited on 2026-11-20 the figure fell from about 466 job-minutes a week to the
   103 its one duplicated job really costs.
 - **job token wider than the job** reads the reusable workflow a job calls: a call whose file
-  sets permissions other than `write-all` at its top or on every job is no longer called unscoped, and the evidence names
+  gives every job narrowed permissions (the job's own block, or else the file's default, never
+  `write-all`) is no longer called unscoped, and the evidence names
   the jobs rather than the whole file. Before, a local call to a file that sets `contents: read`
   was reported as handing out the default token.
 - **no code scanning** reads the reusable workflows a job calls, in this repository or another
