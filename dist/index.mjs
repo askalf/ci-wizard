@@ -8965,6 +8965,7 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   const top = wanted.length ? ranked.filter(([label, rs]) => wanted.some((n) => matches(label, rs, n))) : ranked.slice(0, workflows);
   const onlyMissing = wanted.length ? only.filter((n) => String(n).trim() && !ranked.some(([label, rs]) => matches(label, rs, n))) : [];
   const samples = /* @__PURE__ */ new Map();
+  const sampleRunIds = /* @__PURE__ */ new Map();
   const outcomeSamples = /* @__PURE__ */ new Map();
   const rawJobs = /* @__PURE__ */ new Map();
   const jobsRaw = (r) => {
@@ -9004,10 +9005,12 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
       const got = outcomeJobs[i].filter(Boolean);
       if (got.length) byOutcome[outcome] = got;
     });
-    return [wf, okJobs.filter(Boolean), byOutcome];
+    const okRuns = ok.map((r, i) => [r.id, okJobs[i]]).filter(([, jobs]) => jobs);
+    return [wf, okRuns.map(([, jobs]) => jobs), byOutcome, okRuns.map(([id]) => id)];
   }));
-  for (const [wf, jobsPerRun, byOutcome] of timed) {
+  for (const [wf, jobsPerRun, byOutcome, runIds] of timed) {
     samples.set(wf, jobsPerRun);
+    sampleRunIds.set(wf, runIds);
     outcomeSamples.set(wf, byOutcome);
   }
   if (logs && typeof client.sizeOf === "function") {
@@ -9104,7 +9107,7 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   const lockfiles = LOCKFILES.filter((f) => names.has(f)).sort();
   onProgress("reading merge gates");
   const gates = await collectGates(client, repo, { runs, byWf, defaultBranch, rootNames: Array.isArray(rootListing) ? names : null, jobsRaw, settle, settled });
-  return { runs, byWf, samples, outcomeSamples, scanFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, gates, only: wanted.length ? only : [], onlyMissing };
+  return { runs, byWf, samples, sampleRunIds, outcomeSamples, scanFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, gates, only: wanted.length ? only : [], onlyMissing };
 }
 var PR_EVENTS = /* @__PURE__ */ new Set(["pull_request", "pull_request_target", "merge_group"]);
 var RENOVATE_FILES = ["renovate.json", "renovate.json5", ".renovaterc", ".renovaterc.json", ".renovaterc.json5"];
@@ -10003,7 +10006,7 @@ function outdatedRuns(workflowRuns) {
 function longestSteps(workStepSeconds) {
   return [...workStepSeconds.entries()].map(([step, seconds]) => ({ step, median_s: median(seconds), seen: seconds.length })).sort((a, b) => b.median_s - a.median_s || (a.step < b.step ? 1 : a.step > b.step ? -1 : 0) || b.seen - a.seen).slice(0, 3).map((s) => ({ ...s, median_s: Math.round(s.median_s) }));
 }
-function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor, repo = "owner/repo", outcomeRuns = {}) {
+function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor, repo = "owner/repo", outcomeRuns = {}, sampleRunIds = []) {
   const doc = parseWorkflow(fileText);
   const facts = workflowFacts(doc);
   const timing = timeJobs(sampledRuns, stepCommands(doc));
@@ -10037,7 +10040,7 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
   }
   const secondsByKind = { push: [], pull_request: [] };
   sampledRuns.forEach((jobs, i) => {
-    const r = runById.get(((jobs || []).find((j) => j.run_id != null) || {}).run_id);
+    const r = runById.get(sampleRunIds[i] ?? ((jobs || []).find((j) => j.run_id != null) || {}).run_id);
     if (!r) return;
     const kind = r.event === "push" ? "push" : PR_EVENTS2.has(r.event) ? "pull_request" : null;
     const events2 = eventsOfCommit.get(r.head_sha);
@@ -10696,7 +10699,7 @@ function analyseParsed(repo, data) {
     if (!jobsPerRun.length) continue;
     const rs = data.byWf.get(wf);
     const path = String(rs[0].path || "").split("@")[0];
-    workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || "", week, repo, data.outcomeSamples && data.outcomeSamples.get(wf) || {}));
+    workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || "", week, repo, data.outcomeSamples && data.outcomeSamples.get(wf) || {}, data.sampleRunIds && data.sampleRunIds.get(wf) || []));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
   const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" ? true : data.visibility ? "private" : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || /* @__PURE__ */ new Map()), ...scanFindings(data.scanFiles || /* @__PURE__ */ new Map(), { repo }), ...gateFindings(data.gates, { scanFiles: data.scanFiles || /* @__PURE__ */ new Map(), scanned: data.scanned, visibility: data.visibility })];

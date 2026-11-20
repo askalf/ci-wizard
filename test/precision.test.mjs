@@ -68,6 +68,26 @@ test('collect samples a few failed, cancelled and timed-out runs as well as succ
   assert.equal(asked.filter((u) => u.includes('/jobs?')).length, 3 + 2 + 2 + 1);
 });
 
+test('collect keeps the id of each sampled run beside its jobs, so a run whose jobs were all skipped is still its run', async () => {
+  const list = runs(2).map((r) => ({ ...r, path: '.github/workflows/ci.yml' }));
+  const [ran, skipped] = list;
+  const skippedJob = { ...timed(30), conclusion: 'skipped' };
+  const fetchImpl = fakeFetch({
+    'repos/o/r/actions/runs?': { workflow_runs: list },
+    [`repos/o/r/actions/runs/${ran.id}/jobs`]: { jobs: [timed(30)], total_count: 1 },
+    [`repos/o/r/actions/runs/${skipped.id}/jobs`]: { jobs: [skippedJob], total_count: 1 },
+    'repos/o/r/contents': [],
+  });
+  const d = await collect(createClient({ fetchImpl }), 'o/r', { perWorkflow: 3, now: new Date(Date.parse(t(7 * 86400))) });
+  const samples = d.samples.get('CI');
+  const ids = d.sampleRunIds.get('CI');
+  assert.equal(samples.length, ids.length);
+  const at = ids.indexOf(skipped.id);
+  assert.ok(at >= 0, JSON.stringify(ids));
+  assert.deepEqual(samples[at], []);
+  assert.equal(samples[ids.indexOf(ran.id)].length, 1);
+});
+
 test('the per-run savings multiply by the mean run', () => {
   const file = "on:\n  push:\n    branches: [main, 'dev/**']\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps: [{run: make}]\n";
   const rs = [...runs(10, { event: 'push', branch: 'dev/a' }), ...runs(10, { event: 'pull_request', branch: 'dev/a' })].map((r, i) => ({ ...r, head_sha: `c${i % 10}` }));

@@ -190,7 +190,7 @@ export function longestSteps(workStepSeconds) {
 }
 
 /** Measures one workflow from its runs, its sampled jobs and its file. */
-export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor, repo = 'owner/repo', outcomeRuns = {}) {
+export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor, repo = 'owner/repo', outcomeRuns = {}, sampleRunIds = []) {
   const doc = parseWorkflow(fileText);
   const facts = workflowFacts(doc);
   const timing = timeJobs(sampledRuns, stepCommands(doc));
@@ -243,7 +243,9 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
   }
   const secondsByKind = { push: [], pull_request: [] };
   sampledRuns.forEach((jobs, i) => {
-    const r = runById.get(((jobs || []).find((j) => j.run_id != null) || {}).run_id);
+    // The sample's own record of its run first: a run whose jobs were all skipped has no job to
+    // name it, and its zero job time is exactly what dropping it would save.
+    const r = runById.get(sampleRunIds[i] ?? ((jobs || []).find((j) => j.run_id != null) || {}).run_id);
     if (!r) return;
     const kind = r.event === 'push' ? 'push' : PR_EVENTS.has(r.event) ? 'pull_request' : null;
     const events = eventsOfCommit.get(r.head_sha);
@@ -948,7 +950,7 @@ function analyseParsed(repo, data) {
     if (!jobsPerRun.length) continue;
     const rs = data.byWf.get(wf);
     const path = String(rs[0].path || '').split('@')[0];
-    workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || '', week, repo, (data.outcomeSamples && data.outcomeSamples.get(wf)) || {}));
+    workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || '', week, repo, (data.outcomeSamples && data.outcomeSamples.get(wf)) || {}, (data.sampleRunIds && data.sampleRunIds.get(wf)) || []));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
   const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === 'public' ? true : data.visibility ? 'private' : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || new Map()), ...scanFindings(data.scanFiles || new Map(), { repo }), ...gateFindings(data.gates, { scanFiles: data.scanFiles || new Map(), scanned: data.scanned, visibility: data.visibility })];

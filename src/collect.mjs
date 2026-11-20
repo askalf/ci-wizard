@@ -149,6 +149,9 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
   const top = wanted.length ? ranked.filter(([label, rs]) => wanted.some((n) => matches(label, rs, n))) : ranked.slice(0, workflows);
   const onlyMissing = wanted.length ? only.filter((n) => String(n).trim() && !ranked.some(([label, rs]) => matches(label, rs, n))) : [];
   const samples = new Map();
+  // The run id of each sampled run, beside its jobs in the same order: a run whose jobs were all
+  // skipped is an empty list, and only this says which run (and so which event) it was.
+  const sampleRunIds = new Map();
   // Runs that did not succeed cost job time too, and not the same as a success: a failure often
   // stops early, a timeout runs to its limit. A few of each are timed apart, so the weekly cost
   // counts every outcome at its own measured cost (OUTCOMES in analyse.mjs).
@@ -197,10 +200,12 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
       const got = outcomeJobs[i].filter(Boolean);
       if (got.length) byOutcome[outcome] = got;
     });
-    return [wf, okJobs.filter(Boolean), byOutcome];
+    const okRuns = ok.map((r, i) => [r.id, okJobs[i]]).filter(([, jobs]) => jobs);
+    return [wf, okRuns.map(([, jobs]) => jobs), byOutcome, okRuns.map(([id]) => id)];
   }));
-  for (const [wf, jobsPerRun, byOutcome] of timed) {
+  for (const [wf, jobsPerRun, byOutcome, runIds] of timed) {
     samples.set(wf, jobsPerRun);
+    sampleRunIds.set(wf, runIds);
     outcomeSamples.set(wf, byOutcome);
   }
   // How much log a passing job writes: the size of each job's log in the newest sampled successful
@@ -324,7 +329,7 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
   const lockfiles = LOCKFILES.filter((f) => names.has(f)).sort();
   onProgress('reading merge gates');
   const gates = await collectGates(client, repo, { runs, byWf, defaultBranch, rootNames: Array.isArray(rootListing) ? names : null, jobsRaw, settle, settled });
-  return { runs, byWf, samples, outcomeSamples, scanFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, gates, only: wanted.length ? only : [], onlyMissing };
+  return { runs, byWf, samples, sampleRunIds, outcomeSamples, scanFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, gates, only: wanted.length ? only : [], onlyMissing };
 }
 
 const PR_EVENTS = new Set(['pull_request', 'pull_request_target', 'merge_group']);

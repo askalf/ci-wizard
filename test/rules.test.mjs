@@ -149,6 +149,19 @@ test('the same commit runs twice: the cheaper of the two runs is the saving, so 
   assert.equal(h.saving_min_week, 10);
 });
 
+test('the same commit runs twice: a sampled pull request run whose jobs were all skipped costs nothing, and prices the duplicate at zero', () => {
+  const rs = dupRuns(10);
+  const push = rs.find((r) => r.event === 'push');
+  const pr = rs.find((r) => r.event === 'pull_request');
+  // collect drops skipped jobs, so the pull request run's job list is empty; its run id comes with the sample.
+  const jobsPerRun = [[job({ steps: [['Run tests', 600]], wait: 0, head: 0, tail: 0 })], []];
+  const a = audit([{ name: 'CI', runs: rs, jobsPerRun, runIds: [push.id, pr.id], file: dupFile("main, 'feat/*'", 'x') }]);
+  const [f] = find(a, 'the same commit runs twice');
+  assert.ok(!f || f.saving_min_week === 0, JSON.stringify(f));
+  const all = analyse('owner/repo', data({ workflows: [{ name: 'CI', runs: rs, jobsPerRun, runIds: [push.id, pr.id], file: dupFile("main, 'feat/*'", 'x') }] }));
+  assert.deepEqual(all.workflows[0].run_minutes_by_kind.pull_request, { minutes: 0, sampled: 1 });
+});
+
 test('the same commit runs twice: without a timed run of both kinds the mean prices it, and the evidence says so', () => {
   const rs = dupRuns(5);
   const push = rs.find((r) => r.event === 'push');
