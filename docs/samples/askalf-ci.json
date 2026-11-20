@@ -1,99 +1,426 @@
 {
  "repo": "askalf/ci",
- "covered_days": 3.75,
- "window_truncated": true,
+ "covered_days": 7,
+ "window_truncated": false,
  "visibility": "public",
  "scanned": {
-  "read": 17,
-  "of": 17,
+  "read": 19,
+  "of": 19,
   "unreadable": []
+ },
+ "gates": {
+  "branch": "main",
+  "required": [
+   {
+    "context": "test",
+    "integrationId": null
+   },
+   {
+    "context": "verify pinned reviewer surface",
+    "integrationId": null
+   },
+   {
+    "context": "analyze (javascript-typescript)",
+    "integrationId": null
+   },
+   {
+    "context": "analyze (actions)",
+    "integrationId": null
+   },
+   {
+    "context": "public-text / check",
+    "integrationId": 15368
+   }
+  ],
+  "required_complete": true,
+  "pr_checks": [
+   "Fuzz (Jazzer.js)",
+   "analyze (actions)",
+   "analyze (javascript-typescript)",
+   "check",
+   "checkout",
+   "does the PR change the action",
+   "public-text / check",
+   "retry path, 0 failing attempt(s)",
+   "retry path, 1 failing attempt(s)",
+   "retry path, 2 failing attempt(s)",
+   "retry path, 3 failing attempt(s)",
+   "review / redline",
+   "run-account",
+   "sidecar",
+   "status",
+   "test",
+   "under act, no attempt runs",
+   "verify pinned reviewer surface"
+  ],
+  "pr_runs_read": 9,
+  "pr_jobs_complete": true
  },
  "only": [],
  "only_missing": [],
- "runs_total": 500,
+ "runs_total": 244,
  "lockfiles": [],
  "workflows": [
   {
+   "workflow": "Redline pin bump",
+   "path": ".github/workflows/redline-pin-bump.yml",
+   "runs_week": 191,
+   "sampled_runs": 5,
+   "thin_sample": false,
+   "skipped_week": 0,
+   "jobs_per_run": 1,
+   "job_minutes_per_run": 0.52,
+   "job_minutes_per_run_mean": 0.64,
+   "run_minutes_by_kind": {
+    "push": null,
+    "pull_request": null
+   },
+   "job_minutes_week": 122.9,
+   "billed_minutes_per_run": 0,
+   "billed_minutes_week": 0,
+   "cost_by_outcome": {
+    "success": {
+     "runs_week": 191,
+     "sampled": 5,
+     "minutes_per_run": 0.64,
+     "estimated": false
+    }
+   },
+   "job_durations": {
+    "bump": {
+     "runs": 5,
+     "max_s": 54,
+     "median_s": 31,
+     "hosted_runs": 0
+    }
+   },
+   "jobs_sampled": 5,
+   "waited_on": false,
+   "wait_p50": 2,
+   "wait_p90": 2,
+   "tail_p50": 4,
+   "hosted_share": 0,
+   "steps_per_job": 14,
+   "share": {
+    "work": 0.591,
+    "tail": 0.109,
+    "overhead": 0.088,
+    "checkout": 0.062,
+    "toolchain": 0.057,
+    "cache": 0.052,
+    "head": 0.041
+   },
+   "cats_secs_per_run": {
+    "overhead": 3.4,
+    "work": 22.8,
+    "checkout": 2.4,
+    "toolchain": 2.2,
+    "cache": 2
+   },
+   "has_cache": true,
+   "reruns_week": 0,
+   "failed_week": 0,
+   "dup_commits_week": 0,
+   "wall_p50": 41,
+   "wall_p90": 57,
+   "superseded_week": 0,
+   "superseded_week_by_event": {
+    "pull_request": 0,
+    "pull_request_target": 0
+   },
+   "has_concurrency": true,
+   "cancels": false,
+   "top_steps": [
+    {
+     "step": "Open or update a bump PR in each caller",
+     "median_s": 10,
+     "seen": 5
+    },
+    {
+     "step": "Pick the commit to pin",
+     "median_s": 4,
+     "seen": 5
+    },
+    {
+     "step": "Post Mint the pin bump App's token",
+     "median_s": 1,
+     "seen": 5
+    }
+   ],
+   "longest_job_s": 54,
+   "median_job_s": 31,
+   "reruns_raw": 0,
+   "rerun_minutes": null,
+   "npm_install_no_ci": false,
+   "prefer_offline": false,
+   "caches_node_modules": false,
+   "setup_cache": false,
+   "dep_share": 0,
+   "triggers": [
+    "schedule",
+    "workflow_dispatch"
+   ],
+   "push_branches": [],
+   "concurrency_group": "redline-pin-bump",
+   "events": {
+    "workflow_dispatch": 168,
+    "schedule": 23
+   },
+   "installers": [],
+   "fork_reachable": [],
+   "job_timeouts": [
+    {
+     "id": "bump",
+     "name": "bump",
+     "minutes": 45,
+     "isDefault": false,
+     "judged": true
+    }
+   ],
+   "checkout": {
+    "inspected": false,
+    "fullHistory": false,
+    "depth": null,
+    "depthUnknown": false,
+    "lfs": false,
+    "submodules": false,
+    "tags": false
+   },
+   "fixed_share": 0.301,
+   "selfhosted_setups": [],
+   "repeated_tests": [],
+   "duplicate_uploads": [],
+   "log_bytes_p50": 72398,
+   "log_jobs_read": 1,
+   "starts_tests": false
+  },
+  {
+   "workflow": "Fuzz",
+   "path": ".github/workflows/fuzz.yml",
+   "runs_week": 4,
+   "sampled_runs": 4,
+   "thin_sample": false,
+   "skipped_week": 0,
+   "jobs_per_run": 1,
+   "job_minutes_per_run": 4.73,
+   "job_minutes_per_run_mean": 8.63,
+   "run_minutes_by_kind": {
+    "push": null,
+    "pull_request": null
+   },
+   "job_minutes_week": 34.5,
+   "billed_minutes_per_run": 0,
+   "billed_minutes_week": 0,
+   "cost_by_outcome": {
+    "success": {
+     "runs_week": 4,
+     "sampled": 4,
+     "minutes_per_run": 8.63,
+     "estimated": false
+    }
+   },
+   "job_durations": {
+    "Fuzz (Jazzer.js)": {
+     "runs": 4,
+     "max_s": 1231,
+     "median_s": 284,
+     "hosted_runs": 0
+    }
+   },
+   "jobs_sampled": 4,
+   "waited_on": true,
+   "wait_p50": 10,
+   "wait_p90": 11,
+   "tail_p50": 5,
+   "hosted_share": 0,
+   "steps_per_job": 13,
+   "share": {
+    "work": 0.957,
+    "deps": 0.009,
+    "tail": 0.009,
+    "overhead": 0.008,
+    "cache": 0.005,
+    "checkout": 0.004,
+    "toolchain": 0.004,
+    "head": 0.004,
+    "artifacts": 0
+   },
+   "cats_secs_per_run": {
+    "overhead": 4,
+    "checkout": 2.3,
+    "work": 495.3,
+    "toolchain": 2,
+    "deps": 4.8,
+    "cache": 2.8,
+    "artifacts": 0
+   },
+   "has_cache": true,
+   "reruns_week": 0,
+   "failed_week": 0,
+   "dup_commits_week": 0,
+   "wall_p50": 300,
+   "wall_p90": 1235,
+   "superseded_week": 0,
+   "superseded_week_by_event": {
+    "pull_request": 0,
+    "pull_request_target": 0
+   },
+   "has_concurrency": true,
+   "cancels": true,
+   "top_steps": [
+    {
+     "step": "Fuzz every target",
+     "median_s": 259,
+     "seen": 4
+    },
+    {
+     "step": "Scope",
+     "median_s": 0,
+     "seen": 4
+    }
+   ],
+   "longest_job_s": 1231,
+   "median_job_s": 284,
+   "reruns_raw": 0,
+   "rerun_minutes": null,
+   "npm_install_no_ci": false,
+   "prefer_offline": false,
+   "caches_node_modules": false,
+   "setup_cache": false,
+   "dep_share": 0.009,
+   "triggers": [
+    "pull_request",
+    "schedule",
+    "workflow_dispatch"
+   ],
+   "push_branches": [],
+   "concurrency_group": "fuzz-${{ github.ref }}",
+   "events": {
+    "schedule": 1,
+    "pull_request": 3
+   },
+   "installers": [
+    "npm"
+   ],
+   "fork_reachable": [],
+   "job_timeouts": [
+    {
+     "id": "fuzz",
+     "name": "Fuzz (Jazzer.js)",
+     "minutes": null,
+     "isDefault": false,
+     "judged": false
+    }
+   ],
+   "checkout": {
+    "inspected": false,
+    "fullHistory": false,
+    "depth": null,
+    "depthUnknown": false,
+    "lfs": false,
+    "submodules": false,
+    "tags": false
+   },
+   "fixed_share": 0.025,
+   "selfhosted_setups": [],
+   "repeated_tests": [],
+   "duplicate_uploads": [],
+   "log_bytes_p50": 376608,
+   "log_jobs_read": 1,
+   "starts_tests": false
+  },
+  {
    "workflow": "CodeQL",
    "path": ".github/workflows/codeql.yml",
-   "runs_week": 111.9,
+   "runs_week": 7,
    "sampled_runs": 5,
    "thin_sample": false,
    "skipped_week": 0,
    "jobs_per_run": 2,
-   "job_minutes_per_run": 2.07,
-   "job_minutes_per_run_mean": 2.1,
-   "job_minutes_week": 234.7,
+   "job_minutes_per_run": 2,
+   "job_minutes_per_run_mean": 1.98,
+   "run_minutes_by_kind": {
+    "push": null,
+    "pull_request": null
+   },
+   "job_minutes_week": 13.9,
    "billed_minutes_per_run": 3,
-   "billed_minutes_week": 358.2,
+   "billed_minutes_week": 21,
    "cost_by_outcome": {
     "success": {
-     "runs_week": 111.9,
+     "runs_week": 7,
      "sampled": 5,
-     "minutes_per_run": 2.1,
+     "minutes_per_run": 1.98,
      "estimated": false
     }
    },
    "job_durations": {
     "analyze (javascript-typescript)": {
      "runs": 5,
-     "max_s": 82,
-     "median_s": 75
+     "max_s": 85,
+     "median_s": 80,
+     "hosted_runs": 5
     },
     "analyze (actions)": {
      "runs": 5,
-     "max_s": 63,
-     "median_s": 49
+     "max_s": 47,
+     "median_s": 43,
+     "hosted_runs": 5
     }
    },
    "jobs_sampled": 10,
    "waited_on": true,
    "wait_p50": 2,
-   "wait_p90": 3,
-   "tail_p50": 3,
+   "wait_p90": 2,
+   "tail_p50": 2,
    "hosted_share": 1,
    "steps_per_job": 8,
    "share": {
-    "work": 0.892,
-    "tail": 0.045,
-    "checkout": 0.025,
-    "overhead": 0.024,
-    "head": 0.014
+    "work": 0.911,
+    "tail": 0.034,
+    "checkout": 0.022,
+    "overhead": 0.02,
+    "head": 0.013
    },
    "cats_secs_per_run": {
-    "overhead": 3,
-    "checkout": 3.2,
-    "work": 112.2
+    "overhead": 2.4,
+    "checkout": 2.6,
+    "work": 108.2
    },
    "has_cache": false,
    "reruns_week": 0,
    "failed_week": 0,
    "dup_commits_week": 0,
    "wall_p50": 78,
-   "wall_p90": 92,
+   "wall_p90": 88,
    "superseded_week": 0,
+   "superseded_week_by_event": {
+    "pull_request": 0,
+    "pull_request_target": 0
+   },
    "has_concurrency": true,
    "cancels": true,
    "top_steps": [
     {
-     "step": "Run github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2",
+     "step": "Run github/codeql-action/analyze@33d7b85da1a04171e211befe2c7",
      "median_s": 38,
      "seen": 10
     },
     {
-     "step": "Run github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52",
-     "median_s": 17,
+     "step": "Run github/codeql-action/init@33d7b85da1a04171e211befe2c7393",
+     "median_s": 13,
      "seen": 10
     },
     {
-     "step": "Post Run github/codeql-action/init@9b3254085494b55a0f7c4c2b3",
+     "step": "Post Run github/codeql-action/init@33d7b85da1a04171e211befe2",
      "median_s": 1,
      "seen": 10
     }
    ],
-   "longest_job_s": 82,
-   "median_job_s": 68,
+   "longest_job_s": 85,
+   "median_job_s": 56,
    "reruns_raw": 0,
+   "rerun_minutes": null,
    "npm_install_no_ci": false,
    "prefer_offline": false,
    "caches_node_modules": false,
@@ -109,9 +436,9 @@
    ],
    "concurrency_group": "${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
    "events": {
-    "push": 21,
-    "pull_request": 38,
-    "schedule": 1
+    "schedule": 1,
+    "push": 3,
+    "pull_request": 3
    },
    "installers": [],
    "fork_reachable": [],
@@ -133,328 +460,85 @@
     "submodules": false,
     "tags": false
    },
-   "fixed_share": 0.108
-  },
-  {
-   "workflow": "Redline pin bump",
-   "path": ".github/workflows/redline-pin-bump.yml",
-   "runs_week": 201.5,
-   "sampled_runs": 5,
-   "thin_sample": false,
-   "skipped_week": 0,
-   "jobs_per_run": 1,
-   "job_minutes_per_run": 0.5,
-   "job_minutes_per_run_mean": 0.51,
-   "job_minutes_week": 124.7,
-   "billed_minutes_per_run": 0,
-   "billed_minutes_week": 0,
-   "cost_by_outcome": {
-    "success": {
-     "runs_week": 197.8,
-     "sampled": 5,
-     "minutes_per_run": 0.51,
-     "estimated": false
-    },
-    "failure": {
-     "runs_week": 1.9,
-     "sampled": 1,
-     "minutes_per_run": 2.45,
-     "estimated": false
-    },
-    "cancelled": {
-     "runs_week": 1.9,
-     "sampled": 1,
-     "minutes_per_run": 10.35,
-     "estimated": false
-    }
-   },
-   "job_durations": {
-    "bump": {
-     "runs": 5,
-     "max_s": 34,
-     "median_s": 30
-    }
-   },
-   "jobs_sampled": 5,
-   "waited_on": false,
-   "wait_p50": 2,
-   "wait_p90": 2,
-   "tail_p50": 4,
-   "hosted_share": 0,
-   "steps_per_job": 14,
-   "share": {
-    "work": 0.503,
-    "tail": 0.131,
-    "overhead": 0.111,
-    "checkout": 0.085,
-    "head": 0.065,
-    "cache": 0.059,
-    "toolchain": 0.046
-   },
-   "cats_secs_per_run": {
-    "overhead": 3.4,
-    "work": 15.4,
-    "checkout": 2.6,
-    "toolchain": 1.4,
-    "cache": 1.8
-   },
-   "has_cache": true,
-   "reruns_week": 1.9,
-   "failed_week": 1.9,
-   "dup_commits_week": 0,
-   "wall_p50": 100,
-   "wall_p90": 225,
-   "superseded_week": 0,
-   "has_concurrency": true,
-   "cancels": false,
-   "top_steps": [
-    {
-     "step": "Open or update a bump PR in each caller",
-     "median_s": 10,
-     "seen": 5
-    },
-    {
-     "step": "Pick the commit to pin",
-     "median_s": 4,
-     "seen": 5
-    },
-    {
-     "step": "Post Mint the pin bump App's token",
-     "median_s": 1,
-     "seen": 5
-    }
-   ],
-   "longest_job_s": 34,
-   "median_job_s": 30,
-   "reruns_raw": 1,
-   "npm_install_no_ci": false,
-   "prefer_offline": false,
-   "caches_node_modules": false,
-   "setup_cache": false,
-   "dep_share": 0,
-   "triggers": [
-    "schedule",
-    "workflow_dispatch"
-   ],
-   "push_branches": [],
-   "concurrency_group": "redline-pin-bump",
-   "events": {
-    "workflow_dispatch": 95,
-    "schedule": 13
-   },
-   "installers": [],
-   "fork_reachable": [],
-   "job_timeouts": [
-    {
-     "id": "bump",
-     "name": "bump",
-     "minutes": 30,
-     "isDefault": false,
-     "judged": true
-    }
-   ],
-   "checkout": {
-    "inspected": false,
-    "fullHistory": false,
-    "depth": null,
-    "depthUnknown": false,
-    "lfs": false,
-    "submodules": false,
-    "tags": false
-   },
-   "fixed_share": 0.392
-  },
-  {
-   "workflow": "Redline self-test",
-   "path": ".github/workflows/redline-self-test.yml",
-   "runs_week": 70.9,
-   "sampled_runs": 5,
-   "thin_sample": false,
-   "skipped_week": 0,
-   "jobs_per_run": 2,
-   "job_minutes_per_run": 1.55,
-   "job_minutes_per_run_mean": 1.62,
-   "job_minutes_week": 114.8,
-   "billed_minutes_per_run": 1,
-   "billed_minutes_week": 70.9,
-   "cost_by_outcome": {
-    "success": {
-     "runs_week": 70.9,
-     "sampled": 5,
-     "minutes_per_run": 1.62,
-     "estimated": false
-    }
-   },
-   "job_durations": {
-    "run-account": {
-     "runs": 5,
-     "max_s": 45,
-     "median_s": 29
-    },
-    "test": {
-     "runs": 5,
-     "max_s": 77,
-     "median_s": 64
-    }
-   },
-   "jobs_sampled": 10,
-   "waited_on": true,
-   "wait_p50": 7,
-   "wait_p90": 10,
-   "tail_p50": 4,
-   "hosted_share": 0.5,
-   "steps_per_job": 13,
-   "share": {
-    "work": 0.784,
-    "tail": 0.06,
-    "toolchain": 0.053,
-    "overhead": 0.043,
-    "checkout": 0.031,
-    "head": 0.029
-   },
-   "cats_secs_per_run": {
-    "overhead": 4.2,
-    "checkout": 3,
-    "toolchain": 5.2,
-    "work": 76.2
-   },
-   "has_cache": false,
-   "reruns_week": 0,
-   "failed_week": 0,
-   "dup_commits_week": 0,
-   "wall_p50": 80,
-   "wall_p90": 169,
-   "superseded_week": 0,
-   "has_concurrency": false,
-   "cancels": false,
-   "top_steps": [
-    {
-     "step": "Run node scripts/redline/fix.test.mjs",
-     "median_s": 26,
-     "seen": 10
-    },
-    {
-     "step": "Run node scripts/redline/pin-bump.test.mjs",
-     "median_s": 9,
-     "seen": 5
-    },
-    {
-     "step": "Run node scripts/redline/review.test.mjs",
-     "median_s": 6,
-     "seen": 5
-    }
-   ],
-   "longest_job_s": 77,
-   "median_job_s": 54,
-   "reruns_raw": 0,
-   "npm_install_no_ci": false,
-   "prefer_offline": false,
-   "caches_node_modules": false,
-   "setup_cache": false,
-   "dep_share": 0,
-   "triggers": [
-    "pull_request"
-   ],
-   "push_branches": [],
-   "concurrency_group": "",
-   "events": {
-    "pull_request": 38
-   },
-   "installers": [],
-   "fork_reachable": [],
-   "job_timeouts": [
-    {
-     "id": "test",
-     "name": "test",
-     "minutes": 5,
-     "isDefault": false,
-     "judged": true
-    },
-    {
-     "id": "run-account",
-     "name": "run-account",
-     "minutes": 5,
-     "isDefault": false,
-     "judged": true
-    }
-   ],
-   "checkout": {
-    "inspected": false,
-    "fullHistory": false,
-    "depth": null,
-    "depthUnknown": false,
-    "lfs": false,
-    "submodules": false,
-    "tags": false
-   },
-   "fixed_share": 0.163
+   "fixed_share": 0.089,
+   "selfhosted_setups": [],
+   "repeated_tests": [],
+   "duplicate_uploads": [],
+   "log_bytes_p50": 281729,
+   "log_jobs_read": 2,
+   "starts_tests": false
   },
   {
    "workflow": "Redline",
    "path": ".github/workflows/redline.yml",
-   "runs_week": 115.7,
+   "runs_week": 5,
    "sampled_runs": 5,
    "thin_sample": false,
-   "skipped_week": 3.7,
+   "skipped_week": 0,
    "jobs_per_run": 1,
-   "job_minutes_per_run": 0.82,
-   "job_minutes_per_run_mean": 0.84,
-   "job_minutes_week": 103.2,
+   "job_minutes_per_run": 0.85,
+   "job_minutes_per_run_mean": 0.87,
+   "run_minutes_by_kind": {
+    "push": null,
+    "pull_request": null
+   },
+   "job_minutes_week": 4.3,
    "billed_minutes_per_run": 0,
    "billed_minutes_week": 0,
    "cost_by_outcome": {
     "success": {
-     "runs_week": 85.8,
+     "runs_week": 5,
      "sampled": 5,
-     "minutes_per_run": 0.84,
-     "estimated": false
-    },
-    "failure": {
-     "runs_week": 26.1,
-     "sampled": 2,
-     "minutes_per_run": 1.19,
+     "minutes_per_run": 0.87,
      "estimated": false
     }
    },
    "job_durations": {
     "review / redline": {
      "runs": 5,
-     "max_s": 64,
-     "median_s": 49
+     "max_s": 67,
+     "median_s": 51,
+     "hosted_runs": 0
     }
    },
    "jobs_sampled": 5,
    "waited_on": true,
-   "wait_p50": 2,
-   "wait_p90": 5,
-   "tail_p50": 5,
+   "wait_p50": 8,
+   "wait_p90": 11,
+   "tail_p50": 4,
    "hosted_share": 0,
-   "steps_per_job": 14,
+   "steps_per_job": 20,
    "share": {
-    "work": 0.774,
-    "tail": 0.103,
-    "overhead": 0.06,
-    "checkout": 0.032,
-    "head": 0.032
+    "work": 0.758,
+    "overhead": 0.081,
+    "tail": 0.081,
+    "head": 0.042,
+    "checkout": 0.038,
+    "toolchain": 0
    },
    "cats_secs_per_run": {
-    "overhead": 3,
-    "work": 39,
-    "checkout": 1.6
+    "overhead": 4.2,
+    "work": 39.4,
+    "toolchain": 0,
+    "checkout": 2
    },
    "has_cache": false,
-   "reruns_week": 1.9,
-   "failed_week": 26.1,
+   "reruns_week": 0,
+   "failed_week": 0,
    "dup_commits_week": 0,
-   "wall_p50": 37,
-   "wall_p90": 69,
+   "wall_p50": 56,
+   "wall_p90": 80,
    "superseded_week": 0,
+   "superseded_week_by_event": {
+    "pull_request": 0,
+    "pull_request_target": 0
+   },
    "has_concurrency": true,
    "cancels": true,
    "top_steps": [
     {
      "step": "Review",
-     "median_s": 33,
+     "median_s": 29,
      "seen": 5
     },
     {
@@ -468,9 +552,10 @@
      "seen": 5
     }
    ],
-   "longest_job_s": 64,
-   "median_job_s": 49,
-   "reruns_raw": 1,
+   "longest_job_s": 67,
+   "median_job_s": 51,
+   "reruns_raw": 0,
+   "rerun_minutes": null,
    "npm_install_no_ci": false,
    "prefer_offline": false,
    "caches_node_modules": false,
@@ -483,8 +568,8 @@
    "push_branches": [],
    "concurrency_group": "redline-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr }}${{ inputs.head && format('-{0}-{1}', inputs.head, inputs.reread) || '' }}",
    "events": {
-    "workflow_dispatch": 23,
-    "pull_request": 39
+    "workflow_dispatch": 2,
+    "pull_request": 3
    },
    "installers": [],
    "fork_reachable": [],
@@ -507,161 +592,134 @@
     "submodules": false,
     "tags": false
    },
-   "fixed_share": 0.226
+   "fixed_share": 0.242,
+   "selfhosted_setups": [],
+   "repeated_tests": [],
+   "duplicate_uploads": [],
+   "log_bytes_p50": 56690,
+   "log_jobs_read": 1,
+   "starts_tests": false
   },
   {
-   "workflow": "checkout-with-retry self-test",
-   "path": ".github/workflows/checkout-with-retry-self-test.yml",
-   "runs_week": 70.9,
-   "sampled_runs": 5,
+   "workflow": "Scorecard",
+   "path": ".github/workflows/scorecard.yml",
+   "runs_week": 4,
+   "sampled_runs": 4,
    "thin_sample": false,
    "skipped_week": 0,
-   "jobs_per_run": 2.2,
-   "job_minutes_per_run": 0.13,
-   "job_minutes_per_run_mean": 0.65,
-   "job_minutes_week": 46.1,
-   "billed_minutes_per_run": 0,
-   "billed_minutes_week": 0,
+   "jobs_per_run": 1,
+   "job_minutes_per_run": 0.63,
+   "job_minutes_per_run_mean": 0.63,
+   "run_minutes_by_kind": {
+    "push": null,
+    "pull_request": null
+   },
+   "job_minutes_week": 2.5,
+   "billed_minutes_per_run": 1,
+   "billed_minutes_week": 4,
    "cost_by_outcome": {
     "success": {
-     "runs_week": 70.9,
-     "sampled": 5,
-     "minutes_per_run": 0.65,
+     "runs_week": 4,
+     "sampled": 4,
+     "minutes_per_run": 0.63,
      "estimated": false
     }
    },
    "job_durations": {
-    "does the PR change the action": {
-     "runs": 5,
-     "max_s": 8,
-     "median_s": 8
-    },
-    "under act, no attempt runs": {
-     "runs": 1,
-     "max_s": 17,
-     "median_s": 17
-    },
-    "checkout": {
-     "runs": 1,
-     "max_s": 20,
-     "median_s": 20
-    },
-    "retry path, 2 failing attempt(s)": {
-     "runs": 1,
-     "max_s": 43,
-     "median_s": 43
-    },
-    "retry path, 3 failing attempt(s)": {
-     "runs": 1,
-     "max_s": 43,
-     "median_s": 43
-    },
-    "retry path, 0 failing attempt(s)": {
-     "runs": 1,
-     "max_s": 12,
-     "median_s": 12
-    },
-    "retry path, 1 failing attempt(s)": {
-     "runs": 1,
-     "max_s": 22,
-     "median_s": 22
+    "Scorecard analysis": {
+     "runs": 4,
+     "max_s": 40,
+     "median_s": 37.5,
+     "hosted_runs": 4
     }
    },
-   "jobs_sampled": 11,
+   "jobs_sampled": 4,
    "waited_on": true,
-   "wait_p50": 9,
-   "wait_p90": 12,
-   "tail_p50": 5,
-   "hosted_share": 0,
-   "steps_per_job": 8,
+   "wait_p50": 2,
+   "wait_p90": 2,
+   "tail_p50": 2,
+   "hosted_share": 1,
+   "steps_per_job": 9,
    "share": {
-    "work": 0.394,
-    "tail": 0.254,
-    "head": 0.145,
-    "checkout": 0.109,
-    "overhead": 0.098
+    "work": 0.809,
+    "tail": 0.053,
+    "checkout": 0.046,
+    "overhead": 0.033,
+    "artifacts": 0.033,
+    "head": 0.026
    },
    "cats_secs_per_run": {
-    "overhead": 3.8,
-    "work": 15.2,
-    "checkout": 4.2
+    "overhead": 1.3,
+    "work": 30.8,
+    "checkout": 1.8,
+    "artifacts": 1.3
    },
    "has_cache": false,
    "reruns_week": 0,
    "failed_week": 0,
    "dup_commits_week": 0,
-   "wall_p50": 19,
-   "wall_p90": 71,
+   "wall_p50": 41,
+   "wall_p90": 44,
    "superseded_week": 0,
+   "superseded_week_by_event": {
+    "pull_request": 0,
+    "pull_request_target": 0
+   },
    "has_concurrency": false,
    "cancels": false,
    "top_steps": [
     {
-     "step": "Run the copy",
-     "median_s": 19,
+     "step": "Run analysis",
+     "median_s": 21,
      "seen": 4
     },
     {
-     "step": "Run a workflow that checks out through the action, under act",
-     "median_s": 3,
-     "seen": 1
+     "step": "Upload to code scanning",
+     "median_s": 8,
+     "seen": 4
     },
     {
-     "step": "List the PR's files",
-     "median_s": 1,
-     "seen": 5
+     "step": "Pull ghcr.io/ossf/scorecard-action:v2.5.0",
+     "median_s": 2,
+     "seen": 4
     }
    ],
-   "longest_job_s": 43,
-   "median_job_s": 12,
+   "longest_job_s": 40,
+   "median_job_s": 37.5,
    "reruns_raw": 0,
+   "rerun_minutes": null,
    "npm_install_no_ci": false,
    "prefer_offline": false,
    "caches_node_modules": false,
    "setup_cache": false,
    "dep_share": 0,
    "triggers": [
-    "pull_request"
+    "branch_protection_rule",
+    "push",
+    "schedule",
+    "workflow_dispatch"
    ],
-   "push_branches": [],
+   "push_branches": [
+    "main"
+   ],
    "concurrency_group": "",
    "events": {
-    "pull_request": 38
+    "schedule": 1,
+    "push": 3
    },
    "installers": [],
    "fork_reachable": [],
    "job_timeouts": [
     {
-     "id": "touched",
-     "name": "does the PR change the action",
-     "minutes": 2,
-     "isDefault": false,
-     "judged": true
-    },
-    {
-     "id": "checkout",
-     "name": "checkout",
-     "minutes": 5,
-     "isDefault": false,
-     "judged": true
-    },
-    {
-     "id": "retry",
-     "name": "retry path, ${{ matrix.failures }} failing attempt(s)",
-     "minutes": 5,
-     "isDefault": false,
-     "judged": true
-    },
-    {
-     "id": "act",
-     "name": "under act, no attempt runs",
-     "minutes": 5,
+     "id": "analysis",
+     "name": "Scorecard analysis",
+     "minutes": 10,
      "isDefault": false,
      "judged": true
     }
    ],
    "checkout": {
-    "inspected": false,
+    "inspected": true,
     "fullHistory": false,
     "depth": null,
     "depthUnknown": false,
@@ -669,64 +727,96 @@
     "submodules": false,
     "tags": false
    },
-   "fixed_share": 0.606
+   "fixed_share": 0.158,
+   "selfhosted_setups": [],
+   "repeated_tests": [],
+   "duplicate_uploads": [
+    {
+     "job": "analysis",
+     "step": "Upload artifact",
+     "path": "results.sarif",
+     "name": "SARIF file",
+     "alsoTo": [
+      "code scanning"
+     ],
+     "after": true,
+     "seconds": 1,
+     "artifact": {
+      "bytes": 16275,
+      "entries": 1,
+      "one_file": true
+     }
+    }
+   ],
+   "log_bytes_p50": 136346,
+   "log_jobs_read": 1,
+   "starts_tests": false
   },
   {
    "workflow": "truecopy gate",
    "path": ".github/workflows/truecopy-gate.yml",
-   "runs_week": 110.1,
+   "runs_week": 6,
    "sampled_runs": 5,
    "thin_sample": false,
    "skipped_week": 0,
    "jobs_per_run": 1,
-   "job_minutes_per_run": 0.37,
-   "job_minutes_per_run_mean": 0.41,
-   "job_minutes_week": 45.5,
+   "job_minutes_per_run": 0.35,
+   "job_minutes_per_run_mean": 0.39,
+   "run_minutes_by_kind": {
+    "push": null,
+    "pull_request": null
+   },
+   "job_minutes_week": 2.4,
    "billed_minutes_per_run": 0,
    "billed_minutes_week": 0,
    "cost_by_outcome": {
     "success": {
-     "runs_week": 110.1,
+     "runs_week": 6,
      "sampled": 5,
-     "minutes_per_run": 0.41,
+     "minutes_per_run": 0.39,
      "estimated": false
     }
    },
    "job_durations": {
     "verify pinned reviewer surface": {
      "runs": 5,
-     "max_s": 38,
-     "median_s": 22
+     "max_s": 34,
+     "median_s": 21,
+     "hosted_runs": 0
     }
    },
    "jobs_sampled": 5,
    "waited_on": true,
    "wait_p50": 2,
-   "wait_p90": 10,
+   "wait_p90": 11,
    "tail_p50": 4,
    "hosted_share": 0,
    "steps_per_job": 9,
    "share": {
-    "work": 0.468,
-    "tail": 0.177,
-    "overhead": 0.137,
-    "head": 0.081,
-    "toolchain": 0.073,
-    "checkout": 0.065
+    "work": 0.368,
+    "tail": 0.179,
+    "overhead": 0.171,
+    "checkout": 0.111,
+    "head": 0.094,
+    "toolchain": 0.077
    },
    "cats_secs_per_run": {
-    "overhead": 3.4,
-    "checkout": 1.6,
+    "overhead": 4,
+    "checkout": 2.6,
     "toolchain": 1.8,
-    "work": 11.6
+    "work": 8.6
    },
    "has_cache": false,
    "reruns_week": 0,
    "failed_week": 0,
    "dup_commits_week": 0,
-   "wall_p50": 30,
-   "wall_p90": 59,
+   "wall_p50": 35,
+   "wall_p90": 42,
    "superseded_week": 0,
+   "superseded_week_by_event": {
+    "pull_request": 0,
+    "pull_request_target": 0
+   },
    "has_concurrency": false,
    "cancels": false,
    "top_steps": [
@@ -737,13 +827,14 @@
     },
     {
      "step": "tools.json and fix-tools.json match TOOLS",
-     "median_s": 0,
+     "median_s": 1,
      "seen": 5
     }
    ],
-   "longest_job_s": 38,
-   "median_job_s": 22,
+   "longest_job_s": 34,
+   "median_job_s": 21,
    "reruns_raw": 0,
+   "rerun_minutes": null,
    "npm_install_no_ci": false,
    "prefer_offline": false,
    "caches_node_modules": false,
@@ -758,8 +849,8 @@
    ],
    "concurrency_group": "",
    "events": {
-    "push": 21,
-    "pull_request": 38
+    "push": 3,
+    "pull_request": 3
    },
    "installers": [],
    "fork_reachable": [],
@@ -781,67 +872,83 @@
     "submodules": false,
     "tags": false
    },
-   "fixed_share": 0.46
+   "fixed_share": 0.556,
+   "selfhosted_setups": [],
+   "repeated_tests": [],
+   "duplicate_uploads": [],
+   "log_bytes_p50": 33263,
+   "log_jobs_read": 1,
+   "starts_tests": false
   },
   {
    "workflow": "Redline post",
    "path": ".github/workflows/redline-post.yml",
-   "runs_week": 117.5,
+   "runs_week": 5,
    "sampled_runs": 5,
    "thin_sample": false,
-   "skipped_week": 3.7,
+   "skipped_week": 0,
    "jobs_per_run": 2,
-   "job_minutes_per_run": 0.25,
-   "job_minutes_per_run_mean": 0.24,
-   "job_minutes_week": 27.7,
+   "job_minutes_per_run": 0.23,
+   "job_minutes_per_run_mean": 0.31,
+   "run_minutes_by_kind": {
+    "push": null,
+    "pull_request": null
+   },
+   "job_minutes_week": 1.6,
    "billed_minutes_per_run": 2,
-   "billed_minutes_week": 227.6,
+   "billed_minutes_week": 10,
    "cost_by_outcome": {
     "success": {
-     "runs_week": 113.8,
+     "runs_week": 5,
      "sampled": 5,
-     "minutes_per_run": 0.24,
+     "minutes_per_run": 0.31,
      "estimated": false
     }
    },
    "job_durations": {
     "post / key": {
      "runs": 5,
-     "max_s": 4,
-     "median_s": 3
+     "max_s": 3,
+     "median_s": 3,
+     "hosted_runs": 5
     },
     "post / post": {
      "runs": 5,
-     "max_s": 13,
-     "median_s": 11
+     "max_s": 34,
+     "median_s": 11,
+     "hosted_runs": 5
     }
    },
    "jobs_sampled": 10,
    "waited_on": false,
    "wait_p50": 2,
    "wait_p90": 3,
-   "tail_p50": 3,
+   "tail_p50": 2,
    "hosted_share": 1,
-   "steps_per_job": 6,
+   "steps_per_job": 6.5,
    "share": {
-    "work": 0.425,
-    "tail": 0.329,
-    "head": 0.11,
-    "overhead": 0.082,
-    "toolchain": 0.055
+    "work": 0.447,
+    "tail": 0.191,
+    "toolchain": 0.16,
+    "head": 0.106,
+    "overhead": 0.096
    },
    "cats_secs_per_run": {
-    "overhead": 1.2,
-    "work": 6.2,
-    "toolchain": 0.8
+    "overhead": 1.8,
+    "work": 8.4,
+    "toolchain": 3
    },
    "has_cache": false,
    "reruns_week": 0,
    "failed_week": 0,
    "dup_commits_week": 0,
-   "wall_p50": 25,
-   "wall_p90": 44,
+   "wall_p50": 20,
+   "wall_p90": 52,
    "superseded_week": 0,
+   "superseded_week_by_event": {
+    "pull_request": 0,
+    "pull_request_target": 0
+   },
    "has_concurrency": false,
    "cancels": false,
    "top_steps": [
@@ -861,9 +968,10 @@
      "seen": 5
     }
    ],
-   "longest_job_s": 13,
-   "median_job_s": 7,
+   "longest_job_s": 34,
+   "median_job_s": 6.5,
    "reruns_raw": 0,
+   "rerun_minutes": null,
    "npm_install_no_ci": false,
    "prefer_offline": false,
    "caches_node_modules": false,
@@ -875,7 +983,7 @@
    "push_branches": [],
    "concurrency_group": "",
    "events": {
-    "workflow_run": 63
+    "workflow_run": 5
    },
    "installers": [],
    "fork_reachable": [],
@@ -898,118 +1006,119 @@
     "submodules": false,
     "tags": false
    },
-   "fixed_share": 0.521
+   "fixed_share": 0.394,
+   "selfhosted_setups": [],
+   "repeated_tests": [],
+   "duplicate_uploads": [],
+   "log_bytes_p50": 14983,
+   "log_jobs_read": 2,
+   "starts_tests": false
   },
   {
-   "workflow": "Scorecard",
-   "path": ".github/workflows/scorecard.yml",
-   "runs_week": 41,
-   "sampled_runs": 5,
+   "workflow": "Scorecard publish check",
+   "path": ".github/workflows/scorecard-publish.yml",
+   "runs_week": 4,
+   "sampled_runs": 4,
    "thin_sample": false,
    "skipped_week": 0,
    "jobs_per_run": 1,
-   "job_minutes_per_run": 0.63,
-   "job_minutes_per_run_mean": 0.59,
-   "job_minutes_week": 24.4,
+   "job_minutes_per_run": 0.1,
+   "job_minutes_per_run_mean": 0.13,
+   "run_minutes_by_kind": {
+    "push": null,
+    "pull_request": null
+   },
+   "job_minutes_week": 0.5,
    "billed_minutes_per_run": 1,
-   "billed_minutes_week": 41,
+   "billed_minutes_week": 4,
    "cost_by_outcome": {
     "success": {
-     "runs_week": 41,
-     "sampled": 5,
-     "minutes_per_run": 0.59,
+     "runs_week": 4,
+     "sampled": 4,
+     "minutes_per_run": 0.13,
      "estimated": false
     }
    },
    "job_durations": {
-    "Scorecard analysis": {
-     "runs": 5,
-     "max_s": 40,
-     "median_s": 38
+    "check": {
+     "runs": 4,
+     "max_s": 16,
+     "median_s": 6,
+     "hosted_runs": 4
     }
    },
-   "jobs_sampled": 5,
-   "waited_on": true,
+   "jobs_sampled": 4,
+   "waited_on": false,
    "wait_p50": 2,
-   "wait_p90": 2,
-   "tail_p50": 2,
+   "wait_p90": 3,
+   "tail_p50": 3,
    "hosted_share": 1,
-   "steps_per_job": 9,
+   "steps_per_job": 3,
    "share": {
-    "work": 0.809,
-    "overhead": 0.056,
-    "tail": 0.051,
-    "checkout": 0.039,
-    "artifacts": 0.039,
-    "head": 0.006
+    "work": 0.452,
+    "tail": 0.258,
+    "overhead": 0.161,
+    "head": 0.129
    },
    "cats_secs_per_run": {
-    "overhead": 2,
-    "work": 28.8,
-    "checkout": 1.4,
-    "artifacts": 1.4
+    "overhead": 1.3,
+    "work": 3.5
    },
    "has_cache": false,
    "reruns_week": 0,
    "failed_week": 0,
    "dup_commits_week": 0,
-   "wall_p50": 44,
-   "wall_p90": 61,
+   "wall_p50": 11,
+   "wall_p90": 20,
    "superseded_week": 0,
+   "superseded_week_by_event": {
+    "pull_request": 0,
+    "pull_request_target": 0
+   },
    "has_concurrency": false,
    "cancels": false,
    "top_steps": [
     {
-     "step": "Run analysis",
-     "median_s": 19,
-     "seen": 5
-    },
-    {
-     "step": "Upload to code scanning",
+     "step": "Run askalf/ci/actions/scorecard-publish-check@f0be7010038c63",
      "median_s": 7,
-     "seen": 5
+     "seen": 2
     },
     {
-     "step": "Pull ghcr.io/ossf/scorecard-action:v2.5.0",
-     "median_s": 4,
-     "seen": 5
+     "step": "Run askalf/ci/actions/scorecard-publish-check@b4621fe1bd5bb4",
+     "median_s": 1,
+     "seen": 2
     }
    ],
-   "longest_job_s": 40,
-   "median_job_s": 38,
+   "longest_job_s": 16,
+   "median_job_s": 6,
    "reruns_raw": 0,
+   "rerun_minutes": null,
    "npm_install_no_ci": false,
    "prefer_offline": false,
    "caches_node_modules": false,
    "setup_cache": false,
    "dep_share": 0,
    "triggers": [
-    "branch_protection_rule",
-    "push",
-    "schedule",
-    "workflow_dispatch"
+    "workflow_run"
    ],
-   "push_branches": [
-    "main"
-   ],
+   "push_branches": [],
    "concurrency_group": "",
    "events": {
-    "push": 21,
-    "schedule": 1
+    "workflow_run": 4
    },
    "installers": [],
    "fork_reachable": [],
    "job_timeouts": [
     {
-     "id": "analysis",
-     "name": "Scorecard analysis",
-     "minutes": 10,
+     "id": "check",
+     "name": "check",
+     "minutes": 5,
      "isDefault": false,
      "judged": true
     }
    ],
    "checkout": {
-    "inspected": true,
+    "inspected": false,
     "fullHistory": false,
     "depth": null,
     "depthUnknown": false,
@@ -1017,62 +1126,80 @@
     "submodules": false,
     "tags": false
    },
-   "fixed_share": 0.152
+   "fixed_share": 0.548,
+   "selfhosted_setups": [],
+   "repeated_tests": [],
+   "duplicate_uploads": [],
+   "log_bytes_p50": 2871,
+   "log_jobs_read": 1,
+   "starts_tests": false
   }
  ],
- "job_minutes_week_sampled": 721.1,
+ "job_minutes_week_sampled": 182.6,
  "findings": [
   {
-   "saving_min_week": 24,
+   "saving_min_week": 6.9,
    "unit": "job",
-   "workflow": "4 workflows: checkout-with-retry self-test, Redline pin bump, Redline, truecopy gate",
+   "workflow": "4 workflows: Redline pin bump, Fuzz, truecopy gate, Redline",
    "what": "self-hosted wrap-up tail",
-   "evidence": "median 5 s after the last step before the job reports done (GitHub-hosted is about 2 s) (shown for the largest; the same holds in the others)",
+   "evidence": "median time after the last step before a job reports done (GitHub-hosted is about 2 s), by workflow: Redline pin bump 4 s, about 6 job-min/week; Fuzz 5 s, under 1 job-min/week; truecopy gate 4 s, under 1 job-min/week; Redline 4 s, under 1 job-min/week",
    "fix": "fewer steps per job (the runner uploads each step's log before it reports), and a runner close to GitHub's service region",
    "tradeoff": "merging steps merges their logs",
    "example": "",
    "confidence": "measured"
   },
   {
-   "saving_min_week": 2.6,
+   "saving_min_week": 0.1,
    "unit": "job",
-   "workflow": "all workflows",
-   "what": "reruns",
-   "evidence": "2 re-attempted runs in the window across the sampled workflows",
-   "fix": "find the flaky step from the failed attempts and fix or quarantine it; each rerun also costs a developer a wait",
-   "tradeoff": "quarantining hides a real failure until someone looks",
+   "workflow": "Scorecard",
+   "what": "an artifact that duplicates another upload",
+   "evidence": "job analysis uploads results.sarif as the artifact \"SARIF file\" in \"Upload artifact\" (1 s a run) and sends the same file to code scanning, in a later step; the newest sampled run's artifact holds that one file (16 KB zipped)",
+   "fix": "move the artifact step after the upload it duplicates and give it `if: failure()`, so the file is kept only on a run where that upload failed; where the upload comes first, drop the artifact step",
+   "tradeoff": "none while the other destination is browsable (code scanning shows the SARIF, the release its assets) and nothing downloads the artifact: no download-artifact step in this file does, but another workflow or a script fetching it by run is not visible here, so check for one before the step goes; keep the artifact for a destination that is not browsable",
+   "example": "# after the step that sends results.sarif to code scanning\n- name: \"Upload artifact\"\n  if: failure()   # only when that upload failed\n  uses: actions/upload-artifact@...\n  with:\n    path: \"results.sarif\"",
+   "confidence": "measured"
+  },
+  {
+   "saving_min_week": 0,
+   "unit": "log",
+   "workflow": "Fuzz",
+   "what": "test output floods the log",
+   "evidence": "a passing job's log is 368 KB (median of 1 sampled job), about 1.4 MB a week over 1 job a run and 4 runs; the runner streams every line to GitHub as the job runs and uploads each step's log before it reports done, from a self-hosted runner",
+   "fix": "a quiet reporter: node --test --test-reporter=dot (one character a test; Node 22 then lists each failed test with its assertion and stack, and prints no count of passing tests), pytest -q, jest --silent, cargo test -q, go test without -v",
+   "tradeoff": "a passing run shows no list and no count of what ran; the failures stay in full, and a reporter that drops them is the wrong one",
+   "example": "run: node --test --test-reporter=dot --test-reporter-destination=stdout test/*.test.mjs",
+   "confidence": "measured",
+   "log_mb_week": 1.4
+  },
+  {
+   "saving_min_week": 0,
+   "unit": "guard",
+   "workflow": "main",
+   "what": "pull request checks merges do not wait for",
+   "evidence": "pull requests get \"Fuzz (Jazzer.js)\", \"check\", which look like tests, builds, analysis or fuzzing, but main does not require them, so a pull request can merge with them failing (11 other unrequired checks not listed)",
+   "fix": "add the ones that must pass to the required status checks on main, by these exact names",
+   "tradeoff": "a required check that is slow or flaky holds every merge; fix or speed it up before requiring it",
    "example": "",
-   "confidence": "measured"
+   "confidence": "inferred"
   },
   {
    "saving_min_week": 0,
    "unit": "guard",
-   "workflow": "CodeQL",
+   "workflow": "2 workflows: Redline pin bump, CodeQL",
    "what": "jobs without a working timeout",
-   "evidence": "job analyze (timeout-minutes 20; longest of 10 sampled runs 82 s): a hung run holds its runner, billing every minute, for up to 20 minutes before GitHub stops it",
+   "evidence": "2 jobs in 2 workflows: Redline pin bump: bump (timeout-minutes 45; longest of 5 sampled runs 54 s); CodeQL: analyze (timeout-minutes 20; longest of 10 sampled runs 85 s): a hung run holds its runner for up to 45 minutes before GitHub stops it",
    "fix": "set timeout-minutes on each job from its own longest runs, 3 times the longest sampled, rounded up to 5 minutes and at least 10",
    "tradeoff": "a run slower than the limit (a cold cache, a busy runner) is cancelled and must be re-run, so set it from the slowest legitimate runs and raise it when a job grows; a timed-out run shows as timed out, which says what happened",
-   "example": "jobs:\n  analyze:\n    timeout-minutes: 10   # 3x its longest sampled run",
-   "confidence": "measured"
-  },
-  {
-   "saving_min_week": 0,
-   "unit": "guard",
-   "workflow": "Redline pin bump",
-   "what": "jobs without a working timeout",
-   "evidence": "job bump (timeout-minutes 30; longest of 5 sampled runs 34 s): a hung run holds its runner for up to 30 minutes before GitHub stops it",
-   "fix": "set timeout-minutes on each job from its own longest runs, 3 times the longest sampled, rounded up to 5 minutes and at least 10",
-   "tradeoff": "a run slower than the limit (a cold cache, a busy runner) is cancelled and must be re-run, so set it from the slowest legitimate runs and raise it when a job grows; a timed-out run shows as timed out, which says what happened",
-   "example": "jobs:\n  bump:\n    timeout-minutes: 10   # 3x its longest sampled run",
+   "example": "# .github/workflows/redline-pin-bump.yml\njobs:\n  bump:\n    timeout-minutes: 10   # 3x its longest sampled run\n---\n# .github/workflows/codeql.yml\njobs:\n  analyze:\n    timeout-minutes: 10   # 3x its longest sampled run",
    "confidence": "measured"
   }
  ],
- "saving_min_week_total": 26.6,
- "billed_minutes_week_sampled": 697.7,
+ "saving_min_week_total": 7,
+ "billed_minutes_week_sampled": 39,
  "billed_saving_min_week_total": 0,
- "api_calls": 70,
+ "api_calls": 86,
  "rate_limit": {
-  "limit": 15000,
-  "remaining": 12764
+  "limit": 5000,
+  "remaining": 3495
  }
 }
