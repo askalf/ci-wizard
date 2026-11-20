@@ -526,9 +526,11 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **Fires when** a workflow or job sets `permissions: write-all` (confirmed), or a workflow has no
   top-level `permissions:` and a job without its own (inferred: the job gets the repository's
   default token, which the audit cannot read; write access on many repositories created before
-  February 2023). A job that calls a reusable workflow counts the same way: with no permissions of
-  its own it hands the called workflow the caller's token, which that workflow can narrow but the
-  audit does not read.
+  February 2023). A job that calls a reusable workflow with no permissions of its own hands the
+  called workflow the caller's token, and the called workflow can narrow it: the called file is
+  read (this repository's own, or another repository's at the called ref, up to four calls deep),
+  and the call is left alone when that file sets permissions at its top or on every job. A call
+  whose file could not be read counts as unscoped. The evidence names the jobs.
 - **Fix** a read-only default at the top of each workflow (`contents: read`) and each job granted
   only what it uses. *Trade-off:* a job that needs more must name it, so a missing grant shows as a
   403 the first time it runs.
@@ -549,9 +551,11 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 ## required checks no pull request reports
 
 - **Fires when** a required check bound to GitHub Actions (integration 15368) matches no
-  job of the newest completed pull request run of any workflow in the window (a run still going
-  may not have created all its jobs; a workflow with only an unfinished run leaves the absence
-  unknown). A job's name is the check
+  job of the newest successful pull request run of any workflow in the window. Only a successful
+  run created every job it would: a run still going, a cancelled one, one waiting for a
+  maintainer's approval or one that failed stops before its later jobs, and a matrix behind
+  `needs:` is never expanded into the names a required check matches. A workflow with no
+  successful pull request run in the window leaves the absence unknown. A job's name is the check
   Actions reports: `name (value)` for a matrix leg, `caller / job` for a reusable workflow's job, and
   a skipped job still reports. GitHub waits for a required check until it reports, so a pull
   request without it cannot merge unless the rule is bypassed.
@@ -586,7 +590,11 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 ## no code scanning
 
 - **Fires when** every workflow file was read, no job runs a code scanner, and no code
-  scanning default-setup run (`dynamic/github-code-scanning`) is in the window. A code scanner is,
+  scanning default-setup run (`dynamic/github-code-scanning`) is in the window. A job that calls a
+  reusable workflow runs a scanner when the called file does (this repository's own, or another
+  repository's read at the called ref, up to four calls deep); when a called file of another
+  repository could not be read, whether it scans is unknown and the finding is not raised. A code
+  scanner is,
   read from the parsed steps (a commented-out step does not count):
   - CodeQL (`github/codeql-action/init` or `/analyze`);
   - Semgrep, Snyk, SonarSource or Bearer, by their action, their container image, or their

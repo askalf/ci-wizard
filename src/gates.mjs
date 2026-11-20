@@ -3,6 +3,7 @@
 // (code scanning, dependency updates). Every finding comes from what the API showed; whatever it
 // could not read (a ruleset, a listing) yields no finding rather than a guess.
 import { parseWorkflow, programWords, shellCommands, triggersOf } from './workflow.mjs';
+import { MAX_CALL_DEPTH, baseOf, callKey, calledText, isRemoteKey } from './reusable.mjs';
 
 // GitHub Actions' app id. Only a required check bound to it is known to come from a workflow job,
 // which the runs show. One bound to another app (a coverage service, a review bot), or bound to no
@@ -106,51 +107,69 @@ const GATE_LIKE = /\b(test|tests|lint|build|check|checks|verify|analy[sz]e|codeq
 
 const list = (xs, n = 6) => `${xs.slice(0, n).join(', ')}${xs.length > n ? ` and ${xs.length - n} more` : ''}`;
 
-/** What the workflow files say: which run on pull requests, and which run CodeQL. */
-function fileFacts(scanFiles) {
+/**
+ * What the workflow files say: which run on pull requests, which run a code scanner, and which
+ * reusable workflows of other repositories they call that could not be read (so whether those scan
+ * is unknown). A job that calls a reusable workflow scans what the called file's jobs scan.
+ */
+function fileFacts(scanFiles, reusable = new Map()) {
   const onPr = [];
   let codeql = false;
+  const unread = new Set();
+  const visit = (doc, base, seen, depth) => {
+    for (const job of Object.values(doc.jobs || {})) {
+      if (!job || typeof job !== 'object') continue;
+      if (jobScansCode(job)) codeql = true;
+      const key = typeof job.uses === 'string' ? callKey(job.uses, base) : null;
+      if (!key || seen.has(key) || depth >= MAX_CALL_DEPTH) continue;
+      seen.add(key);
+      const text = calledText(key, { files: scanFiles, remote: reusable });
+      if (typeof text === 'string') visit(parseWorkflow(text), baseOf(key), seen, depth + 1);
+      else if (isRemoteKey(key)) unread.add(job.uses.trim());
+    }
+  };
   for (const [path, text] of scanFiles) {
     const doc = parseWorkflow(text);
     if (!Object.keys(doc).length) continue;
     if (triggersOf(doc).some((t) => PR_TRIGGERS.has(t))) onPr.push(path);
-    // A step that scans the code, read from the parsed steps (a commented-out line or a script that
-    // only mentions one is not one): CodeQL, or another code scanner by its action, its container
-    // or its command. A SARIF upload counts when its job is not a Scorecard or workflow-linter run,
-    // whose results are about the repository's settings or workflows, not its code.
-    for (const job of Object.values(doc.jobs || {})) {
-      if (!job || typeof job !== 'object') continue;
-      const steps = Array.isArray(job.steps) ? job.steps.filter((st) => st && typeof st === 'object') : [];
-      const uses = steps.map((st) => String(st.uses || '').trim().toLowerCase());
-      const runs = steps.map((st) => String(st.run || ''));
-      // The job's container, and any step that runs an image (uses: docker://...).
-      const images = [job.container && typeof job.container === 'object' ? job.container.image : job.container, ...uses.filter((u) => u.startsWith('docker://'))];
-      const commands = runs.flatMap((r) => shellCommands(r)).map(programWords).filter((c) => c.length);
-      // A job that runs Scorecard or a workflow linter (by action, by its image as the job's
-      // container or a docker:// step, or by a command that runs one, directly or through go run
-      // or a container) uploads results about settings or workflows, not about the code.
-      const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u))
-        || images.some((i) => NOT_CODE_TOOLS.has(imageName(i)))
-        || commands.some(([program, ...args]) => NOT_CODE_TOOLS.has(program.toLowerCase())
-          || runTargets(program, args).some((a) => NOT_CODE_TOOLS.has(imageName(a))));
-      if (uses.some((u) => CODE_SCANNERS.test(u))
-        || (!notCode && uses.some((u) => u.startsWith('github/codeql-action/upload-sarif@')))
-        || images.some((i) => SCANNER_IMAGES.has(imageName(i)))
-        || commands.some((c) => SCAN_COMMAND.test(c.join(' ')))) codeql = true;
-    }
+    visit(doc, null, new Set(), 0);
   }
-  return { onPr, codeql };
+  return { onPr, codeql, unread: [...unread].sort() };
+}
+
+// A step that scans the code, read from the parsed steps (a commented-out line or a script that
+// only mentions one is not one): CodeQL, or another code scanner by its action, its container or its
+// command. A SARIF upload counts when its job is not a Scorecard or workflow-linter run, whose
+// results are about the repository's settings or workflows, not its code.
+function jobScansCode(job) {
+  const steps = Array.isArray(job.steps) ? job.steps.filter((st) => st && typeof st === 'object') : [];
+  const uses = steps.map((st) => String(st.uses || '').trim().toLowerCase());
+  const runs = steps.map((st) => String(st.run || ''));
+  // The job's container, and any step that runs an image (uses: docker://...).
+  const images = [job.container && typeof job.container === 'object' ? job.container.image : job.container, ...uses.filter((u) => u.startsWith('docker://'))];
+  const commands = runs.flatMap((r) => shellCommands(r)).map(programWords).filter((c) => c.length);
+  // A job that runs Scorecard or a workflow linter (by action, by its image as the job's
+  // container or a docker:// step, or by a command that runs one, directly or through go run
+  // or a container) uploads results about settings or workflows, not about the code.
+  const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u))
+    || images.some((i) => NOT_CODE_TOOLS.has(imageName(i)))
+    || commands.some(([program, ...args]) => NOT_CODE_TOOLS.has(program.toLowerCase())
+      || runTargets(program, args).some((a) => NOT_CODE_TOOLS.has(imageName(a))));
+  return uses.some((u) => CODE_SCANNERS.test(u))
+    || (!notCode && uses.some((u) => u.startsWith('github/codeql-action/upload-sarif@')))
+    || images.some((i) => SCANNER_IMAGES.has(imageName(i)))
+    || commands.some((c) => SCAN_COMMAND.test(c.join(' ')));
 }
 
 /**
  * The merge-gate findings, from collect's `gates`, the workflow files the scans read, whether the
  * workflow directory was fully listed, and the repository's visibility.
  */
-export function gateFindings(gates, { scanFiles = new Map(), scanned = null, visibility = null } = {}) {
+export function gateFindings(gates, { scanFiles = new Map(), reusable = new Map(), scanned = null, visibility = null } = {}) {
   if (!gates) return [];
   const F = [];
   const branch = gates.branch || 'the default branch';
-  const files = fileFacts(scanFiles);
+  const files = fileFacts(scanFiles, reusable);
   const listedAll = Boolean(scanned && scanned.of !== null && scanned.of !== undefined && scanned.read === scanned.of);
   const prChecks = gates.pr_checks || [];
   const prSeen = gates.pr_runs_read > 0;
@@ -220,8 +239,10 @@ export function gateFindings(gates, { scanFiles = new Map(), scanned = null, vis
     }
   }
 
-  // Code scanning: a CodeQL workflow file, or default setup's dynamic runs.
-  if (listedAll && !files.codeql && !gates.code_scanning_runs) {
+  // Code scanning: a CodeQL workflow file (or a reusable workflow one calls), or default setup's
+  // dynamic runs. A reusable workflow of another repository that could not be read may be the
+  // scanner, so its absence is not claimed then.
+  if (listedAll && !files.codeql && !gates.code_scanning_runs && !files.unread.length) {
     const paid = visibility && visibility !== 'public';
     F.push({
       saving: 0, unit: 'risk', confidence: 'inferred', what: 'no code scanning', workflow: 'all workflows',

@@ -8866,8 +8866,36 @@ function zipEntries(buf) {
   return entries;
 }
 
+// src/reusable.mjs
+var FILE = String.raw`\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml`;
+var LOCAL = new RegExp(String.raw`^\./(${FILE})$`);
+var REMOTE = new RegExp(String.raw`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/(${FILE})@([A-Za-z0-9_./-]+)$`);
+var MAX_CALL_DEPTH = 4;
+function callKey(uses, base = null) {
+  const s = String(uses ?? "").trim();
+  const local = LOCAL.exec(s);
+  if (local) return base ? `${base.owner}/${base.repo}/${local[1]}@${base.ref}` : local[1];
+  const remote = REMOTE.exec(s);
+  return remote ? `${remote[1]}/${remote[2]}/${remote[3]}@${remote[4]}` : null;
+}
+var isRemoteKey = (key) => typeof key === "string" && !key.startsWith(".github/");
+function remoteParts(key) {
+  const m = isRemoteKey(key) ? /^([^/]+)\/([^/]+)\/(\.github\/workflows\/[^@]+)@(.+)$/.exec(key) : null;
+  return m ? { owner: m[1], repo: m[2], path: m[3], ref: m[4] } : null;
+}
+function callsOf(text, base = null) {
+  const doc = typeof text === "string" ? parseWorkflow(text) : {};
+  return Object.entries(doc.jobs || {}).filter(([, j]) => j && typeof j === "object" && typeof j.uses === "string").map(([job, j]) => ({ job, uses: j.uses, key: callKey(j.uses, base) }));
+}
+function calledText(key, { files = /* @__PURE__ */ new Map(), remote = /* @__PURE__ */ new Map() } = {}) {
+  if (!key) return void 0;
+  return isRemoteKey(key) ? remote.get(key) : files.get(key);
+}
+var baseOf = (key) => isRemoteKey(key) ? remoteParts(key) : null;
+
 // src/collect.mjs
 var encodePath = (path) => String(path).split("/").map(encodeURIComponent).join("/");
+var MAX_REUSABLE_READS = 12;
 var LOCKFILES = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock", "poetry.lock", "uv.lock", "Pipfile.lock", "go.sum", "Cargo.lock", "Gemfile.lock"];
 function groupRuns(runs, names = /* @__PURE__ */ new Map()) {
   const groups = /* @__PURE__ */ new Map();
@@ -9100,6 +9128,27 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
     else unreadable.push(path);
   });
   const scanned = { read: scanFiles.size, of: listed ? workflowPaths.length : null, unreadable };
+  const reusableFiles = /* @__PURE__ */ new Map();
+  let calls = [...scanFiles.values()].flatMap((text) => callsOf(text)).map((c) => c.key).filter(isRemoteKey);
+  for (let depth = 0; depth < MAX_CALL_DEPTH && calls.length; depth++) {
+    const batch = [...new Set(calls)].filter((k) => !reusableFiles.has(k)).slice(0, Math.max(0, MAX_REUSABLE_READS - reusableFiles.size));
+    if (!batch.length) break;
+    const texts = await Promise.all(batch.map(async (k) => {
+      const p = remoteParts(k);
+      try {
+        return await client.getRaw(`repos/${p.owner}/${p.repo}/contents/${encodePath(p.path)}?ref=${encodeURIComponent(p.ref)}`);
+      } catch (e) {
+        if (e instanceof RateLimitError) throw e;
+        return null;
+      }
+    }));
+    calls = [];
+    batch.forEach((k, i) => {
+      const text = typeof texts[i] === "string" ? texts[i] : null;
+      reusableFiles.set(k, text);
+      if (text) calls.push(...callsOf(text, remoteParts(k)).map((c) => c.key).filter(isRemoteKey));
+    });
+  }
   const defaultBranch = meta && typeof meta.default_branch === "string" ? meta.default_branch : null;
   const visibility = meta && typeof meta.visibility === "string" ? meta.visibility : meta && typeof meta.private === "boolean" ? meta.private ? "private" : "public" : null;
   const root = rootListing || [];
@@ -9107,7 +9156,7 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   const lockfiles = LOCKFILES.filter((f) => names.has(f)).sort();
   onProgress("reading merge gates");
   const gates = await collectGates(client, repo, { runs, byWf, defaultBranch, rootNames: Array.isArray(rootListing) ? names : null, jobsRaw, settle, settled });
-  return { runs, byWf, samples, sampleRunIds, outcomeSamples, scanFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, gates, only: wanted.length ? only : [], onlyMissing };
+  return { runs, byWf, samples, sampleRunIds, outcomeSamples, scanFiles, reusableFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, gates, only: wanted.length ? only : [], onlyMissing };
 }
 var PR_EVENTS = /* @__PURE__ */ new Set(["pull_request", "pull_request_target", "merge_group"]);
 var RENOVATE_FILES = ["renovate.json", "renovate.json5", ".renovaterc", ".renovaterc.json", ".renovaterc.json5"];
@@ -9124,11 +9173,11 @@ async function collectGates(client, repo, { runs, byWf, defaultBranch, rootNames
   const prRuns = [];
   let unfinishedOnly = false;
   for (const rs of byWf.values()) {
-    const done = rs.find((r) => PR_EVENTS.has(r.event) && r.status === "completed");
-    const any = done || rs.find((r) => PR_EVENTS.has(r.event));
+    const ok = rs.find((r) => PR_EVENTS.has(r.event) && r.status === "completed" && r.conclusion === "success");
+    const any = ok || rs.find((r) => PR_EVENTS.has(r.event) && r.status === "completed") || rs.find((r) => PR_EVENTS.has(r.event));
     if (!any) continue;
     prRuns.push(any);
-    if (!done) unfinishedOnly = true;
+    if (!ok) unfinishedOnly = true;
   }
   const [rules, branchInfo, githubDir, ...prJobLists] = await Promise.all([
     branch ? soft(client.get(`repos/${repo}/rules/branches/${branch}?per_page=100`)) : { ok: false, value: null },
@@ -9460,8 +9509,24 @@ function scanWorkflow(text) {
 }
 var list = (xs, n = 5) => `${xs.slice(0, n).join("; ")}${xs.length > n ? ` and ${xs.length - n} more` : ""}`;
 var where = (paths) => paths.length === 1 ? paths[0] : `${paths.length} workflow files: ${list(paths, 4)}`;
-function scanFindings(files, { repo = null } = {}) {
-  const scans = [...files].map(([path, text]) => ({ path, ...scanWorkflow(text) })).filter((s) => s.parsed);
+function calledScoped(uses, base, { files, reusable }, path = /* @__PURE__ */ new Set(), depth = 0) {
+  const key = callKey(uses, base);
+  if (!key || path.has(key) || depth >= MAX_CALL_DEPTH) return false;
+  const text = calledText(key, { files, remote: reusable });
+  if (typeof text !== "string") return false;
+  const doc = parseWorkflow(text);
+  if (doc.permissions !== void 0) return true;
+  const jobs = jobsOf2(doc);
+  const chain = /* @__PURE__ */ new Set([...path, key]);
+  return jobs.length > 0 && jobs.every(([, j]) => j.permissions !== void 0 || typeof j.uses === "string" && calledScoped(j.uses, baseOf(key), { files, reusable }, chain, depth + 1));
+}
+function scanFindings(files, { repo = null, reusable = /* @__PURE__ */ new Map() } = {}) {
+  const scans = [...files].map(([path, text]) => {
+    const scan = scanWorkflow(text);
+    const jobs = scan.unscoped.length ? parseWorkflow(text).jobs || {} : {};
+    const unscoped2 = scan.unscoped.filter((id) => !(jobs[id] && typeof jobs[id].uses === "string" && calledScoped(jobs[id].uses, null, { files, reusable })));
+    return { path, ...scan, unscoped: unscoped2 };
+  }).filter((s) => s.parsed);
   const F = [];
   const unpinned = scans.flatMap((s) => s.unpinned.map((u) => ({ ...u, path: s.path })));
   if (unpinned.length) {
@@ -9518,7 +9583,7 @@ function scanFindings(files, { repo = null } = {}) {
     const confirmed = writeAll.length > 0;
     const parts = [];
     if (writeAll.length) parts.push(`write-all in ${list(writeAll.map((s) => `${s.path} (${s.writeAll.join(", ")})`), 4)}`);
-    if (unscoped.length) parts.push(`no permissions block in ${list(unscoped.map((s) => s.path), 4)}, so its jobs get the repository's default token, which is write access on many repositories created before February 2023`);
+    if (unscoped.length) parts.push(`no permissions block for ${list(unscoped.map((s) => `${s.path} (job${s.unscoped.length === 1 ? "" : "s"} ${list(s.unscoped, 4)})`), 4)}, so ${unscoped.length === 1 && unscoped[0].unscoped.length === 1 ? "that job gets" : "those jobs get"} the repository's default token, which is write access on many repositories created before February 2023`);
     F.push({
       saving: 0,
       unit: "risk",
@@ -9593,31 +9658,44 @@ function runTargets(program, args) {
 }
 var GATE_LIKE = /\b(test|tests|lint|build|check|checks|verify|analy[sz]e|codeql|typecheck|types|dist|unit|e2e|ci|fuzz|fuzzing)\b/i;
 var list2 = (xs, n = 6) => `${xs.slice(0, n).join(", ")}${xs.length > n ? ` and ${xs.length - n} more` : ""}`;
-function fileFacts(scanFiles) {
+function fileFacts(scanFiles, reusable = /* @__PURE__ */ new Map()) {
   const onPr = [];
   let codeql = false;
+  const unread = /* @__PURE__ */ new Set();
+  const visit = (doc, base, seen, depth) => {
+    for (const job of Object.values(doc.jobs || {})) {
+      if (!job || typeof job !== "object") continue;
+      if (jobScansCode(job)) codeql = true;
+      const key = typeof job.uses === "string" ? callKey(job.uses, base) : null;
+      if (!key || seen.has(key) || depth >= MAX_CALL_DEPTH) continue;
+      seen.add(key);
+      const text = calledText(key, { files: scanFiles, remote: reusable });
+      if (typeof text === "string") visit(parseWorkflow(text), baseOf(key), seen, depth + 1);
+      else if (isRemoteKey(key)) unread.add(job.uses.trim());
+    }
+  };
   for (const [path, text] of scanFiles) {
     const doc = parseWorkflow(text);
     if (!Object.keys(doc).length) continue;
     if (triggersOf(doc).some((t) => PR_TRIGGERS.has(t))) onPr.push(path);
-    for (const job of Object.values(doc.jobs || {})) {
-      if (!job || typeof job !== "object") continue;
-      const steps = Array.isArray(job.steps) ? job.steps.filter((st) => st && typeof st === "object") : [];
-      const uses = steps.map((st) => String(st.uses || "").trim().toLowerCase());
-      const runs = steps.map((st) => String(st.run || ""));
-      const images = [job.container && typeof job.container === "object" ? job.container.image : job.container, ...uses.filter((u) => u.startsWith("docker://"))];
-      const commands = runs.flatMap((r) => shellCommands(r)).map(programWords).filter((c) => c.length);
-      const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u)) || images.some((i) => NOT_CODE_TOOLS.has(imageName(i))) || commands.some(([program, ...args]) => NOT_CODE_TOOLS.has(program.toLowerCase()) || runTargets(program, args).some((a) => NOT_CODE_TOOLS.has(imageName(a))));
-      if (uses.some((u) => CODE_SCANNERS.test(u)) || !notCode && uses.some((u) => u.startsWith("github/codeql-action/upload-sarif@")) || images.some((i) => SCANNER_IMAGES.has(imageName(i))) || commands.some((c) => SCAN_COMMAND.test(c.join(" ")))) codeql = true;
-    }
+    visit(doc, null, /* @__PURE__ */ new Set(), 0);
   }
-  return { onPr, codeql };
+  return { onPr, codeql, unread: [...unread].sort() };
 }
-function gateFindings(gates, { scanFiles = /* @__PURE__ */ new Map(), scanned = null, visibility = null } = {}) {
+function jobScansCode(job) {
+  const steps = Array.isArray(job.steps) ? job.steps.filter((st) => st && typeof st === "object") : [];
+  const uses = steps.map((st) => String(st.uses || "").trim().toLowerCase());
+  const runs = steps.map((st) => String(st.run || ""));
+  const images = [job.container && typeof job.container === "object" ? job.container.image : job.container, ...uses.filter((u) => u.startsWith("docker://"))];
+  const commands = runs.flatMap((r) => shellCommands(r)).map(programWords).filter((c) => c.length);
+  const notCode = uses.some((u) => /^(ossf\/scorecard-action|zizmorcore\/|woodruffw\/zizmor|rhysd\/actionlint|raven-actions\/actionlint|boostsecurityio\/poutine)/.test(u)) || images.some((i) => NOT_CODE_TOOLS.has(imageName(i))) || commands.some(([program, ...args]) => NOT_CODE_TOOLS.has(program.toLowerCase()) || runTargets(program, args).some((a) => NOT_CODE_TOOLS.has(imageName(a))));
+  return uses.some((u) => CODE_SCANNERS.test(u)) || !notCode && uses.some((u) => u.startsWith("github/codeql-action/upload-sarif@")) || images.some((i) => SCANNER_IMAGES.has(imageName(i))) || commands.some((c) => SCAN_COMMAND.test(c.join(" ")));
+}
+function gateFindings(gates, { scanFiles = /* @__PURE__ */ new Map(), reusable = /* @__PURE__ */ new Map(), scanned = null, visibility = null } = {}) {
   if (!gates) return [];
   const F = [];
   const branch = gates.branch || "the default branch";
-  const files = fileFacts(scanFiles);
+  const files = fileFacts(scanFiles, reusable);
   const listedAll = Boolean(scanned && scanned.of !== null && scanned.of !== void 0 && scanned.read === scanned.of);
   const prChecks = gates.pr_checks || [];
   const prSeen = gates.pr_runs_read > 0;
@@ -9689,7 +9767,7 @@ function gateFindings(gates, { scanFiles = /* @__PURE__ */ new Map(), scanned = 
       if (unjudged.length && missingFinding) missingFinding.evidence += `; ${list2(unjudged.map((u) => `"${u}"`))} ${unjudged.length === 1 ? "is" : "are"} not bound to GitHub Actions, so another app may report ${unjudged.length === 1 ? "it" : "them"}, and ${unjudged.length === 1 ? "it was" : "they were"} not judged`;
     }
   }
-  if (listedAll && !files.codeql && !gates.code_scanning_runs) {
+  if (listedAll && !files.codeql && !gates.code_scanning_runs && !files.unread.length) {
     const paid = visibility && visibility !== "public";
     F.push({
       saving: 0,
@@ -10702,7 +10780,7 @@ function analyseParsed(repo, data) {
     workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || "", week, repo, data.outcomeSamples && data.outcomeSamples.get(wf) || {}, data.sampleRunIds && data.sampleRunIds.get(wf) || []));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
-  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" ? true : data.visibility ? "private" : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || /* @__PURE__ */ new Map()), ...scanFindings(data.scanFiles || /* @__PURE__ */ new Map(), { repo }), ...gateFindings(data.gates, { scanFiles: data.scanFiles || /* @__PURE__ */ new Map(), scanned: data.scanned, visibility: data.visibility })];
+  const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" ? true : data.visibility ? "private" : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || /* @__PURE__ */ new Map()), ...scanFindings(data.scanFiles || /* @__PURE__ */ new Map(), { repo, reusable: data.reusableFiles || /* @__PURE__ */ new Map() }), ...gateFindings(data.gates, { scanFiles: data.scanFiles || /* @__PURE__ */ new Map(), reusable: data.reusableFiles || /* @__PURE__ */ new Map(), scanned: data.scanned, visibility: data.visibility })];
   const findings = groupFindings(raw).filter((f) => f.unit === "wait" || f.unit === "risk" || f.unit === "guard" || f.unit === "log" || f.what === "an artifact that duplicates another upload" || f.saving >= T.minSavingWeek).map((f) => ({
     saving_min_week: round(f.saving, 1),
     unit: f.unit || "job",

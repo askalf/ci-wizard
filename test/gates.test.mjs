@@ -192,6 +192,84 @@ test('no code scanning: a commented-out CodeQL step or a script that mentions it
   assert.ok(!whats(gateFindings(g, { scanFiles: files(codeqlFile), scanned: all(1) })).includes('no code scanning'));
 });
 
+test('no code scanning: a scanner in a reusable workflow a job calls counts; one that could not be read leaves it unknown', () => {
+  const SHA = 'b'.repeat(40);
+  const key = `owner/shared/.github/workflows/codeql.yml@${SHA}`;
+  const caller = `on: [pull_request]\njobs:\n  analyze:\n    uses: ${key}\n    permissions:\n      security-events: write\n`;
+  const g = gates({ code_scanning_runs: false });
+  const scans = (reusable, ...texts) => !whats(gateFindings(g, { scanFiles: files(...texts), reusable, scanned: all(texts.length) })).includes('no code scanning');
+  assert.ok(scans(new Map([[key, codeqlFile]]), caller), 'the called file runs CodeQL');
+  // The called file runs no scanner: still no code scanning.
+  assert.ok(!scans(new Map([[key, prFile]]), caller));
+  // The called file could not be read (or was never read): whether it scans is unknown, so nothing is claimed.
+  assert.ok(scans(new Map([[key, null]]), caller));
+  assert.ok(scans(new Map(), caller));
+  // A local call: the repository's own file, read with the others.
+  const localCaller = 'on: [pull_request]\njobs:\n  analyze:\n    uses: ./.github/workflows/w1.yml\n';
+  assert.ok(scans(new Map(), localCaller, codeqlFile));
+  // A scanner two calls deep: the remote file calls its own repository's file at the same ref.
+  const nested = new Map([[key, 'on: workflow_call\njobs:\n  inner:\n    uses: ./.github/workflows/scan.yml\n'], [`owner/shared/.github/workflows/scan.yml@${SHA}`, codeqlFile]]);
+  assert.ok(scans(nested, caller));
+});
+
+test('collect reads the reusable workflows a file calls in another repository, at the called ref', async () => {
+  const now = new Date(Date.parse(t(7 * 86400)));
+  const SHA = 'c'.repeat(40);
+  const caller = `on: [pull_request]\njobs:\n  analyze:\n    uses: owner/shared/.github/workflows/codeql.yml@${SHA}\n`;
+  const asked = [];
+  const routes = {
+    'repos/o/r/actions/runs?': { workflow_runs: runs(2).map((r) => ({ ...r, path: '.github/workflows/ci.yml', event: 'pull_request' })) },
+    'repos/o/r/actions/runs/': { total_count: 1, jobs: [{ ...job(), name: 'analyze / Analyze (javascript)' }] },
+    'repos/o/r/rules/branches/main': [],
+    'repos/o/r/branches/main': { name: 'main', protection: { enabled: false } },
+    'repos/o/r/contents/.github/workflows': [{ name: 'ci.yml', type: 'file' }],
+    'repos/o/r/contents/.github': [{ name: 'dependabot.yml', type: 'file' }],
+    'repos/o/r/contents/.github/workflows/ci.yml': caller,
+    'repos/o/r/contents/': caller,
+    'repos/o/r/contents': [],
+    'repos/owner/shared/contents/.github/workflows/codeql.yml': codeqlFile,
+    'repos/o/r': { default_branch: 'main', visibility: 'public' },
+  };
+  const d = await collect(createClient({ fetchImpl: fakeFetch(routes, { calls: asked }) }), 'o/r', { now });
+  assert.equal(d.reusableFiles.get(`owner/shared/.github/workflows/codeql.yml@${SHA}`), codeqlFile);
+  assert.ok(asked.some((u) => u.includes(`repos/owner/shared/contents/.github/workflows/codeql.yml?ref=${SHA}`)), asked.join('\n'));
+  assert.ok(!whats(gateFindings({ ...d.gates, code_scanning_runs: false }, { scanFiles: d.scanFiles, reusable: d.reusableFiles, scanned: d.scanned })).includes('no code scanning'));
+  // A file that is not there is kept as null: unknown, not empty.
+  const missing = { ...routes };
+  delete missing['repos/owner/shared/contents/.github/workflows/codeql.yml'];
+  const m = await collect(createClient({ fetchImpl: fakeFetch(missing) }), 'o/r', { now });
+  assert.equal(m.reusableFiles.get(`owner/shared/.github/workflows/codeql.yml@${SHA}`), null);
+});
+
+test('required checks are judged from the newest successful pull request run, not a cancelled one or one awaiting approval', async () => {
+  const now = new Date(Date.parse(t(7 * 86400)));
+  const base = runs(3).map((r) => ({ ...r, path: '.github/workflows/ci.yml', event: 'pull_request' }));
+  const cancelled = { ...base[0], id: 9101, conclusion: 'cancelled' };
+  const approval = { ...base[1], id: 9102, conclusion: 'action_required' };
+  const ok = { ...base[2], id: 9103, conclusion: 'success' };
+  const routes = {
+    'repos/o/r/actions/runs?': { workflow_runs: [cancelled, approval, ok] },
+    'repos/o/r/actions/runs/9101/jobs': { total_count: 1, jobs: [{ ...job(), name: 'lint' }] },
+    'repos/o/r/actions/runs/9102/jobs': { total_count: 0, jobs: [] },
+    'repos/o/r/actions/runs/9103/jobs': { total_count: 2, jobs: [{ ...job(), name: 'lint' }, { ...job(), name: 'integration (ubuntu-latest, 22.x)' }] },
+    'repos/o/r/rules/branches/main': [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'integration (ubuntu-latest, 22.x)', integration_id: 15368 }] } }],
+    'repos/o/r/branches/main': { name: 'main', protection: { enabled: false } },
+    'repos/o/r/contents/.github/workflows': [{ name: 'ci.yml', type: 'file' }],
+    'repos/o/r/contents/.github': [{ name: 'dependabot.yml', type: 'file' }],
+    'repos/o/r/contents/': prFile,
+    'repos/o/r/contents': [],
+    'repos/o/r': { default_branch: 'main', visibility: 'public' },
+  };
+  const d = await collect(createClient({ fetchImpl: fakeFetch(routes) }), 'o/r', { now });
+  assert.ok(d.gates.pr_checks.includes('integration (ubuntu-latest, 22.x)'), d.gates.pr_checks.join());
+  assert.equal(d.gates.pr_jobs_complete, true);
+  assert.ok(!whats(gateFindings(d.gates, { scanFiles: d.scanFiles, scanned: d.scanned })).includes('required checks no pull request reports'));
+  // No successful run in the window: the newest finished one's names count as seen, and no absence is judged.
+  const noSuccess = await collect(createClient({ fetchImpl: fakeFetch({ ...routes, 'repos/o/r/actions/runs?': { workflow_runs: [cancelled, approval] } }) }), 'o/r', { now });
+  assert.equal(noSuccess.gates.pr_jobs_complete, false);
+  assert.ok(!whats(gateFindings(noSuccess.gates, { scanFiles: noSuccess.scanFiles, scanned: noSuccess.scanned })).includes('required checks no pull request reports'));
+});
+
 test('absence is judged from the newest completed pull request run, not one still creating its jobs', async () => {
   const now = new Date(Date.parse(t(7 * 86400)));
   const base = runs(2).map((r) => ({ ...r, path: '.github/workflows/ci.yml', event: 'pull_request' }));

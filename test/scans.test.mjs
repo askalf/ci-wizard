@@ -165,8 +165,9 @@ test('scanWorkflow: the job token, from write-all, a missing block, or a scoped 
   assert.deepEqual(scanWorkflow(wf(steps, 'permissions:\n  contents: read\n')).unscoped, []);
   assert.deepEqual(scanWorkflow(wf(steps, 'permissions: {}\n')).unscoped, []);
   assert.deepEqual(scanWorkflow(wf(steps, '', '    permissions:\n      contents: read\n')).unscoped, []);
-  // A reusable-workflow call with no permissions hands the caller's default token on: the called
-  // workflow may narrow it, but the audit does not read it, so the call is unscoped.
+  // A reusable-workflow call with no permissions hands the caller's default token on: one file alone
+  // does not show whether the called workflow narrows it, so scanWorkflow lists the call (scanFindings
+  // reads the called file).
   const reusable = `on: [push]\njobs:\n  call:\n    uses: owner/repo/.github/workflows/x.yml@${SHA}\n`;
   assert.deepEqual(scanWorkflow(reusable).unscoped, ['call']);
   assert.deepEqual(scanWorkflow(reusable.replace('    uses', '    permissions:\n      contents: read\n    uses')).unscoped, []);
@@ -196,8 +197,39 @@ test('scanFindings: one finding per kind, naming the files, with YAML that parse
 
   const tok = by['job token wider than the job'];
   assert.equal(tok.confidence, 'confirmed'); // write-all is in the file
-  assert.match(tok.evidence, /write-all in \.github\/workflows\/release\.yml \(\(workflow\)\); no permissions block in \.github\/workflows\/ci\.yml/);
+  assert.match(tok.evidence, /write-all in \.github\/workflows\/release\.yml \(\(workflow\)\); no permissions block for \.github\/workflows\/ci\.yml \(job build\), so that job gets the repository's default token/);
   assert.equal(parse(tok.example).permissions.contents, 'read');
+});
+
+test('scanFindings: a call to a reusable workflow that scopes the token itself is not left the default', () => {
+  const caller = (uses) => `on: [push]\njobs:\n  test:\n    uses: ${uses}\n  release:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write\n    steps:\n      - run: make\n`;
+  const scoped = 'on: workflow_call\npermissions:\n  contents: read\njobs:\n  unit:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make test\n';
+  const everyJob = 'on: workflow_call\njobs:\n  unit:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n    steps:\n      - run: make test\n';
+  const open = 'on: workflow_call\njobs:\n  unit:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make test\n';
+  const token = (files, reusable) => scanFindings(files, { reusable }).find((f) => f.what === 'job token wider than the job');
+  // A local call: the called file is one of the repository's own, already read.
+  const local = (called) => new Map([['.github/workflows/release.yml', caller('./.github/workflows/test.yml')], ['.github/workflows/test.yml', called]]);
+  assert.equal(token(local(scoped)), undefined);
+  assert.equal(token(local(everyJob)), undefined);
+  // The called file sets no permissions: the call keeps the caller's default token, and the finding
+  // names that job, beside the called file's own job.
+  assert.match(token(local(open)).evidence, /no permissions block for \.github\/workflows\/release\.yml \(job test\); \.github\/workflows\/test\.yml \(job unit\), so those jobs get/);
+  // A call into another repository: read by collect at the called ref.
+  const remoteKey = `owner/shared/.github/workflows/test.yml@${SHA}`;
+  const remote = new Map([['.github/workflows/release.yml', caller(remoteKey)]]);
+  assert.equal(token(remote, new Map([[remoteKey, scoped]])), undefined);
+  // Not read (a private repository, or nothing read at all): the call stays unscoped.
+  assert.match(token(remote, new Map([[remoteKey, null]])).evidence, /\(job test\)/);
+  assert.match(token(remote).evidence, /\(job test\)/);
+  // A local call inside the remote file names that repository's file at the same ref.
+  const chained = new Map([[remoteKey, 'on: workflow_call\njobs:\n  inner:\n    uses: ./.github/workflows/inner.yml\n'], [`owner/shared/.github/workflows/inner.yml@${SHA}`, scoped]]);
+  assert.equal(token(remote, chained), undefined);
+  // Two jobs of the called file that both call the same scoped file: each is judged on its own chain.
+  const twice = new Map([[remoteKey, 'on: workflow_call\njobs:\n  a:\n    uses: ./.github/workflows/inner.yml\n  b:\n    uses: ./.github/workflows/inner.yml\n'], [`owner/shared/.github/workflows/inner.yml@${SHA}`, scoped]]);
+  assert.equal(token(remote, twice), undefined);
+  // A call that comes back to a file already on the path is not followed again.
+  const loop = new Map([[remoteKey, `on: workflow_call\njobs:\n  again:\n    uses: ${remoteKey}\n`]]);
+  assert.match(token(remote, loop).evidence, /\(job test\)/);
 });
 
 test('scanFindings: clean files give nothing, and a missing block alone is inferred', () => {

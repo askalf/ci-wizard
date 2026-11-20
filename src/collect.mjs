@@ -2,6 +2,7 @@ import { NotFoundError, RateLimitError } from './github.mjs';
 import { allJobTimeouts, assignJobRuns, parseWorkflow } from './workflow.mjs';
 import { duplicateUploads, repeatedTests } from './trim.mjs';
 import { zipEntries } from './zip.mjs';
+import { MAX_CALL_DEPTH, callsOf, isRemoteKey, remoteParts } from './reusable.mjs';
 
 // Reads what an audit needs from GitHub, read-only: up to 500 workflow runs from the window, the
 // jobs (with their steps) of the newest successful runs of the busiest workflows, those
@@ -12,6 +13,8 @@ import { zipEntries } from './zip.mjs';
 // Each segment of a file path percent-encoded: a name with ? or # would otherwise change which
 // file, or which ref, the contents API reads.
 const encodePath = (path) => String(path).split('/').map(encodeURIComponent).join('/');
+// At most this many reusable workflows of other repositories are read for one audit.
+const MAX_REUSABLE_READS = 12;
 
 const LOCKFILES = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock', 'poetry.lock', 'uv.lock', 'Pipfile.lock', 'go.sum', 'Cargo.lock', 'Gemfile.lock'];
 
@@ -318,6 +321,31 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
     else unreadable.push(path);
   });
   const scanned = { read: scanFiles.size, of: listed ? workflowPaths.length : null, unreadable };
+  // The reusable workflows those files call in other repositories, each read once at the called ref,
+  // and the ones those call in turn, up to GitHub's own nesting limit and twelve files: what such a
+  // call scans and how it scopes the token are in the called file. One that cannot be read (a private
+  // repository, a deleted ref) is kept as null, so the rules that read it say they could not.
+  const reusableFiles = new Map();
+  let calls = [...scanFiles.values()].flatMap((text) => callsOf(text)).map((c) => c.key).filter(isRemoteKey);
+  for (let depth = 0; depth < MAX_CALL_DEPTH && calls.length; depth++) {
+    const batch = [...new Set(calls)].filter((k) => !reusableFiles.has(k)).slice(0, Math.max(0, MAX_REUSABLE_READS - reusableFiles.size));
+    if (!batch.length) break;
+    const texts = await Promise.all(batch.map(async (k) => {
+      const p = remoteParts(k);
+      try {
+        return await client.getRaw(`repos/${p.owner}/${p.repo}/contents/${encodePath(p.path)}?ref=${encodeURIComponent(p.ref)}`);
+      } catch (e) {
+        if (e instanceof RateLimitError) throw e;
+        return null;
+      }
+    }));
+    calls = [];
+    batch.forEach((k, i) => {
+      const text = typeof texts[i] === 'string' ? texts[i] : null;
+      reusableFiles.set(k, text);
+      if (text) calls.push(...callsOf(text, remoteParts(k)).map((c) => c.key).filter(isRemoteKey));
+    });
+  }
   // The default branch, for advice that names it (a push trigger limited to it). Unknown when the
   // token cannot read the repository's metadata; the advice then says to fill it in.
   const defaultBranch = meta && typeof meta.default_branch === 'string' ? meta.default_branch : null;
@@ -329,7 +357,7 @@ export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutc
   const lockfiles = LOCKFILES.filter((f) => names.has(f)).sort();
   onProgress('reading merge gates');
   const gates = await collectGates(client, repo, { runs, byWf, defaultBranch, rootNames: Array.isArray(rootListing) ? names : null, jobsRaw, settle, settled });
-  return { runs, byWf, samples, sampleRunIds, outcomeSamples, scanFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, gates, only: wanted.length ? only : [], onlyMissing };
+  return { runs, byWf, samples, sampleRunIds, outcomeSamples, scanFiles, reusableFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, gates, only: wanted.length ? only : [], onlyMissing };
 }
 
 const PR_EVENTS = new Set(['pull_request', 'pull_request_target', 'merge_group']);
@@ -339,7 +367,7 @@ const RENOVATE_FILES = ['renovate.json', 'renovate.json5', '.renovaterc', '.reno
  * What guards a merge into the default branch, from what a read-only token can see: the required
  * status checks of the branch's rulesets (GET rules/branches) and of classic branch protection (the
  * branch's protection summary), the checks pull requests actually got (the jobs of each workflow's
- * newest pull request run in the window: a job's name is the check Actions reports), whether code
+ * newest successful pull request run in the window: a job's name is the check Actions reports), whether code
  * scanning runs, and whether dependency updates are configured. Anything that could not be read is
  * null (unknown), never "none".
  */
@@ -353,17 +381,20 @@ async function collectGates(client, repo, { runs, byWf, defaultBranch, rootNames
     }
   };
   const branch = defaultBranch ? encodeURIComponent(defaultBranch) : null;
-  // The newest completed pull request run of each workflow that ran on one in the window: a run
-  // still going may not have created all its jobs yet (a matrix computed by a setup job). Where only
-  // an unfinished run is there, its names still count as seen, but no absence is judged from it.
+  // The newest successful pull request run of each workflow that ran on one in the window: only a
+  // run that succeeded created every job it would. A run still going may not have created them all
+  // yet (a matrix computed by a setup job); a cancelled run, one waiting for a maintainer's approval
+  // or one that failed stops before its later jobs, and a matrix behind `needs:` is never expanded
+  // into the names a required check matches. Where no successful run is there, the newest other
+  // run's names still count as seen, but no absence is judged from them.
   const prRuns = [];
   let unfinishedOnly = false;
   for (const rs of byWf.values()) {
-    const done = rs.find((r) => PR_EVENTS.has(r.event) && r.status === 'completed');
-    const any = done || rs.find((r) => PR_EVENTS.has(r.event));
+    const ok = rs.find((r) => PR_EVENTS.has(r.event) && r.status === 'completed' && r.conclusion === 'success');
+    const any = ok || rs.find((r) => PR_EVENTS.has(r.event) && r.status === 'completed') || rs.find((r) => PR_EVENTS.has(r.event));
     if (!any) continue;
     prRuns.push(any);
-    if (!done) unfinishedOnly = true;
+    if (!ok) unfinishedOnly = true;
   }
   const [rules, branchInfo, githubDir, ...prJobLists] = await Promise.all([
     branch ? soft(client.get(`repos/${repo}/rules/branches/${branch}?per_page=100`)) : { ok: false, value: null },

@@ -4,6 +4,7 @@
 // and each finding names the file, job and step it found.
 import { parseWorkflow } from './workflow.mjs';
 import { evaluate, expressionSpans, parseExpr } from './expr.mjs';
+import { MAX_CALL_DEPTH, baseOf, callKey, calledText } from './reusable.mjs';
 
 /** Owners whose actions GitHub itself publishes. */
 const FIRST_PARTY = new Set(['actions', 'github']);
@@ -287,9 +288,9 @@ export function scanWorkflow(text) {
   // none on a job leaves that job the repository's default, which the audit cannot read (read-only
   // for repositories created since February 2023, write on many older ones).
   const isWriteAll = (p) => typeof p === 'string' && p.trim().toLowerCase() === 'write-all';
-  // A reusable-workflow call with no permissions of its own passes the caller's token on: the called
-  // workflow can narrow it, but the audit does not read that workflow, so the call counts as
-  // unscoped like any other job.
+  // A reusable-workflow call with no permissions of its own passes the caller's token on, and the
+  // called workflow can narrow it: scanFindings reads the called file and drops the call from this
+  // list when it does (calledScoped).
   const jobs = jobsOf(doc);
   const writeAll = isWriteAll(doc.permissions) ? ['(workflow)'] : jobs.filter(([, j]) => isWriteAll(j.permissions)).map(([id]) => id);
   const unscoped = doc.permissions === undefined ? jobs.filter(([, j]) => j.permissions === undefined).map(([id]) => id) : [];
@@ -299,9 +300,36 @@ export function scanWorkflow(text) {
 const list = (xs, n = 5) => `${xs.slice(0, n).join('; ')}${xs.length > n ? ` and ${xs.length - n} more` : ''}`;
 const where = (paths) => (paths.length === 1 ? paths[0] : `${paths.length} workflow files: ${list(paths, 4)}`);
 
+/**
+ * Whether the reusable workflow a call names scopes the token itself: a permissions block at its
+ * top, or on every job of it (a job that is itself a call counts when the file it calls does). The
+ * caller's token is the most the called jobs get, and the called file can only narrow it. False when
+ * the file is not held (a remote file collect did not read, or one it could not). `path` holds the
+ * files on this chain of calls, so a call back into one of them stops; each job follows its own
+ * chain, so two jobs calling the same file are each judged. Pure.
+ */
+function calledScoped(uses, base, { files, reusable }, path = new Set(), depth = 0) {
+  const key = callKey(uses, base);
+  if (!key || path.has(key) || depth >= MAX_CALL_DEPTH) return false;
+  const text = calledText(key, { files, remote: reusable });
+  if (typeof text !== 'string') return false;
+  const doc = parseWorkflow(text);
+  if (doc.permissions !== undefined) return true;
+  const jobs = jobsOf(doc);
+  const chain = new Set([...path, key]);
+  return jobs.length > 0 && jobs.every(([, j]) => j.permissions !== undefined
+    || (typeof j.uses === 'string' && calledScoped(j.uses, baseOf(key), { files, reusable }, chain, depth + 1)));
+}
+
 /** The scan findings for a repository's workflow files (path -> text), one per kind. */
-export function scanFindings(files, { repo = null } = {}) {
-  const scans = [...files].map(([path, text]) => ({ path, ...scanWorkflow(text) })).filter((s) => s.parsed);
+export function scanFindings(files, { repo = null, reusable = new Map() } = {}) {
+  const scans = [...files].map(([path, text]) => {
+    const scan = scanWorkflow(text);
+    // A job that calls a reusable workflow which scopes the token itself is not left the default.
+    const jobs = scan.unscoped.length ? (parseWorkflow(text).jobs || {}) : {};
+    const unscoped = scan.unscoped.filter((id) => !(jobs[id] && typeof jobs[id].uses === 'string' && calledScoped(jobs[id].uses, null, { files, reusable })));
+    return { path, ...scan, unscoped };
+  }).filter((s) => s.parsed);
   const F = [];
 
   const unpinned = scans.flatMap((s) => s.unpinned.map((u) => ({ ...u, path: s.path })));
@@ -368,7 +396,7 @@ export function scanFindings(files, { repo = null } = {}) {
     const confirmed = writeAll.length > 0;
     const parts = [];
     if (writeAll.length) parts.push(`write-all in ${list(writeAll.map((s) => `${s.path} (${s.writeAll.join(', ')})`), 4)}`);
-    if (unscoped.length) parts.push(`no permissions block in ${list(unscoped.map((s) => s.path), 4)}, so its jobs get the repository's default token, which is write access on many repositories created before February 2023`);
+    if (unscoped.length) parts.push(`no permissions block for ${list(unscoped.map((s) => `${s.path} (job${s.unscoped.length === 1 ? '' : 's'} ${list(s.unscoped, 4)})`), 4)}, so ${unscoped.length === 1 && unscoped[0].unscoped.length === 1 ? 'that job gets' : 'those jobs get'} the repository's default token, which is write access on many repositories created before February 2023`);
     F.push({
       saving: 0, unit: 'risk', confidence: confirmed ? 'confirmed' : 'inferred', what: 'job token wider than the job',
       workflow: where([...new Set([...writeAll, ...unscoped].map((s) => s.path))]),
