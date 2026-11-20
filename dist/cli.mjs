@@ -11376,7 +11376,7 @@ function compare2(before, after) {
 }
 
 // src/version.mjs
-var VERSION = "0.4.3";
+var VERSION = "0.4.4";
 
 // src/index.mjs
 var MAX_RUNS_LIMIT = 1e3;

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.4
+
+- The README, rewritten: the one-line `npx` and a picture of the HTML report from a real audit up
+  front, every CLI option in a table, a "Rate limits" section (the one the CLI's rate-limit hint
+  names), and one section for requirements and limits. The picture's address is absolute, so it
+  shows on npm too. No code changed.
+
 ## 0.4.3
 
 - `--max-runs N` (CLI) and `maxRuns` (`audit()`): the most workflow runs read from the window, a
