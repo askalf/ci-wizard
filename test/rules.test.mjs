@@ -2,8 +2,8 @@
 // mutant of the rule (a dropped condition, a moved threshold) fails here.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyse, THRESHOLDS } from '../src/analyse.mjs';
-import { data, find, job, run, runs } from './helpers.mjs';
+import { analyse, rerunSeconds, THRESHOLDS } from '../src/analyse.mjs';
+import { data, find, job, run, runs, t } from './helpers.mjs';
 
 const NODE_STEPS = (install) => [['Set up job', 1], ['Run actions/checkout@v4', 2], ['Run actions/setup-node@v4', 3], ['Install', install], ['Run tests', 40], ['Complete job', 0]];
 const file = (setupWith = '', extra = '') => `name: CI
@@ -173,6 +173,26 @@ test('the same commit runs twice: without a timed run of both kinds the mean pri
   assert.match(g.evidence, /no push or pull request run of a duplicated commit was timed/);
 });
 
+test('the same commit runs twice: runs collect timed for the rule alone price the duplicate when the newest successes hold none', () => {
+  const rs = dupRuns(10);
+  const push = rs.find((r) => r.event === 'push');
+  const pr = rs.find((r) => r.event === 'pull_request');
+  // The newest successes are of no duplicated commit (a job naming no run); the extra runs are.
+  const dup = [
+    { id: push.id, jobs: [job({ steps: [['Run tests', 600]], wait: 0, head: 0, tail: 0 })] },
+    { id: pr.id, jobs: [job({ steps: [['Publish preview', 60]], wait: 0, head: 0, tail: 0 })] },
+  ];
+  const a = audit([{ name: 'CI', runs: rs, dupRuns: dup, file: dupFile("main, 'feat/*'", 'x') }]);
+  const [f] = find(a, 'the same commit runs twice');
+  assert.ok(f, JSON.stringify(a.findings));
+  assert.equal(f.saving_min_week, 10);
+  assert.match(f.evidence, /the cheaper of the two is the pull request run, 60 s of job time \(the mean of 1 timed pull request run\)/);
+  // An extra run of a commit that did not run on both events does not price it.
+  const lone = run({ event: 'pull_request', sha: 'lone', branch: 'patch-1' });
+  const [g] = find(audit([{ name: 'CI', runs: [...rs, lone], dupRuns: [dup[0], { id: lone.id, jobs: dup[1].jobs }], file: dupFile("main, 'feat/*'", 'x') }]), 'the same commit runs twice');
+  assert.match(g.evidence, /no pull request run of a duplicated commit was timed/);
+});
+
 test('the same commit runs twice: under the weekly threshold is left alone', () => {
   const a = audit([{ name: 'CI', runs: dupRuns(THRESHOLDS.duplicateCommitsWeek - 1), file: dupFile("main, 'feat/*'", 'x') }]);
   assert.equal(find(a, 'the same commit runs twice').length, 0);
@@ -202,6 +222,43 @@ test('reruns: one repository-level finding across workflows', () => {
   assert.equal(f.length, 1);
   assert.equal(f[0].workflow, 'all workflows');
   assert.match(f[0].evidence, /^2 re-attempted runs/);
+});
+
+// A run's jobs of every attempt, as the jobs API lists them with filter=all: attempt 2 lists every
+// job again, the ones kept from attempt 1 with attempt 1's times.
+const attempts = (keptSeconds, rerunSeconds) => {
+  const a1 = [
+    { ...job({ steps: [['Run tests', keptSeconds]], wait: 0, head: 0, tail: 0 }), name: 'kept', run_attempt: 1 },
+    { ...job({ steps: [['Run tests', rerunSeconds]], wait: 0, head: 0, tail: 0 }), name: 'flaky', run_attempt: 1, conclusion: 'failure' },
+  ];
+  const again = { ...job({ steps: [['Run tests', rerunSeconds]], wait: 0, head: 0, tail: 0, at: 3600 }), name: 'flaky', run_attempt: 2 };
+  return [...a1, { ...a1[0], run_attempt: 2 }, again];
+};
+
+test('rerunSeconds: only the jobs a later attempt ran count, not the ones it kept from an earlier attempt', () => {
+  assert.equal(rerunSeconds(attempts(600, 60)), 60);
+  // Re-running every job counts every job.
+  const all = attempts(600, 60).map((j, i) => (i === 2 ? { ...j, started_at: t(3600), completed_at: t(4200) } : j));
+  assert.equal(rerunSeconds(all), 660);
+  assert.equal(rerunSeconds([]), 0);
+});
+
+test('reruns: priced at what the reruns read ran, not a whole run; a workflow with none read is priced at a whole run and said so', () => {
+  const ten = () => job({ steps: [['Run tests', 600]], wait: 0, head: 0, tail: 0 });
+  const a = audit([{ name: 'CI', runs: [run({ attempt: 2 }), run()], jobsPerRun: [[ten()]], rerunJobs: [attempts(600, 60)] }]);
+  const [f] = find(a, 'reruns');
+  assert.ok(f, JSON.stringify(a.findings));
+  assert.equal(f.saving_min_week, 1); // 1 rerun x the 1 minute it re-ran, not the 10-minute run
+  assert.equal(f.confidence, 'measured');
+  assert.match(f.evidence, /the later attempts of 1 read ran 60 s of job time each on the mean/);
+  const b = audit([
+    { name: 'CI', runs: [run({ attempt: 2 }), run()], jobsPerRun: [[ten()]], rerunJobs: [attempts(600, 60)] },
+    { name: 'Lint', path: '.github/workflows/lint.yml', runs: [run({ attempt: 2 }), run()], jobsPerRun: [[ten()]] },
+  ]);
+  const [g] = find(b, 'reruns');
+  assert.equal(g.saving_min_week, 11);
+  assert.equal(g.confidence, 'inferred');
+  assert.match(g.evidence, /1 rerun of Lint was not read and is priced at a whole run/);
 });
 
 test('matrix size: many jobs and many job-minutes per run is an option, not a fault; a small matrix is left alone', () => {

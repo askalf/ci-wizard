@@ -8,7 +8,7 @@ import { collect } from '../src/collect.mjs';
 import { createClient } from '../src/github.mjs';
 import { assignJobRuns, jobRunsOf, jobTimeouts, parseWorkflow } from '../src/workflow.mjs';
 import { report, savingText, summary } from '../src/report.mjs';
-import { data, fakeFetch, find, job, runs, t } from './helpers.mjs';
+import { data, fakeFetch, find, job, run, runs, t } from './helpers.mjs';
 
 /** One job of `seconds`, named `name`. */
 const timed = (seconds, name = 'test') => ({ ...job({ steps: [['Set up job', 0], ['Run tests', seconds - 3], ['Complete job', 0]], head: 1, tail: 2 }), name });
@@ -86,6 +86,32 @@ test('collect keeps the id of each sampled run beside its jobs, so a run whose j
   assert.ok(at >= 0, JSON.stringify(ids));
   assert.deepEqual(samples[at], []);
   assert.equal(samples[ids.indexOf(ran.id)].length, 1);
+});
+
+test('collect times runs of a commit that ran on both events beyond the newest successes, and reads a re-attempted run\'s jobs of every attempt', async () => {
+  // Newest first, as the API lists them: three pushes of their own commits, then a commit that ran
+  // on push and on a pull request, then a run that was re-attempted.
+  const lone = runs(3, { event: 'push' }).map((r, i) => ({ ...r, created_at: t(9000 - i * 10) }));
+  const push = run({ event: 'push', sha: 'dup1', at: 5000 });
+  const pr = run({ event: 'pull_request', sha: 'dup1', branch: 'feat/x', at: 4990 });
+  const retried = run({ event: 'push', attempt: 2, at: 4000 });
+  const list = [...lone, push, pr, retried].map((r) => ({ ...r, path: '.github/workflows/ci.yml' }));
+  const asked = [];
+  const everyAttempt = [{ ...timed(30), name: 'test', run_attempt: 1 }, { ...timed(30), name: 'test', run_attempt: 2, started_at: t(4100), completed_at: t(4130) }];
+  const fetchImpl = fakeFetch({
+    'repos/o/r/actions/runs?': { workflow_runs: list },
+    'repos/o/r/actions/runs/': { jobs: [timed(30)], total_count: 1 },
+    [`repos/o/r/actions/runs/${retried.id}/jobs?filter=all`]: { jobs: everyAttempt, total_count: 2 },
+    'repos/o/r/contents': [],
+  }, { calls: asked });
+  const d = await collect(createClient({ fetchImpl }), 'o/r', { perWorkflow: 3, perOutcome: 0, now: new Date(Date.parse(t(7 * 86400))) });
+  assert.deepEqual(d.sampleRunIds.get('CI'), lone.map((r) => r.id));
+  assert.deepEqual(d.dupSamples.get('CI').map((x) => x.id), [push.id, pr.id]);
+  assert.deepEqual(d.rerunSamples.get('CI'), [everyAttempt]);
+  assert.equal(asked.filter((u) => u.includes('/jobs?filter=all')).length, 1);
+  // What the analysis makes of them: the re-attempt re-ran one 30 s job.
+  const a = analyse('o/r', d);
+  assert.deepEqual(a.workflows[0].rerun_minutes, { minutes: 0.5, sampled: 1 });
 });
 
 test('the per-run savings multiply by the mean run', () => {

@@ -71,11 +71,11 @@ Outputs: `report-path`, `findings`.
 ### From the command line
 
 ```sh
-npx ci-wizard@0.4.0 owner/repo
-npx ci-wizard@0.4.0 owner/repo --save before.json      # keep a baseline
-npx ci-wizard@0.4.0 owner/repo --html audit.html       # a self-contained page
-npx ci-wizard@0.4.0 owner/repo --only CI --json        # one workflow, as JSON
-npx ci-wizard@0.4.0 compare before.json after.json     # did the fix work?
+npx ci-wizard@0.4.1 owner/repo
+npx ci-wizard@0.4.1 owner/repo --save before.json      # keep a baseline
+npx ci-wizard@0.4.1 owner/repo --html audit.html       # a self-contained page
+npx ci-wizard@0.4.1 owner/repo --only CI --json        # one workflow, as JSON
+npx ci-wizard@0.4.1 compare before.json after.json     # did the fix work?
 ```
 
 You can name the repository as `owner/repo`, a GitHub URL or an SSH remote. Leave it out and the
@@ -176,6 +176,8 @@ one that has a hostile contributor.
 - **What it reads.** Through the API only, these endpoints:
   - `GET /repos/{repo}/actions/runs` (up to 500 runs), `/actions/runs/{id}/jobs` and
     `/actions/workflows`;
+  - `/actions/runs/{id}/jobs?filter=all` for up to 3 re-attempted runs of each sampled workflow:
+    the jobs of every attempt, for what the later attempts re-ran;
   - `/actions/jobs/{id}/logs` for the jobs of each sampled workflow's newest successful run: the
     redirect it answers with, then a HEAD of the log file's address (no token) for its size. The
     log itself is downloaded (from that address, no token, up to 8 MB) only for a job the workflow

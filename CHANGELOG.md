@@ -1,6 +1,21 @@
 # Changelog
 
-## 0.4.0
+## 0.4.1
+
+Two savings that 0.4.0 overstated, found by auditing large public repositories with it:
+
+- **reruns** priced each re-attempted run at a whole run. Re-running only the failed jobs lists
+  every job again under the new attempt, the ones that passed with their first times, so on a
+  35-job matrix where one job failed and was re-run, the rule counted 35 jobs for the work of
+  one. Now the jobs of every attempt of up to 3 re-attempted runs per sampled workflow are read
+  (one new request form, `jobs?filter=all`), and a rerun costs the jobs its later attempts ran.
+  A workflow none of whose reruns was read is still priced at a whole run, and the evidence
+  names it; the finding is then inferred rather than measured.
+- **the same commit runs twice** fell back to the workflow's mean run whenever the newest
+  successful runs held no run of a duplicated commit, which on a busy repository is a matter of
+  timing. Now older successful runs of such commits are timed for the rule until there are two
+  of each kind, so the cheaper of the two runs prices the duplicate whenever the window holds a
+  successful run of each kind from such a commit.
 
 Setups a self-hosted host already carries, and logs nobody reads. Found by hand on a self-hosted
 repository on 2026-11-08 (an 80 s job with a 471 KB log, cut to 17 s and 41 KB), now rules:

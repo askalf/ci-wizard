@@ -160,6 +160,27 @@ export function duplicateCommits(workflowRuns) {
   return [...eventsByCommit.values()].filter((events) => events.has('push') && (events.has('pull_request') || events.has('pull_request_target'))).length;
 }
 
+/**
+ * The job time a re-attempted run's later attempts ran, in seconds, from its jobs of every attempt
+ * (the jobs API with filter=all). Re-running only the failed jobs lists every job again under the
+ * new attempt, the ones that passed with their earlier times: a job of a later attempt counts only
+ * when no earlier attempt has a job of that name that started at the same moment. Pure.
+ */
+export function rerunSeconds(jobs) {
+  const ran = (jobs || [])
+    .filter((j) => j && j.started_at && j.completed_at && j.conclusion !== 'skipped')
+    .sort((a, b) => (a.run_attempt || 1) - (b.run_attempt || 1));
+  const seen = new Set();
+  let total = 0;
+  for (const j of ran) {
+    const key = `${j.name}\u0000${j.started_at}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if ((j.run_attempt || 1) > 1) total += secs(j.started_at, j.completed_at);
+  }
+  return total;
+}
+
 /** Pull request runs still going when a newer commit on the same branch started its run, and not cancelled. */
 export function outdatedRuns(workflowRuns) {
   const runsByBranch = new Map();
@@ -189,8 +210,12 @@ export function longestSteps(workStepSeconds) {
     .map((s) => ({ ...s, median_s: Math.round(s.median_s) }));
 }
 
-/** Measures one workflow from its runs, its sampled jobs and its file. */
-export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor, repo = 'owner/repo', outcomeRuns = {}, sampleRunIds = []) {
+/**
+ * Measures one workflow from its runs, its sampled jobs and its file. `dupRuns`: further timed
+ * runs of commits that ran on both a push and a pull request ({ id, jobs }); `rerunJobs`: the jobs
+ * of every attempt of each re-attempted run read (collect's dupSamples and rerunSamples).
+ */
+export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor, repo = 'owner/repo', outcomeRuns = {}, sampleRunIds = [], { dupRuns = [], rerunJobs = [] } = {}) {
   const doc = parseWorkflow(fileText);
   const facts = workflowFacts(doc);
   const timing = timeJobs(sampledRuns, stepCommands(doc));
@@ -251,6 +276,14 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     const events = eventsOfCommit.get(r.head_sha);
     if (kind && events.has('push') && events.has('pull_request')) secondsByKind[kind].push(timing.jobSecondsPerRun[i]);
   });
+  // The runs collect timed for this rule alone, beyond the newest successes: the same sum of their
+  // jobs' times as a sampled run's.
+  for (const { id, jobs } of dupRuns) {
+    const r = runById.get(id);
+    const kind = r ? (r.event === 'push' ? 'push' : PR_EVENTS.has(r.event) ? 'pull_request' : null) : null;
+    const events = r ? eventsOfCommit.get(r.head_sha) : null;
+    if (kind && events.has('push') && events.has('pull_request')) secondsByKind[kind].push(sum((jobs || []).map((j) => secs(j.started_at, j.completed_at))));
+  }
   const kindCost = (xs) => (xs.length ? { minutes: round(mean(xs) / 60, 2), sampled: xs.length } : null);
   const successfulWalls = workflowRuns
     .filter((r) => r.status === 'completed' && r.conclusion === 'success' && r.run_started_at)
@@ -332,6 +365,8 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     longest_job_s: timing.jobLengths.length ? Math.max(...timing.jobLengths) : 0,
     median_job_s: median(timing.jobLengths),
     reruns_raw: reruns,
+    // What one rerun ran, from the re-attempted runs read: null when none was.
+    rerun_minutes: kindCost(rerunJobs.map(rerunSeconds)),
     npm_install_no_ci: facts.npmInstallNoCi,
     prefer_offline: facts.preferOffline,
     caches_node_modules: facts.cachesNodeModules,
@@ -821,13 +856,31 @@ export function repoFindings(workflows) {
   }
   const reruns = sum(workflows.map((w) => w.reruns_raw));
   if (reruns) {
+    // A rerun costs what its later attempts ran, measured from the re-attempted runs collect read:
+    // re-running only the failed jobs keeps the jobs that passed. A workflow none of whose reruns
+    // was read prices them at a whole run, which overstates a rerun of the failed jobs alone, and
+    // the evidence says so.
+    const rerunning = workflows.filter((w) => w.reruns_raw);
+    const read = rerunning.filter((w) => w.rerun_minutes);
+    const unread = rerunning.filter((w) => !w.rerun_minutes);
+    const perRerun = (w) => (w.rerun_minutes ? w.rerun_minutes.minutes : w.job_minutes_per_run_mean ?? w.job_minutes_per_run);
+    let evidence = `${reruns} re-attempted run${reruns === 1 ? '' : 's'} in the window across the sampled workflows`;
+    if (read.length) {
+      const n = sum(read.map((w) => w.rerun_minutes.sampled));
+      const minutes = sum(read.map((w) => w.rerun_minutes.minutes * w.rerun_minutes.sampled)) / n;
+      evidence += `; the later attempts of ${n} read ran ${fmtS(minutes * 60)} of job time each on the mean (a rerun of the failed jobs alone keeps the jobs that passed), which prices the reruns of ${read.map((w) => w.workflow).join(', ')}`;
+    }
+    if (unread.length) {
+      const n = sum(unread.map((w) => w.reruns_raw));
+      evidence += `; ${n} rerun${n === 1 ? '' : 's'} of ${unread.map((w) => w.workflow).join(', ')} ${n === 1 ? 'was' : 'were'} not read and ${n === 1 ? 'is' : 'are'} priced at a whole run, which overstates a rerun of the failed jobs alone`;
+    }
     F.push({
-      saving: sum(workflows.map((w) => w.reruns_week * (w.job_minutes_per_run_mean ?? w.job_minutes_per_run))), workflow: 'all workflows', what: 'reruns',
-      evidence: `${reruns} re-attempted run${reruns === 1 ? '' : 's'} in the window across the sampled workflows`,
+      saving: sum(rerunning.map((w) => w.reruns_week * perRerun(w))), workflow: 'all workflows', what: 'reruns',
+      evidence,
       fix: 'find the flaky step from the failed attempts and fix or quarantine it; each rerun also costs a developer a wait',
       tradeoff: 'quarantining hides a real failure until someone looks',
       example: '',
-      confidence: 'measured', unit: 'job',
+      confidence: unread.length ? 'inferred' : 'measured', unit: 'job',
     });
   }
   return F;
@@ -950,7 +1003,10 @@ function analyseParsed(repo, data) {
     if (!jobsPerRun.length) continue;
     const rs = data.byWf.get(wf);
     const path = String(rs[0].path || '').split('@')[0];
-    workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || '', week, repo, (data.outcomeSamples && data.outcomeSamples.get(wf)) || {}, (data.sampleRunIds && data.sampleRunIds.get(wf)) || []));
+    workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || '', week, repo, (data.outcomeSamples && data.outcomeSamples.get(wf)) || {}, (data.sampleRunIds && data.sampleRunIds.get(wf)) || [], {
+      dupRuns: (data.dupSamples && data.dupSamples.get(wf)) || [],
+      rerunJobs: (data.rerunSamples && data.rerunSamples.get(wf)) || [],
+    }));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
   const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === 'public' ? true : data.visibility ? 'private' : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || new Map()), ...scanFindings(data.scanFiles || new Map(), { repo, reusable: data.reusableFiles || new Map() }), ...gateFindings(data.gates, { scanFiles: data.scanFiles || new Map(), reusable: data.reusableFiles || new Map(), scanned: data.scanned, visibility: data.visibility })];

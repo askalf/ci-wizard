@@ -43,6 +43,8 @@ export function data({ workflows, coveredDays = 7, lockfiles = [] }) {
   const byWf = new Map();
   const samples = new Map();
   const sampleRunIds = new Map();
+  const dupSamples = new Map();
+  const rerunSamples = new Map();
   const files = new Map();
   for (const w of workflows) {
     const path = w.path || '.github/workflows/ci.yml';
@@ -51,9 +53,11 @@ export function data({ workflows, coveredDays = 7, lockfiles = [] }) {
     byWf.set(w.name, rs);
     samples.set(w.name, w.jobsPerRun || [[job()]]);
     if (w.runIds) sampleRunIds.set(w.name, w.runIds);
+    if (w.dupRuns) dupSamples.set(w.name, w.dupRuns);
+    if (w.rerunJobs) rerunSamples.set(w.name, w.rerunJobs);
     if (w.file !== undefined) files.set(path, w.file);
   }
-  return { runs, byWf, samples, sampleRunIds, coveredDays, since: t(-7 * 86400), files, lockfiles };
+  return { runs, byWf, samples, sampleRunIds, dupSamples, rerunSamples, coveredDays, since: t(-7 * 86400), files, lockfiles };
 }
 
 /** n runs of one workflow spread over the window, all with the given fields. */

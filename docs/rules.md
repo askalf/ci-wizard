@@ -25,8 +25,9 @@ successful runs, and failed, cancelled and timed-out runs at the mean of up to t
 each, since a failure often stops early and a timeout runs to its limit. An outcome with no run
 sampled is costed like a success and marked (`cost_by_outcome`). Runs that ran no job (skipped,
 waiting for approval, failed to start, stale) cost nothing. The typical run in the table is the
-median successful run; the savings that multiply a per-run cost (duplicates, outdated runs, reruns)
-use the mean, because they add up to a total.
+median successful run; the savings that multiply a per-run cost (duplicates, outdated runs) use
+the mean, because they add up to a total. A rerun is priced at what its later attempts ran
+(below), not at a whole run.
 
 **Estimates.** Weekly figures scale the sampled window to 7 days. A saving is a formula over
 measured time, never the result of running the fix; the formulas are below. Thresholds live in
@@ -297,10 +298,13 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   different groups, so neither cancels the other.
 - **Estimate** the duplicate commits a week, times the cheaper of the two runs: the mean job time
   of the sampled push runs, or of the sampled pull request runs, whichever is less, counting only
-  runs of commits that ran on both. A job a run skips by an `if:` costs it nothing, so a pull
-  request run that skips the tests is priced as the short run it is, and a pull request from a
-  fork, which has no push run here, does not price it. Without a timed run of both kinds among the
-  duplicated commits, the workflow's mean run prices it, and the evidence says so.
+  runs of commits that ran on both. Where the newest successful runs hold fewer than two of a kind
+  from such commits, older successful runs of that kind from such commits are timed for this rule
+  until there are two, so the newest runs need not hold one. A job a run skips by an `if:` costs
+  it nothing, so a pull request run that skips the tests is priced as the short run it is, and a
+  pull request from a fork, which has no push run here, does not price it. Without a timed run of
+  both kinds among the duplicated commits, the workflow's mean run prices it, and the evidence
+  says so.
 - **Branches** "beyond the default branch" uses the repository's default branch as the API reports
   it, or main and master when it cannot be read. The push-trigger example names that branch, and
   when it is unknown says to fill it in, rather than guessing `main`.
@@ -645,9 +649,17 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 
 ## reruns
 
-- **Fires when** any sampled run was re-attempted (run attempt above 1). One finding for the
-  repository.
-- **Confidence** measured.
-- **Estimate** re-attempted runs a week, times each workflow's job-minutes per run.
+- **Fires when** any run of a sampled workflow was re-attempted (run attempt above 1). One
+  finding for the repository.
+- **Confidence** measured when a rerun of every such workflow was read; inferred otherwise, and
+  the evidence names the workflows priced at a whole run.
+- **Estimate** re-attempted runs a week, times what a rerun ran: the jobs of every attempt of up
+  to 3 completed re-attempted runs of each workflow are read (`jobs?filter=all`), and a job of a
+  later attempt counts only when no earlier attempt has a job of that name that started at the
+  same moment. Re-running only the failed jobs lists every job again under the new attempt, the
+  ones that passed with their first times, so a rerun of one failed job of a large matrix costs
+  that job, not the matrix. A workflow none of whose reruns was read (none had completed, or the
+  list could not be read whole) prices them at its mean run, which overstates a rerun of the
+  failed jobs alone.
 - **Fix** find the flaky step from the failed attempts and fix or quarantine it. *Trade-off:*
   quarantining hides a real failure until someone looks.

@@ -8896,6 +8896,10 @@ var baseOf = (key) => isRemoteKey(key) ? remoteParts(key) : null;
 // src/collect.mjs
 var encodePath = (path) => String(path).split("/").map(encodeURIComponent).join("/");
 var MAX_REUSABLE_READS = 12;
+var DUP_RUNS_PER_KIND = 2;
+var RERUNS_PER_WORKFLOW = 3;
+var PULL_REQUEST_EVENTS = /* @__PURE__ */ new Set(["pull_request", "pull_request_target"]);
+var kindOf = (r) => r.event === "push" ? "push" : PULL_REQUEST_EVENTS.has(r.event) ? "pull_request" : null;
 var LOCKFILES = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock", "poetry.lock", "uv.lock", "Pipfile.lock", "go.sum", "Cargo.lock", "Gemfile.lock"];
 function groupRuns(runs, names = /* @__PURE__ */ new Map()) {
   const groups = /* @__PURE__ */ new Map();
@@ -8996,23 +9000,31 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   const sampleRunIds = /* @__PURE__ */ new Map();
   const outcomeSamples = /* @__PURE__ */ new Map();
   const rawJobs = /* @__PURE__ */ new Map();
-  const jobsRaw = (r) => {
-    if (!rawJobs.has(r.id)) {
-      rawJobs.set(r.id, (async () => {
-        const url = (page) => `repos/${repo}/actions/runs/${r.id}/jobs?per_page=100&page=${page}`;
-        const first2 = await client.get(url(1));
-        if (!first2) return null;
-        const jobs = [...first2.jobs || []];
-        const total2 = Number.isFinite(first2.total_count) ? first2.total_count : jobs.length;
-        const pages = Math.min(10, Math.ceil(total2 / 100));
-        if (pages > 1) {
-          const rest = await Promise.all(Array.from({ length: pages - 1 }, (_, i) => client.get(url(i + 2))));
-          for (const d of rest) if (d) jobs.push(...d.jobs || []);
-        }
-        return { ...first2, jobs, complete: jobs.length >= total2 };
-      })());
+  const pagedJobs = async (r, query = "") => {
+    const url = (page) => `repos/${repo}/actions/runs/${r.id}/jobs?${query}per_page=100&page=${page}`;
+    const first2 = await client.get(url(1));
+    if (!first2) return null;
+    const jobs = [...first2.jobs || []];
+    const total2 = Number.isFinite(first2.total_count) ? first2.total_count : jobs.length;
+    const pages = Math.min(10, Math.ceil(total2 / 100));
+    if (pages > 1) {
+      const rest = await Promise.all(Array.from({ length: pages - 1 }, (_, i) => client.get(url(i + 2))));
+      for (const d of rest) if (d) jobs.push(...d.jobs || []);
     }
+    return { ...first2, jobs, complete: jobs.length >= total2 };
+  };
+  const jobsRaw = (r) => {
+    if (!rawJobs.has(r.id)) rawJobs.set(r.id, pagedJobs(r));
     return rawJobs.get(r.id);
+  };
+  const attemptsOf = async (r) => {
+    try {
+      const j = await pagedJobs(r, "filter=all&");
+      return j && j.complete ? j.jobs : null;
+    } catch (e) {
+      if (e instanceof RateLimitError) throw e;
+      return null;
+    }
   };
   const jobsOf3 = async (r) => {
     const j = await jobsRaw(r);
@@ -9024,8 +9036,24 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
     onProgress(`timing ${wf} (${n + 1}/${top.length})`);
     const ok = rs.filter((r) => r.status === "completed" && r.conclusion === "success").slice(0, perWorkflow);
     const outcomes = ["failure", "cancelled", "timed_out"].map((outcome) => [outcome, rs.filter((r) => r.status === "completed" && r.conclusion === outcome).slice(0, perOutcome)]);
-    const [okJobs, ...outcomeJobs] = await Promise.all([
+    const kindsOfCommit = /* @__PURE__ */ new Map();
+    for (const r of rs) {
+      const kind = kindOf(r);
+      if (!kind) continue;
+      if (!kindsOfCommit.has(r.head_sha)) kindsOfCommit.set(r.head_sha, /* @__PURE__ */ new Set());
+      kindsOfCommit.get(r.head_sha).add(kind);
+    }
+    const ofDupCommit = (r) => kindOf(r) && (kindsOfCommit.get(r.head_sha) || /* @__PURE__ */ new Set()).size === 2;
+    const okIds = new Set(ok.map((r) => r.id));
+    const dupPicked = ["push", "pull_request"].flatMap((kind) => {
+      const held = ok.filter((r) => ofDupCommit(r) && kindOf(r) === kind).length;
+      return rs.filter((r) => !okIds.has(r.id) && r.status === "completed" && r.conclusion === "success" && kindOf(r) === kind && ofDupCommit(r)).slice(0, Math.max(0, DUP_RUNS_PER_KIND - held));
+    });
+    const rerunPicked = rs.filter((r) => r.status === "completed" && (r.run_attempt || 1) > 1).slice(0, RERUNS_PER_WORKFLOW);
+    const [okJobs, dupJobs, rerunJobs, ...outcomeJobs] = await Promise.all([
       Promise.all(ok.map(jobsOf3)),
+      Promise.all(dupPicked.map(jobsOf3)),
+      Promise.all(rerunPicked.map(attemptsOf)),
       ...outcomes.map(([, picked]) => Promise.all(picked.map(jobsOf3)))
     ]);
     const byOutcome = {};
@@ -9034,12 +9062,17 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
       if (got.length) byOutcome[outcome] = got;
     });
     const okRuns = ok.map((r, i) => [r.id, okJobs[i]]).filter(([, jobs]) => jobs);
-    return [wf, okRuns.map(([, jobs]) => jobs), byOutcome, okRuns.map(([id]) => id)];
+    const dupRuns = dupPicked.map((r, i) => ({ id: r.id, jobs: dupJobs[i] })).filter((d) => d.jobs);
+    return [wf, okRuns.map(([, jobs]) => jobs), byOutcome, okRuns.map(([id]) => id), dupRuns, rerunJobs.filter(Boolean)];
   }));
-  for (const [wf, jobsPerRun, byOutcome, runIds] of timed) {
+  const dupSamples = /* @__PURE__ */ new Map();
+  const rerunSamples = /* @__PURE__ */ new Map();
+  for (const [wf, jobsPerRun, byOutcome, runIds, dupRuns, rerunJobs] of timed) {
     samples.set(wf, jobsPerRun);
     sampleRunIds.set(wf, runIds);
     outcomeSamples.set(wf, byOutcome);
+    dupSamples.set(wf, dupRuns);
+    rerunSamples.set(wf, rerunJobs);
   }
   if (logs && typeof client.sizeOf === "function") {
     onProgress("reading log sizes");
@@ -9156,7 +9189,7 @@ async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2
   const lockfiles = LOCKFILES.filter((f) => names.has(f)).sort();
   onProgress("reading merge gates");
   const gates = await collectGates(client, repo, { runs, byWf, defaultBranch, rootNames: Array.isArray(rootListing) ? names : null, jobsRaw, settle, settled });
-  return { runs, byWf, samples, sampleRunIds, outcomeSamples, scanFiles, reusableFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, gates, only: wanted.length ? only : [], onlyMissing };
+  return { runs, byWf, samples, sampleRunIds, outcomeSamples, dupSamples, rerunSamples, scanFiles, reusableFiles, scanned, coveredDays, truncated, since, files, lockfiles, defaultBranch, visibility, gates, only: wanted.length ? only : [], onlyMissing };
 }
 var PR_EVENTS = /* @__PURE__ */ new Set(["pull_request", "pull_request_target", "merge_group"]);
 var RENOVATE_FILES = ["renovate.json", "renovate.json5", ".renovaterc", ".renovaterc.json", ".renovaterc.json5"];
@@ -10071,6 +10104,18 @@ function duplicateCommits(workflowRuns) {
   }
   return [...eventsByCommit.values()].filter((events) => events.has("push") && (events.has("pull_request") || events.has("pull_request_target"))).length;
 }
+function rerunSeconds(jobs) {
+  const ran = (jobs || []).filter((j) => j && j.started_at && j.completed_at && j.conclusion !== "skipped").sort((a, b) => (a.run_attempt || 1) - (b.run_attempt || 1));
+  const seen = /* @__PURE__ */ new Set();
+  let total = 0;
+  for (const j of ran) {
+    const key = `${j.name}\0${j.started_at}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if ((j.run_attempt || 1) > 1) total += secs(j.started_at, j.completed_at);
+  }
+  return total;
+}
 function outdatedRuns(workflowRuns) {
   const runsByBranch = /* @__PURE__ */ new Map();
   for (const r of workflowRuns) {
@@ -10092,7 +10137,7 @@ function outdatedRuns(workflowRuns) {
 function longestSteps(workStepSeconds) {
   return [...workStepSeconds.entries()].map(([step, seconds]) => ({ step, median_s: median(seconds), seen: seconds.length })).sort((a, b) => b.median_s - a.median_s || (a.step < b.step ? 1 : a.step > b.step ? -1 : 0) || b.seen - a.seen).slice(0, 3).map((s) => ({ ...s, median_s: Math.round(s.median_s) }));
 }
-function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor, repo = "owner/repo", outcomeRuns = {}, sampleRunIds = []) {
+function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, weekFactor, repo = "owner/repo", outcomeRuns = {}, sampleRunIds = [], { dupRuns = [], rerunJobs = [] } = {}) {
   const doc = parseWorkflow(fileText);
   const facts = workflowFacts(doc);
   const timing = timeJobs(sampledRuns, stepCommands(doc));
@@ -10132,6 +10177,12 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     const events2 = eventsOfCommit.get(r.head_sha);
     if (kind && events2.has("push") && events2.has("pull_request")) secondsByKind[kind].push(timing.jobSecondsPerRun[i]);
   });
+  for (const { id, jobs } of dupRuns) {
+    const r = runById.get(id);
+    const kind = r ? r.event === "push" ? "push" : PR_EVENTS2.has(r.event) ? "pull_request" : null : null;
+    const events2 = r ? eventsOfCommit.get(r.head_sha) : null;
+    if (kind && events2.has("push") && events2.has("pull_request")) secondsByKind[kind].push(sum((jobs || []).map((j) => secs(j.started_at, j.completed_at))));
+  }
   const kindCost = (xs) => xs.length ? { minutes: round(mean(xs) / 60, 2), sampled: xs.length } : null;
   const successfulWalls = workflowRuns.filter((r) => r.status === "completed" && r.conclusion === "success" && r.run_started_at).map((r) => secs(r.run_started_at, r.updated_at));
   const reruns = workflowRuns.filter((r) => (r.run_attempt || 1) > 1).length;
@@ -10209,6 +10260,8 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     longest_job_s: timing.jobLengths.length ? Math.max(...timing.jobLengths) : 0,
     median_job_s: median(timing.jobLengths),
     reruns_raw: reruns,
+    // What one rerun ran, from the re-attempted runs read: null when none was.
+    rerun_minutes: kindCost(rerunJobs.map(rerunSeconds)),
     npm_install_no_ci: facts.npmInstallNoCi,
     prefer_offline: facts.preferOffline,
     caches_node_modules: facts.cachesNodeModules,
@@ -10685,15 +10738,29 @@ function repoFindings(workflows) {
   }
   const reruns = sum(workflows.map((w) => w.reruns_raw));
   if (reruns) {
+    const rerunning = workflows.filter((w) => w.reruns_raw);
+    const read = rerunning.filter((w) => w.rerun_minutes);
+    const unread = rerunning.filter((w) => !w.rerun_minutes);
+    const perRerun = (w) => w.rerun_minutes ? w.rerun_minutes.minutes : w.job_minutes_per_run_mean ?? w.job_minutes_per_run;
+    let evidence = `${reruns} re-attempted run${reruns === 1 ? "" : "s"} in the window across the sampled workflows`;
+    if (read.length) {
+      const n = sum(read.map((w) => w.rerun_minutes.sampled));
+      const minutes = sum(read.map((w) => w.rerun_minutes.minutes * w.rerun_minutes.sampled)) / n;
+      evidence += `; the later attempts of ${n} read ran ${fmtS(minutes * 60)} of job time each on the mean (a rerun of the failed jobs alone keeps the jobs that passed), which prices the reruns of ${read.map((w) => w.workflow).join(", ")}`;
+    }
+    if (unread.length) {
+      const n = sum(unread.map((w) => w.reruns_raw));
+      evidence += `; ${n} rerun${n === 1 ? "" : "s"} of ${unread.map((w) => w.workflow).join(", ")} ${n === 1 ? "was" : "were"} not read and ${n === 1 ? "is" : "are"} priced at a whole run, which overstates a rerun of the failed jobs alone`;
+    }
     F.push({
-      saving: sum(workflows.map((w) => w.reruns_week * (w.job_minutes_per_run_mean ?? w.job_minutes_per_run))),
+      saving: sum(rerunning.map((w) => w.reruns_week * perRerun(w))),
       workflow: "all workflows",
       what: "reruns",
-      evidence: `${reruns} re-attempted run${reruns === 1 ? "" : "s"} in the window across the sampled workflows`,
+      evidence,
       fix: "find the flaky step from the failed attempts and fix or quarantine it; each rerun also costs a developer a wait",
       tradeoff: "quarantining hides a real failure until someone looks",
       example: "",
-      confidence: "measured",
+      confidence: unread.length ? "inferred" : "measured",
       unit: "job"
     });
   }
@@ -10785,7 +10852,10 @@ function analyseParsed(repo, data) {
     if (!jobsPerRun.length) continue;
     const rs = data.byWf.get(wf);
     const path = String(rs[0].path || "").split("@")[0];
-    workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || "", week, repo, data.outcomeSamples && data.outcomeSamples.get(wf) || {}, data.sampleRunIds && data.sampleRunIds.get(wf) || []));
+    workflows.push(measureWorkflow(wf, rs, jobsPerRun, data.files.get(path) || "", week, repo, data.outcomeSamples && data.outcomeSamples.get(wf) || {}, data.sampleRunIds && data.sampleRunIds.get(wf) || [], {
+      dupRuns: data.dupSamples && data.dupSamples.get(wf) || [],
+      rerunJobs: data.rerunSamples && data.rerunSamples.get(wf) || []
+    }));
   }
   workflows.sort((a, b) => b.job_minutes_week - a.job_minutes_week);
   const raw = [...workflows.flatMap((w) => workflowFindings(w, { lockKey, hasLock, lockfiles: data.lockfiles, defaultBranch: data.defaultBranch || null, isPublic: data.visibility === "public" ? true : data.visibility ? "private" : false })), ...repoFindings(workflows), ...runnerReuseFinding(data.samples || /* @__PURE__ */ new Map()), ...scanFindings(data.scanFiles || /* @__PURE__ */ new Map(), { repo, reusable: data.reusableFiles || /* @__PURE__ */ new Map() }), ...gateFindings(data.gates, { scanFiles: data.scanFiles || /* @__PURE__ */ new Map(), reusable: data.reusableFiles || /* @__PURE__ */ new Map(), scanned: data.scanned, visibility: data.visibility })];
@@ -11272,7 +11342,7 @@ function compare2(before, after) {
 }
 
 // src/version.mjs
-var VERSION = "0.4.0";
+var VERSION = "0.4.1";
 
 // src/index.mjs
 var REPO_RE = /^(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/;
