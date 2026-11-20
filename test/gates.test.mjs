@@ -207,6 +207,13 @@ test('no code scanning: a scanner in a reusable workflow a job calls counts; one
   // A local call: the repository's own file, read with the others.
   const localCaller = 'on: [pull_request]\njobs:\n  analyze:\n    uses: ./.github/workflows/w1.yml\n';
   assert.ok(scans(new Map(), localCaller, codeqlFile));
+  // A tag with a + (a valid Git ref) is a call like any other.
+  const plusKey = 'owner/shared/.github/workflows/codeql.yml@v1.0.0+build';
+  const plusCaller = `on: [pull_request]\njobs:\n  analyze:\n    uses: ${plusKey}\n`;
+  assert.ok(scans(new Map([[plusKey, codeqlFile]]), plusCaller));
+  assert.ok(scans(new Map(), plusCaller), 'not read: unknown');
+  // A call the audit cannot resolve (an expression) may run a scanner: unknown, not absent.
+  assert.ok(scans(new Map(), 'on: [pull_request]\njobs:\n  analyze:\n    uses: ${{ inputs.workflow }}\n'));
   // A scanner two calls deep: the remote file calls its own repository's file at the same ref.
   const nested = new Map([[key, 'on: workflow_call\njobs:\n  inner:\n    uses: ./.github/workflows/scan.yml\n'], [`owner/shared/.github/workflows/scan.yml@${SHA}`, codeqlFile]]);
   assert.ok(scans(nested, caller));
@@ -234,6 +241,12 @@ test('collect reads the reusable workflows a file calls in another repository, a
   assert.equal(d.reusableFiles.get(`owner/shared/.github/workflows/codeql.yml@${SHA}`), codeqlFile);
   assert.ok(asked.some((u) => u.includes(`repos/owner/shared/contents/.github/workflows/codeql.yml?ref=${SHA}`)), asked.join('\n'));
   assert.ok(!whats(gateFindings({ ...d.gates, code_scanning_runs: false }, { scanFiles: d.scanFiles, reusable: d.reusableFiles, scanned: d.scanned })).includes('no code scanning'));
+  // A ref with a + is read too, encoded in the request.
+  const plusAsked = [];
+  const plus = { ...routes, 'repos/o/r/contents/.github/workflows/ci.yml': caller.replace(`@${SHA}`, '@v1.0.0+build') };
+  const p = await collect(createClient({ fetchImpl: fakeFetch(plus, { calls: plusAsked }) }), 'o/r', { now });
+  assert.equal(p.reusableFiles.get('owner/shared/.github/workflows/codeql.yml@v1.0.0+build'), codeqlFile);
+  assert.ok(plusAsked.some((u) => u.includes('codeql.yml?ref=v1.0.0%2Bbuild')), plusAsked.join('\n'));
   // A file that is not there is kept as null: unknown, not empty.
   const missing = { ...routes };
   delete missing['repos/owner/shared/contents/.github/workflows/codeql.yml'];

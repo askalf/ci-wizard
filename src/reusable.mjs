@@ -6,7 +6,9 @@ import { parseWorkflow } from './workflow.mjs';
 
 const FILE = String.raw`\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml`;
 const LOCAL = new RegExp(String.raw`^\./(${FILE})$`);
-const REMOTE = new RegExp(String.raw`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/(${FILE})@([A-Za-z0-9_./-]+)$`);
+// The ref is any literal Git ref (a tag such as v1.0.0+build included): no whitespace, no second @.
+// collect URL-encodes it in the request.
+const REMOTE = new RegExp(String.raw`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/(${FILE})@([^\s@]+)$`);
 // How deep a chain of calls is followed: GitHub runs at most four levels of reusable workflows.
 export const MAX_CALL_DEPTH = 4;
 

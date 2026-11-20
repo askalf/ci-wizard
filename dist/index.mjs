@@ -8869,7 +8869,7 @@ function zipEntries(buf) {
 // src/reusable.mjs
 var FILE = String.raw`\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml`;
 var LOCAL = new RegExp(String.raw`^\./(${FILE})$`);
-var REMOTE = new RegExp(String.raw`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/(${FILE})@([A-Za-z0-9_./-]+)$`);
+var REMOTE = new RegExp(String.raw`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/(${FILE})@([^\s@]+)$`);
 var MAX_CALL_DEPTH = 4;
 function callKey(uses, base = null) {
   const s = String(uses ?? "").trim();
@@ -9467,6 +9467,7 @@ function envTaint(env, outer) {
   }
   return out;
 }
+var isWriteAll = (p) => typeof p === "string" && p.trim().toLowerCase() === "write-all";
 function jobsOf2(doc) {
   return Object.entries(doc.jobs || {}).filter(([, j]) => j && typeof j === "object");
 }
@@ -9501,7 +9502,6 @@ function scanWorkflow(text) {
       }
     });
   }
-  const isWriteAll = (p) => typeof p === "string" && p.trim().toLowerCase() === "write-all";
   const jobs = jobsOf2(doc);
   const writeAll = isWriteAll(doc.permissions) ? ["(workflow)"] : jobs.filter(([, j]) => isWriteAll(j.permissions)).map(([id]) => id);
   const unscoped = doc.permissions === void 0 ? jobs.filter(([, j]) => j.permissions === void 0).map(([id]) => id) : [];
@@ -9515,10 +9515,11 @@ function calledScoped(uses, base, { files, reusable }, path = /* @__PURE__ */ ne
   const text = calledText(key, { files, remote: reusable });
   if (typeof text !== "string") return false;
   const doc = parseWorkflow(text);
-  if (doc.permissions !== void 0) return true;
+  const narrows = (p) => p !== void 0 && !isWriteAll(p);
+  if (doc.permissions !== void 0) return narrows(doc.permissions);
   const jobs = jobsOf2(doc);
   const chain = /* @__PURE__ */ new Set([...path, key]);
-  return jobs.length > 0 && jobs.every(([, j]) => j.permissions !== void 0 || typeof j.uses === "string" && calledScoped(j.uses, baseOf(key), { files, reusable }, chain, depth + 1));
+  return jobs.length > 0 && jobs.every(([, j]) => j.permissions !== void 0 ? narrows(j.permissions) : typeof j.uses === "string" && calledScoped(j.uses, baseOf(key), { files, reusable }, chain, depth + 1));
 }
 function scanFindings(files, { repo = null, reusable = /* @__PURE__ */ new Map() } = {}) {
   const scans = [...files].map(([path, text]) => {
@@ -9666,8 +9667,13 @@ function fileFacts(scanFiles, reusable = /* @__PURE__ */ new Map()) {
     for (const job of Object.values(doc.jobs || {})) {
       if (!job || typeof job !== "object") continue;
       if (jobScansCode(job)) codeql = true;
-      const key = typeof job.uses === "string" ? callKey(job.uses, base) : null;
-      if (!key || seen.has(key) || depth >= MAX_CALL_DEPTH) continue;
+      if (typeof job.uses !== "string") continue;
+      const key = callKey(job.uses, base);
+      if (!key) {
+        unread.add(job.uses.trim());
+        continue;
+      }
+      if (seen.has(key) || depth >= MAX_CALL_DEPTH) continue;
       seen.add(key);
       const text = calledText(key, { files: scanFiles, remote: reusable });
       if (typeof text === "string") visit(parseWorkflow(text), baseOf(key), seen, depth + 1);

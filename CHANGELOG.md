@@ -39,13 +39,13 @@ Fixed:
   public repository audited on 2026-11-20 the figure fell from about 466 job-minutes a week to the
   103 its one duplicated job really costs.
 - **job token wider than the job** reads the reusable workflow a job calls: a call whose file
-  sets permissions at its top or on every job is no longer called unscoped, and the evidence names
+  sets permissions other than `write-all` at its top or on every job is no longer called unscoped, and the evidence names
   the jobs rather than the whole file. Before, a local call to a file that sets `contents: read`
   was reported as handing out the default token.
 - **no code scanning** reads the reusable workflows a job calls, in this repository or another
   (at the called ref, up to 12 files): CodeQL run through a shared workflow of another repository
-  now counts, and a called file that could not be read leaves the finding out instead of claiming
-  there is no scanner.
+  now counts, and a called file that could not be read, or a call that cannot be resolved, leaves
+  the finding out instead of claiming there is no scanner.
 - **required checks no pull request reports** reads the newest successful pull request run. The
   newest completed one could be cancelled, waiting for a maintainer's approval or failed, and stop
   before a matrix whose names the required checks match: such a run is no longer taken as the

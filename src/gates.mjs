@@ -120,8 +120,12 @@ function fileFacts(scanFiles, reusable = new Map()) {
     for (const job of Object.values(doc.jobs || {})) {
       if (!job || typeof job !== 'object') continue;
       if (jobScansCode(job)) codeql = true;
-      const key = typeof job.uses === 'string' ? callKey(job.uses, base) : null;
-      if (!key || seen.has(key) || depth >= MAX_CALL_DEPTH) continue;
+      if (typeof job.uses !== 'string') continue;
+      const key = callKey(job.uses, base);
+      // A call the audit cannot resolve (an expression, a reference it does not recognise) may run
+      // a scanner: unknown, like a file that could not be read.
+      if (!key) { unread.add(job.uses.trim()); continue; }
+      if (seen.has(key) || depth >= MAX_CALL_DEPTH) continue;
       seen.add(key);
       const text = calledText(key, { files: scanFiles, remote: reusable });
       if (typeof text === 'string') visit(parseWorkflow(text), baseOf(key), seen, depth + 1);

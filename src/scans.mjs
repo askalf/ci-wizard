@@ -241,6 +241,9 @@ function envTaint(env, outer) {
   return out;
 }
 
+// The job token's grant of everything.
+const isWriteAll = (p) => typeof p === 'string' && p.trim().toLowerCase() === 'write-all';
+
 function jobsOf(doc) {
   return Object.entries(doc.jobs || {}).filter(([, j]) => j && typeof j === 'object');
 }
@@ -287,7 +290,6 @@ export function scanWorkflow(text) {
   // The job token: write-all anywhere is a grant of everything; no permissions block at the top and
   // none on a job leaves that job the repository's default, which the audit cannot read (read-only
   // for repositories created since February 2023, write on many older ones).
-  const isWriteAll = (p) => typeof p === 'string' && p.trim().toLowerCase() === 'write-all';
   // A reusable-workflow call with no permissions of its own passes the caller's token on, and the
   // called workflow can narrow it: scanFindings reads the called file and drops the call from this
   // list when it does (calledScoped).
@@ -303,8 +305,9 @@ const where = (paths) => (paths.length === 1 ? paths[0] : `${paths.length} workf
 /**
  * Whether the reusable workflow a call names scopes the token itself: a permissions block at its
  * top, or on every job of it (a job that is itself a call counts when the file it calls does). The
- * caller's token is the most the called jobs get, and the called file can only narrow it. False when
- * the file is not held (a remote file collect did not read, or one it could not). `path` holds the
+ * caller's token is the most the called jobs get, and the called file can only narrow it; write-all
+ * narrows nothing, so a file or job that declares it does not count. False when the file is not
+ * held (a remote file collect did not read, or one it could not). `path` holds the
  * files on this chain of calls, so a call back into one of them stops; each job follows its own
  * chain, so two jobs calling the same file are each judged. Pure.
  */
@@ -314,11 +317,12 @@ function calledScoped(uses, base, { files, reusable }, path = new Set(), depth =
   const text = calledText(key, { files, remote: reusable });
   if (typeof text !== 'string') return false;
   const doc = parseWorkflow(text);
-  if (doc.permissions !== undefined) return true;
+  const narrows = (p) => p !== undefined && !isWriteAll(p);
+  if (doc.permissions !== undefined) return narrows(doc.permissions);
   const jobs = jobsOf(doc);
   const chain = new Set([...path, key]);
-  return jobs.length > 0 && jobs.every(([, j]) => j.permissions !== undefined
-    || (typeof j.uses === 'string' && calledScoped(j.uses, baseOf(key), { files, reusable }, chain, depth + 1)));
+  return jobs.length > 0 && jobs.every(([, j]) => (j.permissions !== undefined ? narrows(j.permissions)
+    : typeof j.uses === 'string' && calledScoped(j.uses, baseOf(key), { files, reusable }, chain, depth + 1)));
 }
 
 /** The scan findings for a repository's workflow files (path -> text), one per kind. */

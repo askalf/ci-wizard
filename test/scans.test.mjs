@@ -224,6 +224,13 @@ test('scanFindings: a call to a reusable workflow that scopes the token itself i
   // A local call inside the remote file names that repository's file at the same ref.
   const chained = new Map([[remoteKey, 'on: workflow_call\njobs:\n  inner:\n    uses: ./.github/workflows/inner.yml\n'], [`owner/shared/.github/workflows/inner.yml@${SHA}`, scoped]]);
   assert.equal(token(remote, chained), undefined);
+  // write-all narrows nothing: a called file that declares it, at its top or on every job, leaves the call unscoped.
+  const writeAllTop = 'on: workflow_call\npermissions: write-all\njobs:\n  unit:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make test\n';
+  const writeAllJobs = 'on: workflow_call\njobs:\n  unit:\n    runs-on: ubuntu-latest\n    permissions: write-all\n    steps:\n      - run: make test\n';
+  const mixed = 'on: workflow_call\njobs:\n  unit:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n    steps:\n      - run: make test\n  publish:\n    runs-on: ubuntu-latest\n    permissions: write-all\n    steps:\n      - run: make publish\n';
+  for (const called of [writeAllTop, writeAllJobs, mixed]) {
+    assert.match(token(remote, new Map([[remoteKey, called]])).evidence, /\(job test\)/);
+  }
   // Two jobs of the called file that both call the same scoped file: each is judged on its own chain.
   const twice = new Map([[remoteKey, 'on: workflow_call\njobs:\n  a:\n    uses: ./.github/workflows/inner.yml\n  b:\n    uses: ./.github/workflows/inner.yml\n'], [`owner/shared/.github/workflows/inner.yml@${SHA}`, scoped]]);
   assert.equal(token(remote, twice), undefined);
