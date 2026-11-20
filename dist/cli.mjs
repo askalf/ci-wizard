@@ -10046,6 +10046,21 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
   const { sameTestsOf, artifactOf } = evidenceOf(sampledRuns[0] || [], jobRuns);
   const sampledCount = sampledRuns.length;
   const medianRunSeconds = median(timing.jobSecondsPerRun);
+  const runById = new Map(workflowRuns.map((r) => [r.id, r]));
+  const eventsOfCommit = /* @__PURE__ */ new Map();
+  for (const r of workflowRuns) {
+    if (!eventsOfCommit.has(r.head_sha)) eventsOfCommit.set(r.head_sha, /* @__PURE__ */ new Set());
+    eventsOfCommit.get(r.head_sha).add(PR_EVENTS2.has(r.event) ? "pull_request" : r.event);
+  }
+  const secondsByKind = { push: [], pull_request: [] };
+  sampledRuns.forEach((jobs, i) => {
+    const r = runById.get(((jobs || []).find((j) => j.run_id != null) || {}).run_id);
+    if (!r) return;
+    const kind = r.event === "push" ? "push" : PR_EVENTS2.has(r.event) ? "pull_request" : null;
+    const events2 = eventsOfCommit.get(r.head_sha);
+    if (kind && events2.has("push") && events2.has("pull_request")) secondsByKind[kind].push(timing.jobSecondsPerRun[i]);
+  });
+  const kindCost = (xs) => xs.length ? { minutes: round(mean(xs) / 60, 2), sampled: xs.length } : null;
   const successfulWalls = workflowRuns.filter((r) => r.status === "completed" && r.conclusion === "success" && r.run_started_at).map((r) => secs(r.run_started_at, r.updated_at));
   const reruns = workflowRuns.filter((r) => (r.run_attempt || 1) > 1).length;
   const failures = workflowRuns.filter((r) => r.conclusion === "failure").length;
@@ -10092,6 +10107,7 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     // per-run savings multiply by.
     job_minutes_per_run: round(medianRunSeconds / 60, 2),
     job_minutes_per_run_mean: round(successSeconds / 60, 2),
+    run_minutes_by_kind: { push: kindCost(secondsByKind.push), pull_request: kindCost(secondsByKind.pull_request) },
     job_minutes_week: round(weekFactor * weekSeconds / 60, 1),
     billed_minutes_per_run: billedPerRun,
     billed_minutes_week: round(weekFactor * weekBilled, 1),
@@ -10402,7 +10418,17 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
       why += `; the concurrency group (${cg}) keys pull requests by number and pushes by commit, so neither run cancels the other`;
     }
     const fix = extra.length ? "drop those patterns from the push trigger if every such branch gets a pull request, or key the concurrency group on the commit for both events so the second run cancels the first" : "run on push only for the default branch and on pull_request for everything else, or share one concurrency group per commit";
-    add(w.dup_commits_week * (w.job_minutes_per_run_mean ?? w.job_minutes_per_run), "the same commit runs twice", why, fix, {
+    const byKind = w.run_minutes_by_kind || {};
+    let perCommit = w.job_minutes_per_run_mean ?? w.job_minutes_per_run;
+    if (byKind.push && byKind.pull_request) {
+      const [kind, cost] = byKind.push.minutes <= byKind.pull_request.minutes ? ["push", byKind.push] : ["pull request", byKind.pull_request];
+      perCommit = cost.minutes;
+      why += `; the cheaper of the two is the ${kind} run, ${fmtS(cost.minutes * 60)} of job time (the mean of ${cost.sampled} timed ${kind} run${cost.sampled === 1 ? "" : "s"}), the least that dropping either run saves, so the saving counts that run`;
+    } else {
+      const missing = byKind.push ? "pull request" : byKind.pull_request ? "push" : "push or pull request";
+      why += `; no ${missing} run of a duplicated commit was timed in the sample, so each duplicate is priced at the workflow's mean run, which overstates it if one of the two runs skips jobs`;
+    }
+    add(w.dup_commits_week * perCommit, "the same commit runs twice", why, fix, {
       confidence,
       tradeoff: "a branch pushed without a pull request then runs no CI until one is opened (trigger fix), or one of the two runs is cancelled and shows as such (concurrency fix)",
       example: extra.length ? ONE_RUN_PER_COMMIT : triggerExample(w.push_branches, defaultBranch)

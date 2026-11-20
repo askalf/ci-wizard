@@ -120,6 +120,46 @@ test('the same commit runs twice: with push on the default branch only it is mea
   assert.doesNotMatch(f.evidence, /keys pull requests by number/);
 });
 
+test('the same commit runs twice: the cheaper of the two runs is the saving, so a pull request run that skips the tests is priced as the short run it is', () => {
+  const rs = dupRuns(10);
+  const push = rs.find((r) => r.event === 'push');
+  const pr = rs.find((r) => r.event === 'pull_request');
+  // The push run tests for 600 s; the pull request run of the same commit skips the tests and runs one 60 s job.
+  const jobsPerRun = [
+    [job({ runId: push.id, steps: [['Run tests', 600]], wait: 0, head: 0, tail: 0 })],
+    [job({ runId: pr.id, steps: [['Publish preview', 60]], wait: 0, head: 0, tail: 0 })],
+  ];
+  const a = audit([{ name: 'CI', runs: rs, jobsPerRun, file: dupFile("main, 'feat/*'", '${{ github.workflow }}-${{ github.event.number || github.sha }}') }]);
+  const [f] = find(a, 'the same commit runs twice');
+  assert.ok(f, JSON.stringify(a.findings));
+  assert.equal(f.saving_min_week, 10); // 10 duplicate commits x the 1-minute pull request run, not the 5.5-minute mean
+  assert.match(f.evidence, /the cheaper of the two is the pull request run, 60 s of job time \(the mean of 1 timed pull request run\)/);
+  // The other way round: a push run cheaper than its pull request run prices the duplicate.
+  const flipped = [
+    [job({ runId: push.id, steps: [['Lint', 120]], wait: 0, head: 0, tail: 0 })],
+    [job({ runId: pr.id, steps: [['Run tests', 600]], wait: 0, head: 0, tail: 0 })],
+  ];
+  const [g] = find(audit([{ name: 'CI', runs: rs, jobsPerRun: flipped, file: dupFile("main, 'feat/*'", 'x') }]), 'the same commit runs twice');
+  assert.equal(g.saving_min_week, 20);
+  assert.match(g.evidence, /the cheaper of the two is the push run/);
+  // A pull request from a fork has no push run of its commit: its full test run does not price the duplicate.
+  const fork = run({ event: 'pull_request', sha: 'fork1', branch: 'patch-1' });
+  const withFork = [...jobsPerRun, [job({ runId: fork.id, steps: [['Run tests', 600]], wait: 0, head: 0, tail: 0 })]];
+  const [h] = find(audit([{ name: 'CI', runs: [...rs, fork], jobsPerRun: withFork, file: dupFile("main, 'feat/*'", 'x') }]), 'the same commit runs twice');
+  assert.equal(h.saving_min_week, 10);
+});
+
+test('the same commit runs twice: without a timed run of both kinds the mean prices it, and the evidence says so', () => {
+  const rs = dupRuns(5);
+  const push = rs.find((r) => r.event === 'push');
+  const a = audit([{ name: 'CI', runs: rs, jobsPerRun: [[job({ runId: push.id })]], file: dupFile("main, 'feat/*'", 'x') }]);
+  const [f] = find(a, 'the same commit runs twice');
+  assert.match(f.evidence, /no pull request run of a duplicated commit was timed in the sample, so each duplicate is priced at the workflow's mean run/);
+  // Neither kind timed (a sampled job that names no run): both are named as missing.
+  const [g] = find(audit([{ name: 'CI', runs: rs, file: dupFile("main, 'feat/*'", 'x') }]), 'the same commit runs twice');
+  assert.match(g.evidence, /no push or pull request run of a duplicated commit was timed/);
+});
+
 test('the same commit runs twice: under the weekly threshold is left alone', () => {
   const a = audit([{ name: 'CI', runs: dupRuns(THRESHOLDS.duplicateCommitsWeek - 1), file: dupFile("main, 'feat/*'", 'x') }]);
   assert.equal(find(a, 'the same commit runs twice').length, 0);

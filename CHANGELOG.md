@@ -30,6 +30,15 @@ are silent:
   artifact's zip redirect, read only where the file raises a candidate; the zip is read for the
   names in its directory and never opened. `collect` takes `artifacts: false` to skip it.
 
+Fixed:
+
+- **the same commit runs twice** prices a duplicate at the cheaper of its two runs, measured on
+  the commits that ran on both events, instead of at the workflow's mean run. A pull request run
+  that skips the tests for a branch of the repository (a job-level `if:`) costs a fraction of the
+  mean, and a pull request from a fork, which has no push run, no longer prices it. On a large
+  public repository audited on 2026-11-20 the figure fell from about 466 job-minutes a week to the
+  103 its one duplicated job really costs.
+
 ## 0.3.0
 
 Merge gates: what stands between a pull request and the default branch.

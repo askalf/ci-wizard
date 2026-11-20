@@ -295,7 +295,12 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   (the evidence names them), measured otherwise. A concurrency group keyed on the pull request
   number is named too: it puts the push run (keyed by commit) and the pull request run in
   different groups, so neither cancels the other.
-- **Estimate** the duplicate commits a week, times job-minutes per run.
+- **Estimate** the duplicate commits a week, times the cheaper of the two runs: the mean job time
+  of the sampled push runs, or of the sampled pull request runs, whichever is less, counting only
+  runs of commits that ran on both. A job a run skips by an `if:` costs it nothing, so a pull
+  request run that skips the tests is priced as the short run it is, and a pull request from a
+  fork, which has no push run here, does not price it. Without a timed run of both kinds among the
+  duplicated commits, the workflow's mean run prices it, and the evidence says so.
 - **Branches** "beyond the default branch" uses the repository's default branch as the API reports
   it, or main and master when it cannot be read. The push-trigger example names that branch, and
   when it is unknown says to fill it in, rather than guessing `main`.

@@ -16,7 +16,7 @@ export function run({ name = 'CI', event = 'push', sha, branch = 'main', conclus
 }
 
 /** A job: steps as [name, seconds]; steps run back to back after `head` seconds, then `tail` seconds before the job completes. */
-export function job({ steps = [['Set up job', 1], ['Run tests', 30], ['Complete job', 0]], wait = 2, head = 1, tail = 2, at = 0, selfHosted = false } = {}) {
+export function job({ steps = [['Set up job', 1], ['Run tests', 30], ['Complete job', 0]], wait = 2, head = 1, tail = 2, at = 0, selfHosted = false, runId = undefined } = {}) {
   const created = at;
   const started = at + wait;
   let cur = started + head;
@@ -30,6 +30,7 @@ export function job({ steps = [['Set up job', 1], ['Run tests', 30], ['Complete 
     runner_name: selfHosted ? 'self-hosted-1' : 'GitHub Actions 12',
     labels: selfHosted ? ['self-hosted', 'Linux', 'X64'] : ['ubuntu-latest'],
     steps: st,
+    ...(runId !== undefined ? { run_id: runId } : {}),
   };
 }
 
