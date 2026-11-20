@@ -194,11 +194,16 @@ export function rerunSeconds(jobs) {
   return total;
 }
 
-/** Pull request runs still going when a newer commit on the same branch started its run, and not cancelled. */
-export function outdatedRuns(workflowRuns) {
+/**
+ * Pull request runs still going when a newer commit on the same branch started its run, and not cancelled.
+ * `events` picks the runs counted, and compared: by default pull_request and pull_request_target together;
+ * one event alone counts its runs made outdated by a newer run of that same event, which is what a
+ * concurrency group keyed to that event would cancel.
+ */
+export function outdatedRuns(workflowRuns, events = PR_EVENTS) {
   const runsByBranch = new Map();
   for (const r of workflowRuns) {
-    if (!PR_EVENTS.has(r.event) || !r.run_started_at) continue;
+    if (!events.has(r.event) || !r.run_started_at) continue;
     if (!runsByBranch.has(r.head_branch)) runsByBranch.set(r.head_branch, []);
     runsByBranch.get(r.head_branch).push(r);
   }
@@ -372,6 +377,8 @@ export function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileTex
     wall_p50: pct(successfulWalls, 0.5),
     wall_p90: pct(successfulWalls, 0.9),
     superseded_week: perWeek(outdatedRuns(workflowRuns)),
+    // The same count for each pull request event alone: a fix that cancels one event's runs saves that one's.
+    superseded_week_by_event: Object.fromEntries([...PR_EVENTS].map((e) => [e, perWeek(outdatedRuns(workflowRuns, new Set([e])))])),
     has_concurrency: facts.hasConcurrency,
     cancels: facts.cancels,
     top_steps: longestSteps(timing.workStepSeconds),

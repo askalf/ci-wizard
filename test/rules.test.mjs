@@ -208,6 +208,23 @@ test('outdated runs keep going: overlapping pull request runs without cancel-in-
   assert.match(f.evidence, /^3 pull request runs a week/);
 });
 
+test('outdated runs, split by event: each event counts its runs made outdated by a newer run of the same event', () => {
+  // Four pull_request runs and three pull_request_target runs on one branch, each set overlapping its own.
+  const pr = prRuns(4);
+  const target = Array.from({ length: 3 }, (_, i) => run({ event: 'pull_request_target', sha: `t${i}`, branch: 'fix/a', at: 5000 + i * 300, wall: 600 }));
+  const file = 'on: [pull_request, pull_request_target]\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n';
+  const a = audit([{ name: 'CI', runs: [...pr, ...target], file }]);
+  const w = a.workflows.find((x) => x.workflow === 'CI');
+  assert.deepEqual(w.superseded_week_by_event, { pull_request: 3, pull_request_target: 2 });
+  assert.equal(w.superseded_week, 5, 'both events together, as before');
+  // The finding still counts both, with the same evidence text as before.
+  const [f] = find(a, 'outdated runs keep going');
+  assert.match(f.evidence, /^5 pull request runs a week were still running when a newer push to the same branch started a new run/);
+  // A workflow on pull_request alone: the split holds every run on its own event.
+  const only = audit([{ name: 'CI', runs: prRuns(4), file: prFile(false) }]).workflows.find((x) => x.workflow === 'CI');
+  assert.deepEqual(only.superseded_week_by_event, { pull_request: 3, pull_request_target: 0 });
+});
+
 test('outdated runs keep going: cancel-in-progress, or runs that were cancelled, are left alone', () => {
   assert.equal(find(audit([{ name: 'CI', runs: prRuns(4), file: prFile(true) }]), 'outdated runs keep going').length, 0);
   assert.equal(find(audit([{ name: 'CI', runs: prRuns(4, 'cancelled'), file: prFile(false) }]), 'outdated runs keep going').length, 0);

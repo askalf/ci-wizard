@@ -10146,10 +10146,10 @@ function rerunSeconds(jobs) {
   }
   return total;
 }
-function outdatedRuns(workflowRuns) {
+function outdatedRuns(workflowRuns, events = PR_EVENTS2) {
   const runsByBranch = /* @__PURE__ */ new Map();
   for (const r of workflowRuns) {
-    if (!PR_EVENTS2.has(r.event) || !r.run_started_at) continue;
+    if (!events.has(r.event) || !r.run_started_at) continue;
     if (!runsByBranch.has(r.head_branch)) runsByBranch.set(r.head_branch, []);
     runsByBranch.get(r.head_branch).push(r);
   }
@@ -10284,6 +10284,8 @@ function measureWorkflow(workflowName, workflowRuns, sampledRuns, fileText, week
     wall_p50: pct(successfulWalls, 0.5),
     wall_p90: pct(successfulWalls, 0.9),
     superseded_week: perWeek(outdatedRuns(workflowRuns)),
+    // The same count for each pull request event alone: a fix that cancels one event's runs saves that one's.
+    superseded_week_by_event: Object.fromEntries([...PR_EVENTS2].map((e) => [e, perWeek(outdatedRuns(workflowRuns, /* @__PURE__ */ new Set([e])))])),
     has_concurrency: facts.hasConcurrency,
     cancels: facts.cancels,
     top_steps: longestSteps(timing.workStepSeconds),
@@ -11372,7 +11374,7 @@ function compare2(before, after) {
 }
 
 // src/version.mjs
-var VERSION = "0.4.1";
+var VERSION = "0.4.2";
 
 // src/index.mjs
 var REPO_RE = /^(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/;

@@ -71,11 +71,11 @@ Outputs: `report-path`, `findings`.
 ### From the command line
 
 ```sh
-npx ci-wizard@0.4.1 owner/repo
-npx ci-wizard@0.4.1 owner/repo --save before.json      # keep a baseline
-npx ci-wizard@0.4.1 owner/repo --html audit.html       # a self-contained page
-npx ci-wizard@0.4.1 owner/repo --only CI --json        # one workflow, as JSON
-npx ci-wizard@0.4.1 compare before.json after.json     # did the fix work?
+npx ci-wizard@0.4.2 owner/repo
+npx ci-wizard@0.4.2 owner/repo --save before.json      # keep a baseline
+npx ci-wizard@0.4.2 owner/repo --html audit.html       # a self-contained page
+npx ci-wizard@0.4.2 owner/repo --only CI --json        # one workflow, as JSON
+npx ci-wizard@0.4.2 compare before.json after.json     # did the fix work?
 ```
 
 You can name the repository as `owner/repo`, a GitHub URL or an SSH remote. Leave it out and the

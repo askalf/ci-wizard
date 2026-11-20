@@ -324,6 +324,10 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
 - **Fix** a concurrency group per branch with `cancel-in-progress: true`. *Trade-off:* a
   workflow whose runs must all finish (a status that counts every run, a deploy) should not
   cancel; queued runs can pile up as cancelled.
+- **Counted** over `pull_request` and `pull_request_target` runs together (`superseded_week` in
+  the JSON report). `superseded_week_by_event` gives each event alone, counting only its runs made
+  outdated by a newer run of the same event: what a concurrency group keyed to that event would
+  cancel. A workflow on both events can have a total that is not the sum of the two.
 
 ## matrix size
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.2
+
+- The JSON report gives each workflow's outdated pull request runs per event:
+  `superseded_week_by_event` (`pull_request`, `pull_request_target`), beside the total
+  `superseded_week` the **outdated runs keep going** rule reads. Each event counts its runs made
+  outdated by a newer run of the same event, what a concurrency group keyed to that event cancels,
+  so a fix for one event's runs can be priced on its own. The rule, its evidence and its saving
+  are unchanged.
+
 ## 0.4.1
 
 Two savings that 0.4.0 overstated, found by auditing large public repositories with it:
