@@ -8941,7 +8941,8 @@ function groupRuns(runs, names = /* @__PURE__ */ new Map()) {
 }
 async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2, workflows = 8, only = [], now = /* @__PURE__ */ new Date(), maxPages: askedPages = 5, maxScanFiles = 30, logs = true, artifacts = true, maxLogBytes = 8 * 1048576, maxArtifactBytes = 8 * 1048576, onProgress = () => {
 } } = {}) {
-  const maxPages = Math.max(1, Math.min(10, Math.floor(askedPages)));
+  const asked = Math.floor(Number(askedPages));
+  const maxPages = Number.isFinite(asked) ? Math.max(1, Math.min(10, asked)) : 1;
   const since = new Date(now.getTime() - days * 864e5).toISOString().replace(/\.\d{3}Z$/, "Z");
   const runs = [];
   let truncated = false;

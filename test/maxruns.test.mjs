@@ -9,16 +9,18 @@ import { fakeFetch, run, t } from './helpers.mjs';
 
 const now = new Date(Date.parse(t(7 * 86400)));
 
-// A window holding `total` runs, served 100 a page with distinct ids; the page asked for is recorded.
+// A window holding `total` runs a minute apart up to `now`, served newest first as the API does, 100 a
+// page with distinct ids; the page asked for is recorded.
 function windowOf(total) {
   const pagesAsked = [];
+  const end = 7 * 86400;
   const routes = {
     'repos/o/r/actions/runs?': (path) => {
       const page = Number(new URL(`https://x/${path}`).searchParams.get('page'));
       pagesAsked.push(page);
       const from = (page - 1) * 100;
       const n = Math.max(0, Math.min(100, total - from));
-      return { total_count: total, workflow_runs: Array.from({ length: n }, (_, i) => run({ name: 'CI', at: (from + i) * 60 })) };
+      return { total_count: total, workflow_runs: Array.from({ length: n }, (_, i) => run({ name: 'CI', at: end - (from + i + 1) * 60 })) };
     },
   };
   return { fetchImpl: fakeFetch(routes), pagesAsked };
@@ -44,6 +46,17 @@ test('collect never asks past the 10th page, whatever it is given', async () => 
   const w = windowOf(5000);
   await collect(createClient({ fetchImpl: w.fetchImpl }), 'o/r', { now, maxPages: 40 }).catch(() => {});
   assert.equal(Math.max(...w.pagesAsked), 10);
+});
+
+test('a page limit that is not a finite number reads one page, and says the window was cut short', async () => {
+  for (const bad of [NaN, 'x', Infinity, -3]) {
+    const w = windowOf(300);
+    const d = await collect(createClient({ fetchImpl: w.fetchImpl }), 'o/r', { now, maxPages: bad });
+    assert.deepEqual([...new Set(w.pagesAsked)], [1], String(bad));
+    assert.equal(d.runs.length, 100, String(bad));
+    assert.equal(d.truncated, true, `${bad}: 300 runs in the window, 100 read`);
+    assert.ok(d.coveredDays < 7, `${bad}: coverage from the runs read, not the days asked`);
+  }
 });
 
 test('audit refuses a maxRuns that is not a multiple of 100 from 100 to 1000', async () => {

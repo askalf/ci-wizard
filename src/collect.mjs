@@ -69,8 +69,10 @@ export function groupRuns(runs, names = new Map()) {
  */
 export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2, workflows = 8, only = [], now = new Date(), maxPages: askedPages = 5, maxScanFiles = 30, logs = true, artifacts = true, maxLogBytes = 8 * 1048576, maxArtifactBytes = 8 * 1048576, onProgress = () => {} } = {}) {
   // GitHub serves the first 1000 results of a runs list filtered by date, 10 pages of 100: a page past
-  // them holds none of the window's runs, so no more are asked for.
-  const maxPages = Math.max(1, Math.min(10, Math.floor(askedPages)));
+  // them holds none of the window's runs, so no more are asked for. A limit that is not a finite
+  // number reads one page, so the window's coverage is still computed from what was read.
+  const asked = Math.floor(Number(askedPages));
+  const maxPages = Number.isFinite(asked) ? Math.max(1, Math.min(10, asked)) : 1;
   const since = new Date(now.getTime() - days * 86400e3).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const runs = [];
   let truncated = false;
