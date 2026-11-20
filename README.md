@@ -263,7 +263,8 @@ one that has a hostile contributor.
 
 - **Token.** It needs **actions: read** and **contents: read**. A workflow's own `GITHUB_TOKEN`
   is enough for the repository it runs in. A repository the token cannot see reads as not found.
-- **Cost.** About 50 to 80 API calls for a busy repository, made up to six at a time. That is
+- **Cost.** About 25 to 150 API calls, more with more busy workflows, large matrices and reruns
+  (audits of ten large public repositories took 24 to 144), made up to six at a time. That is
   about 10 seconds for 500 runs.
 - **Rate limit.** While GitHub reports the remaining count (api.github.com does), the client sends
   no more requests once the token has 25 calls or fewer left, counting the ones in flight. That
