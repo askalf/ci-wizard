@@ -655,10 +655,11 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   the evidence names the workflows priced at a whole run.
 - **Estimate** re-attempted runs a week, times what a rerun ran: the jobs of every attempt of up
   to 3 completed re-attempted runs of each workflow are read (`jobs?filter=all`), and a job of a
-  later attempt counts only when no earlier attempt has a job of that name that started at the
-  same moment. Re-running only the failed jobs lists every job again under the new attempt, the
-  ones that passed with their first times, so a rerun of one failed job of a large matrix costs
-  that job, not the matrix. A workflow none of whose reruns was read (none had completed, or the
+  later attempt counts unless it is a copy of a job of the attempt before it (the same name, start
+  and end), each job of that attempt matching one copy at most, so two jobs that share a name and
+  a start second each count. Re-running only the failed jobs lists every job again under the new
+  attempt, the ones that passed with their first times, so a rerun of one failed job of a large
+  matrix costs that job, not the matrix. A workflow none of whose reruns was read (none had completed, or the
   list could not be read whole) prices them at its mean run, which overstates a rerun of the
   failed jobs alone.
 - **Fix** find the flaky step from the failed attempts and fix or quarantine it. *Trade-off:*

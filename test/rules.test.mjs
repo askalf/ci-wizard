@@ -241,6 +241,16 @@ test('rerunSeconds: only the jobs a later attempt ran count, not the ones it kep
   const all = attempts(600, 60).map((j, i) => (i === 2 ? { ...j, started_at: t(3600), completed_at: t(4200) } : j));
   assert.equal(rerunSeconds(all), 660);
   assert.equal(rerunSeconds([]), 0);
+  // Two jobs of one name that a later attempt started in the same second are two jobs.
+  const twin = { ...job({ steps: [['Run tests', 60]], wait: 0, head: 0, tail: 0, at: 3600 }), name: 'test', run_attempt: 2 };
+  assert.equal(rerunSeconds([...attempts(600, 60), twin, { ...twin }]), 180);
+  // Two kept jobs of one name and the same times are matched one for one: neither counts, and a
+  // third copy in the later attempt does.
+  const kept = { ...job({ steps: [['Run tests', 30]], wait: 0, head: 0, tail: 0 }), name: 'test', run_attempt: 1 };
+  assert.equal(rerunSeconds([kept, { ...kept }, { ...kept, run_attempt: 2 }, { ...kept, run_attempt: 2 }]), 0);
+  assert.equal(rerunSeconds([kept, { ...kept, run_attempt: 2 }, { ...kept, run_attempt: 2 }]), 30);
+  // A job kept through two reruns is a copy of the attempt before each time.
+  assert.equal(rerunSeconds([...attempts(600, 60), ...attempts(600, 60).filter((j) => j.run_attempt === 2).map((j) => ({ ...j, run_attempt: 3 }))]), 60);
 });
 
 test('reruns: priced at what the reruns read ran, not a whole run; a workflow with none read is priced at a whole run and said so', () => {

@@ -163,20 +163,33 @@ export function duplicateCommits(workflowRuns) {
 /**
  * The job time a re-attempted run's later attempts ran, in seconds, from its jobs of every attempt
  * (the jobs API with filter=all). Re-running only the failed jobs lists every job again under the
- * new attempt, the ones that passed with their earlier times: a job of a later attempt counts only
- * when no earlier attempt has a job of that name that started at the same moment. Pure.
+ * new attempt, the ones that passed with their earlier times. A job of a later attempt counts
+ * unless it is a copy of a job of the attempt before it (the same name, start and end), each job of
+ * that attempt matching one copy at most: two jobs may share a name and, at a timestamp's
+ * one-second precision, a start, and each costs its own time. Pure.
  */
 export function rerunSeconds(jobs) {
-  const ran = (jobs || [])
-    .filter((j) => j && j.started_at && j.completed_at && j.conclusion !== 'skipped')
-    .sort((a, b) => (a.run_attempt || 1) - (b.run_attempt || 1));
-  const seen = new Set();
+  const byAttempt = new Map();
+  for (const j of jobs || []) {
+    if (!j || !j.started_at || !j.completed_at || j.conclusion === 'skipped') continue;
+    const n = j.run_attempt || 1;
+    if (!byAttempt.has(n)) byAttempt.set(n, []);
+    byAttempt.get(n).push(j);
+  }
+  const keyOf = (j) => `${j.name}\u0000${j.started_at}\u0000${j.completed_at}`;
+  let before = new Map();
   let total = 0;
-  for (const j of ran) {
-    const key = `${j.name}\u0000${j.started_at}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if ((j.run_attempt || 1) > 1) total += secs(j.started_at, j.completed_at);
+  for (const n of [...byAttempt.keys()].sort((a, b) => a - b)) {
+    const unmatched = new Map(before);
+    const here = new Map();
+    for (const j of byAttempt.get(n)) {
+      const key = keyOf(j);
+      here.set(key, (here.get(key) || 0) + 1);
+      if (n === 1) continue;
+      if ((unmatched.get(key) || 0) > 0) unmatched.set(key, unmatched.get(key) - 1);
+      else total += secs(j.started_at, j.completed_at);
+    }
+    before = here;
   }
   return total;
 }

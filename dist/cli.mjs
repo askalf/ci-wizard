@@ -10122,14 +10122,27 @@ function duplicateCommits(workflowRuns) {
   return [...eventsByCommit.values()].filter((events) => events.has("push") && (events.has("pull_request") || events.has("pull_request_target"))).length;
 }
 function rerunSeconds(jobs) {
-  const ran = (jobs || []).filter((j) => j && j.started_at && j.completed_at && j.conclusion !== "skipped").sort((a, b) => (a.run_attempt || 1) - (b.run_attempt || 1));
-  const seen = /* @__PURE__ */ new Set();
+  const byAttempt = /* @__PURE__ */ new Map();
+  for (const j of jobs || []) {
+    if (!j || !j.started_at || !j.completed_at || j.conclusion === "skipped") continue;
+    const n = j.run_attempt || 1;
+    if (!byAttempt.has(n)) byAttempt.set(n, []);
+    byAttempt.get(n).push(j);
+  }
+  const keyOf = (j) => `${j.name}\0${j.started_at}\0${j.completed_at}`;
+  let before = /* @__PURE__ */ new Map();
   let total = 0;
-  for (const j of ran) {
-    const key = `${j.name}\0${j.started_at}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if ((j.run_attempt || 1) > 1) total += secs(j.started_at, j.completed_at);
+  for (const n of [...byAttempt.keys()].sort((a, b) => a - b)) {
+    const unmatched = new Map(before);
+    const here = /* @__PURE__ */ new Map();
+    for (const j of byAttempt.get(n)) {
+      const key = keyOf(j);
+      here.set(key, (here.get(key) || 0) + 1);
+      if (n === 1) continue;
+      if ((unmatched.get(key) || 0) > 0) unmatched.set(key, unmatched.get(key) - 1);
+      else total += secs(j.started_at, j.completed_at);
+    }
+    before = here;
   }
   return total;
 }
