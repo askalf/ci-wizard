@@ -303,7 +303,9 @@ The token lasts an hour and is revoked when the job ends.
 ## Limitations
 
 - **Sampled.** The window is up to 500 runs; the CLI's `--max-runs` takes it to 1000, the most GitHub
-  serves for a runs list filtered by date, at one more API call per 100. Job-level timing comes from a few recent successful
+  serves for a runs list filtered by date. Each 100 more runs is one more page of the runs list, and the
+  audit's other calls can rise too when the longer window changes which workflows are the busiest
+  (their jobs, files and logs are read). Job-level timing comes from a few recent successful
   runs of each busy workflow, plus up to two failed, cancelled and timed-out runs each, for their
   cost.
   - Weekly figures scale the window to 7 days. A busy repository's 500 runs can cover less than a

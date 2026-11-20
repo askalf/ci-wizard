@@ -11431,7 +11431,9 @@ Token: GITHUB_TOKEN or GH_TOKEN, else \`gh auth token\`.
 
   --days N           days of runs to read (default 7; up to --max-runs runs are read)
   --max-runs N       the most runs read from those days: a multiple of 100 up to 1000 (default
-                     500; one API call per 100). A busy repository fills 500 in a day or two.
+                     500). A busy repository fills 500 in a day or two. Each 100 more is one more
+                     page of the runs list, and other calls can rise too when the longer window
+                     changes which workflows are the busiest.
   --workflows N      busiest workflows to time job by job (default 8)
   --per-workflow N   newest successful runs of each to time (default 5)
   --only NAME        time only these workflows, by the name GitHub shows (repeat it, or

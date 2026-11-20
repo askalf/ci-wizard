@@ -21,8 +21,9 @@ export const REPO_RE = /^(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?!\.{1,2}$)[A-Za-z0-9_.-
 
 /**
  * Audits one repository. Returns null when the window holds no workflow runs.
- * `maxRuns`: the most workflow runs read from the window, a multiple of 100 up to MAX_RUNS_LIMIT
- * (one API call per 100). A busy repository fills 500 runs in a day or two; more covers more of it.
+ * `maxRuns`: the most workflow runs read from the window, a multiple of 100 up to MAX_RUNS_LIMIT. A
+ * busy repository fills 500 runs in a day or two; more covers more of it. Each 100 more is one more
+ * page of the runs list, and the other calls can rise when the window changes the busiest workflows.
  * @param {{ repo: string, token?: string, fetchImpl?: typeof fetch, days?: number, workflows?: number, perWorkflow?: number, maxRuns?: number, only?: string[], now?: Date, client?: object, onProgress?: (msg: string) => void }} o
  */
 export async function audit({ repo, token, fetchImpl, baseUrl, days = 7, workflows = 8, perWorkflow = 5, maxRuns = MAX_RUNS_DEFAULT, only = [], now, client, onProgress } = {}) {
