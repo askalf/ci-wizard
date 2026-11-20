@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.3
+
+- `--max-runs N` (CLI) and `maxRuns` (`audit()`): the most workflow runs read from the window, a
+  multiple of 100 up to 1000, the most GitHub serves for a runs list filtered by date. The default
+  stays 500. A busy repository fills 500 runs in a day or two, so its weekly figures rest on a short
+  window; 1000 covers about twice as much, at one more API call per 100 runs. The GitHub Action
+  still reads 500.
+
 ## 0.4.2
 
 - The JSON report gives each workflow's outdated pull request runs per event:

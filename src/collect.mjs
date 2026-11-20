@@ -4,7 +4,8 @@ import { duplicateUploads, repeatedTests } from './trim.mjs';
 import { zipEntries } from './zip.mjs';
 import { MAX_CALL_DEPTH, callsOf, isRemoteKey, remoteParts } from './reusable.mjs';
 
-// Reads what an audit needs from GitHub, read-only: up to 500 workflow runs from the window, the
+// Reads what an audit needs from GitHub, read-only: up to maxPages pages of 100 workflow runs from the
+// window (5 by default; GitHub serves 10 at most for a list filtered by date), the
 // jobs (with their steps) of the newest successful runs of the busiest workflows, those
 // workflows' files, and the repository's root listing (to see which lockfiles it commits). Where
 // a sampled workflow's file raises a candidate for a rule that would remove a step (trim.mjs), the
@@ -66,7 +67,10 @@ export function groupRuns(runs, names = new Map()) {
  * @param {string} repo owner/name
  * @param {{ days?: number, perWorkflow?: number, perOutcome?: number, workflows?: number, only?: string[], now?: Date, maxPages?: number, onProgress?: (msg: string) => void }} [o]
  */
-export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2, workflows = 8, only = [], now = new Date(), maxPages = 5, maxScanFiles = 30, logs = true, artifacts = true, maxLogBytes = 8 * 1048576, maxArtifactBytes = 8 * 1048576, onProgress = () => {} } = {}) {
+export async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2, workflows = 8, only = [], now = new Date(), maxPages: askedPages = 5, maxScanFiles = 30, logs = true, artifacts = true, maxLogBytes = 8 * 1048576, maxArtifactBytes = 8 * 1048576, onProgress = () => {} } = {}) {
+  // GitHub serves the first 1000 results of a runs list filtered by date, 10 pages of 100: a page past
+  // them holds none of the window's runs, so no more are asked for.
+  const maxPages = Math.max(1, Math.min(10, Math.floor(askedPages)));
   const since = new Date(now.getTime() - days * 86400e3).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const runs = [];
   let truncated = false;

@@ -8939,8 +8939,9 @@ function groupRuns(runs, names = /* @__PURE__ */ new Map()) {
   for (const g of labelled) out.set(taken.get(g.name) > 1 && g.path ? `${g.name} (${g.path})` : g.name, g.rs);
   return out;
 }
-async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2, workflows = 8, only = [], now = /* @__PURE__ */ new Date(), maxPages = 5, maxScanFiles = 30, logs = true, artifacts = true, maxLogBytes = 8 * 1048576, maxArtifactBytes = 8 * 1048576, onProgress = () => {
+async function collect(client, repo, { days = 7, perWorkflow = 5, perOutcome = 2, workflows = 8, only = [], now = /* @__PURE__ */ new Date(), maxPages: askedPages = 5, maxScanFiles = 30, logs = true, artifacts = true, maxLogBytes = 8 * 1048576, maxArtifactBytes = 8 * 1048576, onProgress = () => {
 } } = {}) {
+  const maxPages = Math.max(1, Math.min(10, Math.floor(askedPages)));
   const since = new Date(now.getTime() - days * 864e5).toISOString().replace(/\.\d{3}Z$/, "Z");
   const runs = [];
   let truncated = false;
@@ -11374,14 +11375,19 @@ function compare2(before, after) {
 }
 
 // src/version.mjs
-var VERSION = "0.4.2";
+var VERSION = "0.4.3";
 
 // src/index.mjs
+var MAX_RUNS_LIMIT = 1e3;
+var MAX_RUNS_DEFAULT = 500;
 var REPO_RE = /^(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/;
-async function audit({ repo, token, fetchImpl, baseUrl, days = 7, workflows = 8, perWorkflow = 5, only = [], now, client, onProgress } = {}) {
+async function audit({ repo, token, fetchImpl, baseUrl, days = 7, workflows = 8, perWorkflow = 5, maxRuns = MAX_RUNS_DEFAULT, only = [], now, client, onProgress } = {}) {
   if (!REPO_RE.test(String(repo))) throw new Error(`not an owner/name repository: ${repo}`);
+  if (!Number.isInteger(maxRuns) || maxRuns < 100 || maxRuns > MAX_RUNS_LIMIT || maxRuns % 100 !== 0) {
+    throw new Error(`maxRuns must be a multiple of 100 from 100 to ${MAX_RUNS_LIMIT}, got ${maxRuns}`);
+  }
   const c = client || createClient({ token, fetchImpl, baseUrl });
-  const data = await collect(c, repo, { days, workflows, perWorkflow, only, now, onProgress });
+  const data = await collect(c, repo, { days, workflows, perWorkflow, only, now, onProgress, maxPages: maxRuns / 100 });
   if (!data) return null;
   const a = analyse(repo, data);
   a.api_calls = c.calls;
@@ -11414,7 +11420,7 @@ function rerunWithEnvProxy({ env = process.env, argv = process.argv, execArgv = 
 }
 
 // src/cli.mjs
-var USAGE = `usage: ci-wizard [owner/repo] [--days 7] [--workflows 8] [--per-workflow 5] [--only NAME] [--json] [--html out.html] [--save out.json]
+var USAGE = `usage: ci-wizard [owner/repo] [--days 7] [--max-runs 500] [--workflows 8] [--per-workflow 5] [--only NAME] [--json] [--html out.html] [--save out.json]
        ci-wizard compare before.json after.json
        ci-wizard --version
 
@@ -11423,7 +11429,9 @@ the CI time goes and what to fix first. The repository is owner/repo or a GitHub
 it is the origin remote of the git checkout in the current directory.
 Token: GITHUB_TOKEN or GH_TOKEN, else \`gh auth token\`.
 
-  --days N           days of runs to read (default 7; up to 500 runs are read)
+  --days N           days of runs to read (default 7; up to --max-runs runs are read)
+  --max-runs N       the most runs read from those days: a multiple of 100 up to 1000 (default
+                     500; one API call per 100). A busy repository fills 500 in a day or two.
   --workflows N      busiest workflows to time job by job (default 8)
   --per-workflow N   newest successful runs of each to time (default 5)
   --only NAME        time only these workflows, by the name GitHub shows (repeat it, or
@@ -11510,6 +11518,7 @@ async function main(argv = process.argv.slice(2), { env = process.env, stdout = 
         workflows: { type: "string", default: "8" },
         only: { type: "string", multiple: true, default: [] },
         "per-workflow": { type: "string", default: "5" },
+        "max-runs": { type: "string", default: "500" },
         json: { type: "boolean", default: false },
         html: { type: "string" },
         save: { type: "string" },
@@ -11563,11 +11572,13 @@ ${USAGE}
     stderr.write(`ci-wizard: auditing ${repo} (the origin of this checkout)
 `);
   }
-  let days, workflows, perWorkflow;
+  let days, workflows, perWorkflow, maxRuns;
   try {
     days = positiveNumber("days", values.days);
     workflows = positiveNumber("workflows", values.workflows, { integer: true });
     perWorkflow = positiveNumber("per-workflow", values["per-workflow"], { integer: true });
+    maxRuns = positiveNumber("max-runs", values["max-runs"], { integer: true });
+    if (maxRuns % 100 !== 0 || maxRuns > MAX_RUNS_LIMIT) throw new Error(`--max-runs must be a multiple of 100 up to ${MAX_RUNS_LIMIT}, got ${values["max-runs"]}`);
   } catch (err) {
     stderr.write(`${err.message}
 `);
@@ -11582,7 +11593,7 @@ ${USAGE}
   let a;
   try {
     const only = values.only.flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
-    a = await audit({ repo, token, fetchImpl, baseUrl: apiBase(env), days, workflows, perWorkflow, only, onProgress });
+    a = await audit({ repo, token, fetchImpl, baseUrl: apiBase(env), days, workflows, perWorkflow, maxRuns, only, onProgress });
   } catch (err) {
     if (live) stderr.write("\r\x1B[K");
     stderr.write(`ci-wizard: ${err.message}

@@ -71,11 +71,12 @@ Outputs: `report-path`, `findings`.
 ### From the command line
 
 ```sh
-npx ci-wizard@0.4.2 owner/repo
-npx ci-wizard@0.4.2 owner/repo --save before.json      # keep a baseline
-npx ci-wizard@0.4.2 owner/repo --html audit.html       # a self-contained page
-npx ci-wizard@0.4.2 owner/repo --only CI --json        # one workflow, as JSON
-npx ci-wizard@0.4.2 compare before.json after.json     # did the fix work?
+npx ci-wizard@0.4.3 owner/repo
+npx ci-wizard@0.4.3 owner/repo --save before.json      # keep a baseline
+npx ci-wizard@0.4.3 owner/repo --html audit.html       # a self-contained page
+npx ci-wizard@0.4.3 owner/repo --only CI --json        # one workflow, as JSON
+npx ci-wizard@0.4.3 owner/repo --max-runs 1000          # a busy repository: more of its week
+npx ci-wizard@0.4.3 compare before.json after.json     # did the fix work?
 ```
 
 You can name the repository as `owner/repo`, a GitHub URL or an SSH remote. Leave it out and the
@@ -174,7 +175,7 @@ People run this on their own repositories, so it is designed to be safe to point
 one that has a hostile contributor.
 
 - **What it reads.** Through the API only, these endpoints:
-  - `GET /repos/{repo}/actions/runs` (up to 500 runs), `/actions/runs/{id}/jobs` and
+  - `GET /repos/{repo}/actions/runs` (up to 500 runs, or the CLI's `--max-runs` up to 1000), `/actions/runs/{id}/jobs` and
     `/actions/workflows`;
   - `/actions/runs/{id}/jobs?filter=all` for up to 3 re-attempted runs of each sampled workflow:
     the jobs of every attempt, for what the later attempts re-ran;
@@ -301,11 +302,13 @@ The token lasts an hour and is revoked when the job ends.
 
 ## Limitations
 
-- **Sampled.** The window is up to 500 runs. Job-level timing comes from a few recent successful
+- **Sampled.** The window is up to 500 runs; the CLI's `--max-runs` takes it to 1000, the most GitHub
+  serves for a runs list filtered by date, at one more API call per 100. Job-level timing comes from a few recent successful
   runs of each busy workflow, plus up to two failed, cancelled and timed-out runs each, for their
   cost.
   - Weekly figures scale the window to 7 days. A busy repository's 500 runs can cover less than a
-    day, so its figures are noisier, and the report says when the cap cut the window short.
+    day (1000 about twice that), so its figures are noisier, and the report says when the cap cut the
+    window short.
 - **Estimates.** Savings come from simple formulas over measured time ([docs/rules.md](docs/rules.md)),
   not from running the fix. Only `compare`, run after the change, proves one.
 - **Billed minutes are minutes, not money.** They round each hosted job up as GitHub does. But

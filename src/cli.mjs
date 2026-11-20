@@ -8,13 +8,13 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { audit, html, NotFoundError, report, RateLimitError, REPO_RE } from './index.mjs';
+import { audit, html, MAX_RUNS_LIMIT, NotFoundError, report, RateLimitError, REPO_RE } from './index.mjs';
 import { budgetText, plain } from './report.mjs';
 import { apiBase } from './github.mjs';
 import { compare } from './compare.mjs';
 import { VERSION } from './version.mjs';
 
-const USAGE = `usage: ci-wizard [owner/repo] [--days 7] [--workflows 8] [--per-workflow 5] [--only NAME] [--json] [--html out.html] [--save out.json]
+const USAGE = `usage: ci-wizard [owner/repo] [--days 7] [--max-runs 500] [--workflows 8] [--per-workflow 5] [--only NAME] [--json] [--html out.html] [--save out.json]
        ci-wizard compare before.json after.json
        ci-wizard --version
 
@@ -23,7 +23,9 @@ the CI time goes and what to fix first. The repository is owner/repo or a GitHub
 it is the origin remote of the git checkout in the current directory.
 Token: GITHUB_TOKEN or GH_TOKEN, else \`gh auth token\`.
 
-  --days N           days of runs to read (default 7; up to 500 runs are read)
+  --days N           days of runs to read (default 7; up to --max-runs runs are read)
+  --max-runs N       the most runs read from those days: a multiple of 100 up to 1000 (default
+                     500; one API call per 100). A busy repository fills 500 in a day or two.
   --workflows N      busiest workflows to time job by job (default 8)
   --per-workflow N   newest successful runs of each to time (default 5)
   --only NAME        time only these workflows, by the name GitHub shows (repeat it, or
@@ -131,6 +133,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, st
         workflows: { type: 'string', default: '8' },
         only: { type: 'string', multiple: true, default: [] },
         'per-workflow': { type: 'string', default: '5' },
+        'max-runs': { type: 'string', default: '500' },
         json: { type: 'boolean', default: false },
         html: { type: 'string' },
         save: { type: 'string' },
@@ -171,11 +174,13 @@ export async function main(argv = process.argv.slice(2), { env = process.env, st
     }
     stderr.write(`ci-wizard: auditing ${repo} (the origin of this checkout)\n`);
   }
-  let days, workflows, perWorkflow;
+  let days, workflows, perWorkflow, maxRuns;
   try {
     days = positiveNumber('days', values.days);
     workflows = positiveNumber('workflows', values.workflows, { integer: true });
     perWorkflow = positiveNumber('per-workflow', values['per-workflow'], { integer: true });
+    maxRuns = positiveNumber('max-runs', values['max-runs'], { integer: true });
+    if (maxRuns % 100 !== 0 || maxRuns > MAX_RUNS_LIMIT) throw new Error(`--max-runs must be a multiple of 100 up to ${MAX_RUNS_LIMIT}, got ${values['max-runs']}`);
   } catch (err) {
     stderr.write(`${err.message}\n`);
     return 2;
@@ -191,7 +196,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, st
   let a;
   try {
     const only = values.only.flatMap((v) => v.split(',')).map((v) => v.trim()).filter(Boolean);
-    a = await audit({ repo, token, fetchImpl, baseUrl: apiBase(env), days, workflows, perWorkflow, only, onProgress });
+    a = await audit({ repo, token, fetchImpl, baseUrl: apiBase(env), days, workflows, perWorkflow, maxRuns, only, onProgress });
   } catch (err) {
     if (live) stderr.write('\r\x1b[K');
     stderr.write(`ci-wizard: ${err.message}\n`);
