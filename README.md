@@ -11,7 +11,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ```sh
-npx ci-wizard@0.4.4 owner/repo
+npx ci-wizard@0.5.0 owner/repo
 ```
 
 <img src="https://raw.githubusercontent.com/askalf/ci-wizard/main/docs/img/report.png" alt="The HTML report for askalf/ci: 183 job-minutes a week across 8 sampled workflows, 5 findings ranked by estimated saving, the first a self-hosted wrap-up tail with its fix and trade-off" width="860">
@@ -45,10 +45,11 @@ security mistakes a supply-chain review starts with.
 ### From the command line
 
 ```sh
-npx ci-wizard@0.4.4 owner/repo                          # the report, as markdown
-npx ci-wizard@0.4.4 owner/repo --html audit.html        # also a self-contained page
-npx ci-wizard@0.4.4 owner/repo --save before.json       # also a baseline for compare
-npx ci-wizard@0.4.4 compare before.json after.json      # did the fix work?
+npx ci-wizard@0.5.0 owner/repo                          # the report, as markdown
+npx ci-wizard@0.5.0 owner/repo --html audit.html        # also a self-contained page
+npx ci-wizard@0.5.0 owner/repo --save before.json       # also a baseline for compare
+npx ci-wizard@0.5.0 owner/repo --fix fix.patch          # also the patches it offers, for git apply
+npx ci-wizard@0.5.0 compare before.json after.json      # did the fix work?
 ```
 
 The repository can be `owner/repo`, a GitHub URL or an SSH remote. Left out, it is the origin of the
@@ -90,7 +91,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: askalf/ci-wizard@ac4cff563323f818005aab0466b02ab54d6c4bce # v0.4.3
+      - uses: askalf/ci-wizard@f8ce54e49e32fb5525fa2f32477abc0c00c0f277 # v0.5.0
 ```
 
 The report lands in the job summary, and in `$RUNNER_TEMP/ci-wizard/report.md` with `report.json`
@@ -109,7 +110,7 @@ repository.
 Outputs: `report-path`, `findings`.
 
 Pin the action to a release commit's full SHA, not to a tag: ci-wizard's own scan flags a tag pin,
-because a tag can be moved to other code. `gh api repos/askalf/ci-wizard/commits/v0.4.3 --jq .sha`
+because a tag can be moved to other code. `gh api repos/askalf/ci-wizard/commits/v0.5.0 --jq .sha`
 prints the SHA of a release, and Dependabot or Renovate propose new pins as releases come.
 
 ### Rate limits
@@ -134,7 +135,7 @@ its client ID as a variable and its key as a secret, and mint a token in the job
           owner: ${{ github.repository_owner }}
           permission-actions: read
           permission-contents: read
-      - uses: askalf/ci-wizard@ac4cff563323f818005aab0466b02ab54d6c4bce # v0.4.3
+      - uses: askalf/ci-wizard@f8ce54e49e32fb5525fa2f32477abc0c00c0f277 # v0.5.0
         with:
           token: ${{ steps.app.outputs.token }}
 ```
