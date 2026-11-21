@@ -1011,7 +1011,8 @@ export function groupFindings(F) {
 /**
  * The patches the report offers: for each "outdated runs keep going" finding, cancelOutdatedFix on
  * its workflow's file as collect read it, once per file. { workflow, what, path, patch } or
- * { workflow, what, path, refused }. Pure.
+ * { workflow, what, path, refused }. A patch that cannot be built is a refusal, never an error: the
+ * audit is reported whatever one workflow file holds. Pure.
  */
 export function patchesFor(findings, workflows, files = new Map()) {
   const byName = new Map(workflows.map((w) => [w.workflow, w]));
@@ -1022,7 +1023,9 @@ export function patchesFor(findings, workflows, files = new Map()) {
     const w = byName.get(f.workflow);
     if (!w || !w.path || seen.has(w.path)) continue;
     seen.add(w.path);
-    out.push({ workflow: f.workflow, what: f.what, ...cancelOutdatedFix(w.path, files.get(w.path)) });
+    let fix;
+    try { fix = cancelOutdatedFix(w.path, files.get(w.path)); } catch { fix = { path: w.path, refused: 'the patch could not be built from this file; left for a hand edit' }; }
+    out.push({ workflow: f.workflow, what: f.what, ...fix });
   }
   return out;
 }

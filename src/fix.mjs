@@ -73,7 +73,10 @@ export function cancelOutdatedFix(path, text) {
   if (!isMap(top) || top.flow) return no('the top level is not a block mapping');
   const key = (p) => (isScalar(p.key) ? String(p.key.value) : null);
   if (top.items.some((p) => key(p) === 'concurrency')) return no('the workflow already has a concurrency setting; add cancel-in-progress to it by hand');
-  const js = doc.toJS();
+  // A document can parse with no error and still fail to convert: an alias that names no anchor
+  // (`jobs: *missing`), or more alias expansion than the parser allows.
+  let js;
+  try { js = doc.toJS(); } catch { return no('the file does not read as a workflow (an alias that resolves to nothing, or too many aliases)'); }
   const triggers = triggersOf(js);
   if (triggers.includes('workflow_call')) return no('a reusable workflow (workflow_call): a concurrency group here also binds the runs that call it');
   if (!triggers.some((t) => PR_TRIGGERS.includes(t))) return no('no pull request trigger');

@@ -10040,7 +10040,12 @@ function cancelOutdatedFix(path, text) {
   if (!(0, import_yaml2.isMap)(top) || top.flow) return no("the top level is not a block mapping");
   const key = (p) => (0, import_yaml2.isScalar)(p.key) ? String(p.key.value) : null;
   if (top.items.some((p) => key(p) === "concurrency")) return no("the workflow already has a concurrency setting; add cancel-in-progress to it by hand");
-  const js = doc.toJS();
+  let js;
+  try {
+    js = doc.toJS();
+  } catch {
+    return no("the file does not read as a workflow (an alias that resolves to nothing, or too many aliases)");
+  }
   const triggers = triggersOf(js);
   if (triggers.includes("workflow_call")) return no("a reusable workflow (workflow_call): a concurrency group here also binds the runs that call it");
   if (!triggers.some((t) => PR_TRIGGERS2.includes(t))) return no("no pull request trigger");
@@ -10964,7 +10969,13 @@ function patchesFor(findings, workflows, files = /* @__PURE__ */ new Map()) {
     const w = byName.get(f.workflow);
     if (!w || !w.path || seen.has(w.path)) continue;
     seen.add(w.path);
-    out.push({ workflow: f.workflow, what: f.what, ...cancelOutdatedFix(w.path, files.get(w.path)) });
+    let fix;
+    try {
+      fix = cancelOutdatedFix(w.path, files.get(w.path));
+    } catch {
+      fix = { path: w.path, refused: "the patch could not be built from this file; left for a hand edit" };
+    }
+    out.push({ workflow: f.workflow, what: f.what, ...fix });
   }
   return out;
 }

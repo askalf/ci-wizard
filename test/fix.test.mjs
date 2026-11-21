@@ -89,6 +89,17 @@ test('a file it cannot patch safely gets the reason, never a patch', () => {
   assert.match(no('on: push\njobs:\n  t:\n    runs-on: x\n'), /no pull request trigger/);
   assert.match(no('  on: pull_request\n  jobs:\n    t:\n      runs-on: x\n'), /no top-level jobs key at the start of a line/);
   assert.match(no('on: pull_request\nname: x\n'), /no top-level jobs key/);
+  // Parses with no error, fails to convert: an alias naming no anchor.
+  assert.match(no('on: pull_request\njobs: *missing\n'), /does not read as a workflow \(an alias that resolves to nothing/);
+});
+
+test('a file the patch cannot read never stops the audit: the finding stays and the patch is a refusal', () => {
+  const alias = 'on: pull_request\njobs: *missing\n';
+  const a = analyse('owner/repo', data({ workflows: [{ name: 'CI', runs: prRuns(6), file: alias }] }));
+  assert.ok(a.findings.some((f) => f.what === 'outdated runs keep going'), JSON.stringify(a.findings.map((f) => f.what)));
+  assert.equal(a.fixes.length, 1);
+  assert.match(a.fixes[0].refused, /does not read as a workflow/);
+  assert.equal(a.fixes[0].patch, undefined);
 });
 
 test('insertionPatch: counts and context at the start of a file', () => {
