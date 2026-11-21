@@ -72,10 +72,21 @@ export function cacheExample(manager, lockfiles = []) {
   }
 }
 
-/** A concurrency group that cancels a pull request's outdated run and leaves runs on branches alone. */
+/**
+ * The concurrency group for "outdated runs keep going": one group per pull request and event, so a
+ * new push to a pull request cancels that pull request's run still going. Every other run (a push,
+ * a schedule, a merge queue, a dispatch) has no pull request number and gets a group of its own
+ * (the run id), so it is never cancelled and never queued behind another. The number, not the
+ * branch name: pull requests from forks often share a branch name (main, patch-1), and a group
+ * keyed on it would cancel another contributor's run. The event is in the key so a workflow on both
+ * pull_request and pull_request_target keeps the two runs of a commit apart.
+ */
+export const CANCEL_GROUP = '${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}';
+
+/** A concurrency block that cancels a pull request's outdated run and leaves every other run alone (CANCEL_GROUP). */
 export const CANCEL_OUTDATED = [
   'concurrency:',
-  '  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}',
+  `  group: ${CANCEL_GROUP}`,
   '  cancel-in-progress: true',
 ].join('\n');
 

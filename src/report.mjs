@@ -204,6 +204,12 @@ export function report(a, { maxFindings = 8 } = {}) {
       L.push(`**Fix:** ${md(f.fix)}.${f.tradeoff ? '  ' : ''}`);
       if (f.tradeoff) L.push(`**Trade-off:** ${md(f.tradeoff)}.`);
       if (f.example) L.push('', ...fence(f.example));
+      const fx = (a.fixes || []).find((x) => x.what === f.what && x.workflow === f.workflow);
+      if (fx) {
+        L.push('', fx.patch
+          ? `**Patch:** \`--fix FILE\` writes it for ${md(`\`${fx.path}\``)}, checked to parse back to the same workflow plus the group; apply it with \`git apply FILE\`.`
+          : `**Patch:** none for ${md(`\`${fx.path}\``)}: ${md(fx.refused)}.`);
+      }
       L.push('');
     });
     if (a.findings.length > maxFindings) L.push(`${plural(a.findings.length - maxFindings, 'smaller finding')} not shown; the JSON report (\`--json\`) lists all of them.`, '');

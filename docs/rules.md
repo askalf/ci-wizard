@@ -321,9 +321,20 @@ that runs on a clock, a dispatch or another workflow, the report shows no wait.
   expression (a condition such as "pull requests only") are on.
 - **Confidence** measured.
 - **Estimate** those runs a week, times job-minutes per run.
-- **Fix** a concurrency group per branch with `cancel-in-progress: true`. *Trade-off:* a
+- **Fix** a concurrency group per pull request with `cancel-in-progress: true`:
+  `${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}`.
+  Keyed on the pull request's number, not its branch, since pull requests from forks often share
+  a branch name; every run without a pull request (a push, a schedule, a merge queue) gets its own
+  group from the run id and is never cancelled or queued. *Trade-off:* a
   workflow whose runs must all finish (a status that counts every run, a deploy) should not
   cancel; queued runs can pile up as cancelled.
+- **Patch** `--fix FILE` (the JSON report's `fixes`) writes that block into the workflow file as a
+  diff for `git apply`: a top-level `concurrency` before `jobs`, above the comment lines on it,
+  indented as the file indents its jobs, with the file's line ends. It is checked to parse back to
+  the same workflow plus the block. No patch, with the reason, for a file that does not parse, holds
+  more than one document or is not a block mapping at the top; one that already sets a top-level
+  `concurrency` (add `cancel-in-progress` to it by hand); a reusable workflow (`workflow_call`),
+  whose group would also bind its callers; one with no pull request trigger.
 - **Counted** over `pull_request` and `pull_request_target` runs together (`superseded_week` in
   the JSON report). `superseded_week_by_event` gives each event alone, counting only its runs made
   outdated by a newer run of the same event: what a concurrency group keyed to that event would

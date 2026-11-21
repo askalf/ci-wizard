@@ -104,7 +104,8 @@ test('every example is valid YAML, and the concurrency ones say what the fix say
     checkoutAdvice({ fullHistory: true, lfs: true, submodules: true, tags: true }).example, checkoutAdvice({}).example];
   for (const y of all) assert.doesNotThrow(() => parse(y), y);
   assert.equal(parse(CANCEL_OUTDATED).concurrency['cancel-in-progress'], true);
-  assert.match(parse(CANCEL_OUTDATED).concurrency.group, /github\.head_ref \|\| github\.run_id/);
+  assert.match(parse(CANCEL_OUTDATED).concurrency.group, /github\.event\.pull_request\.number \|\| github\.run_id/);
+  assert.doesNotMatch(CANCEL_OUTDATED, /head_ref/);
   assert.deepEqual(parse(triggerExample(['master', 'release/*'])).on.push.branches, ['master']);
 });
 

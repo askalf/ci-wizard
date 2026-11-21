@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0
+
+- `--fix FILE` (CLI) and `fixes` (JSON report, `audit()`): a patch for each "outdated runs keep
+  going" finding, against the workflow file the audit read, as one file for `git apply`. It adds a
+  top-level concurrency group with `cancel-in-progress` and is checked to parse back to the same
+  workflow plus the group. A file it cannot patch safely (one with a concurrency setting already, a
+  reusable workflow, no pull request trigger, YAML that does not parse) gets the reason instead.
+  The markdown report says under the finding whether a patch is there.
+- The concurrency group in that finding's example is keyed on the pull request's number, not its
+  branch name (`github.head_ref`): pull requests from forks often share a branch name, and the old
+  group could cancel another contributor's run. Runs with no pull request keep a group of their own.
+
 ## 0.4.4
 
 - The README, rewritten: the one-line `npx` and a picture of the HTML report from a real audit up

@@ -8,6 +8,7 @@ import { countBy, fmtS, mean, median, pct, round, secs, sum } from './util.mjs';
 import { scanFindings } from './scans.mjs';
 import { duplicateUploads, repeatedTests, sameTests, selfHostedSetups, signaturesOf, startsTests } from './trim.mjs';
 import { gateFindings } from './gates.mjs';
+import { cancelOutdatedFix } from './fix.mjs';
 import { CANCEL_OUTDATED, ONE_RUN_PER_COMMIT, cacheExample, checkoutAdvice, forkGuardExample, managerOf, triggerExample } from './advice.mjs';
 
 export const THRESHOLDS = {
@@ -701,7 +702,7 @@ export function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultB
   if (w.superseded_week >= T.supersededWeek && !w.cancels) {
     add(w.superseded_week * (w.job_minutes_per_run_mean ?? w.job_minutes_per_run), 'outdated runs keep going',
       `${Math.round(w.superseded_week)} pull request runs a week were still running when a newer push to the same branch started a new run, and the workflow has no cancel-in-progress`,
-      'a concurrency group per branch with cancel-in-progress, so a new push cancels the outdated run (runs on the default branch keep their own group)',
+      'a concurrency group per pull request with cancel-in-progress, so a new push to it cancels its outdated run (every other run, the default branch\'s included, gets a group of its own and is never cancelled)',
       { tradeoff: 'a workflow whose runs must all finish (a status that counts every run, a deploy) should not cancel, and cancelled runs show in the history', example: CANCEL_OUTDATED });
   }
 
@@ -1007,6 +1008,25 @@ export function groupFindings(F) {
  * @param {string} repo
  * @param {Awaited<ReturnType<import('./collect.mjs').collect>>} data
  */
+/**
+ * The patches the report offers: for each "outdated runs keep going" finding, cancelOutdatedFix on
+ * its workflow's file as collect read it, once per file. { workflow, what, path, patch } or
+ * { workflow, what, path, refused }. Pure.
+ */
+export function patchesFor(findings, workflows, files = new Map()) {
+  const byName = new Map(workflows.map((w) => [w.workflow, w]));
+  const seen = new Set();
+  const out = [];
+  for (const f of findings) {
+    if (f.what !== 'outdated runs keep going') continue;
+    const w = byName.get(f.workflow);
+    if (!w || !w.path || seen.has(w.path)) continue;
+    seen.add(w.path);
+    out.push({ workflow: f.workflow, what: f.what, ...cancelOutdatedFix(w.path, files.get(w.path)) });
+  }
+  return out;
+}
+
 export function analyse(repo, data) {
   // One parse per workflow file for the whole audit: the measurements, scans and gate checks share it.
   return withParseCache(() => analyseParsed(repo, data));
@@ -1056,6 +1076,9 @@ function analyseParsed(repo, data) {
     workflows,
     job_minutes_week_sampled: round(sum(workflows.map((w) => w.job_minutes_week)), 1),
     findings,
+    // A patch for each finding that has one (today: outdated runs keep going), against the workflow
+    // file the audit read, or the reason a file is left for a hand edit. One per file.
+    fixes: patchesFor(findings, workflows, data.files),
     saving_min_week_total: round(sum(findings.filter((f) => f.unit === 'job').map((f) => f.saving_min_week)), 1),
     billed_minutes_week_sampled: round(sum(workflows.map((w) => w.billed_minutes_week)), 1),
     billed_saving_min_week_total: round(sum(findings.filter((f) => f.unit === 'billed').map((f) => f.saving_min_week)), 1),

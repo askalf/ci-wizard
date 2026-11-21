@@ -1,4 +1,4 @@
-// ci-wizard [owner/repo | GitHub URL] [--days 7] [--workflows 8] [--per-workflow 5] [--json] [--html out.html] [--save out.json]
+// ci-wizard [owner/repo | GitHub URL] [--days 7] [--workflows 8] [--per-workflow 5] [--json] [--html out.html] [--save out.json] [--fix out.patch]
 // ci-wizard compare before.json after.json
 // With no repository, the audit reads the origin remote of the git checkout it runs in.
 // The audit prints the markdown report (or the JSON with --json). The token comes from
@@ -14,7 +14,7 @@ import { apiBase } from './github.mjs';
 import { compare } from './compare.mjs';
 import { VERSION } from './version.mjs';
 
-const USAGE = `usage: ci-wizard [owner/repo] [--days 7] [--max-runs 500] [--workflows 8] [--per-workflow 5] [--only NAME] [--json] [--html out.html] [--save out.json]
+const USAGE = `usage: ci-wizard [owner/repo] [--days 7] [--max-runs 500] [--workflows 8] [--per-workflow 5] [--only NAME] [--json] [--html out.html] [--save out.json] [--fix out.patch]
        ci-wizard compare before.json after.json
        ci-wizard --version
 
@@ -35,6 +35,8 @@ Token: GITHUB_TOKEN or GH_TOKEN, else \`gh auth token\`.
   --json             print the report as JSON instead of markdown
   --save FILE        also save the JSON report, as a baseline for compare
   --html FILE        also write the report as an HTML page
+  --fix FILE         also write the patches the report offers, one file for \`git apply\`
+                     (today: a concurrency group that cancels a pull request's outdated runs)
 
 The method: audit and --save before.json, make one change, let it run, audit again with
 --save after.json, then \`ci-wizard compare before.json after.json\` shows what moved.`;
@@ -139,6 +141,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, st
         json: { type: 'boolean', default: false },
         html: { type: 'string' },
         save: { type: 'string' },
+        fix: { type: 'string' },
         help: { type: 'boolean', short: 'h', default: false },
         version: { type: 'boolean', short: 'v', default: false },
       },
@@ -216,6 +219,17 @@ export async function main(argv = process.argv.slice(2), { env = process.env, st
   const budget = budgetText(a);
   stderr.write(`ci-wizard: ${a.runs_total} runs over ${a.covered_days} d, ${a.workflows.length} workflows sampled, ${a.findings.length} findings, ${budget || `${a.api_calls} API calls`}\n`);
   if (values.save) stderr.write(`ci-wizard: saved ${values.save}; after a change has run a while, save another report and run \`ci-wizard compare ${values.save} <after>.json\`\n`);
+  if (values.fix) {
+    const fixes = a.fixes || [];
+    const patches = fixes.filter((f) => f.patch);
+    if (patches.length) {
+      writeFileSync(values.fix, patches.map((f) => f.patch).join(''));
+      stderr.write(`ci-wizard: wrote ${patches.length} patch${patches.length === 1 ? '' : 'es'} to ${values.fix} (${patches.map((f) => plain(f.path)).join(', ')}); check it, then \`git apply ${values.fix}\` in a checkout of the default branch\n`);
+    } else {
+      stderr.write(`ci-wizard: no patch to write${fixes.length ? '' : ': no finding of this audit has one'}; ${values.fix} was not written\n`);
+    }
+    for (const f of fixes.filter((x) => !x.patch)) stderr.write(`ci-wizard: no patch for ${plain(f.path)} (${plain(f.workflow)}): ${plain(f.refused)}\n`);
+  }
   return 0;
 }
 

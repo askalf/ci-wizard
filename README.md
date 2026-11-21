@@ -65,6 +65,7 @@ checkout you run it in. The token comes from `GITHUB_TOKEN` or `GH_TOKEN`, other
 | `--json` | | print the report as JSON instead of markdown |
 | `--save FILE` | | also save the JSON report, as a baseline for `compare` |
 | `--html FILE` | | also write the report as an HTML page |
+| `--fix FILE` | | also write the patches the report offers as one file for `git apply`: today, a concurrency group that cancels a pull request's outdated runs (see `docs/rules.md`) |
 
 Exit codes: `0` report written, `1` repository not found or not readable, no runs in the window, or
 an API error, `2` usage error, `3` stopped near the rate limit.

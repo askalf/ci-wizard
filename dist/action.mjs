@@ -50,9 +50,9 @@ var require_identity = __commonJS({
     var NODE_TYPE = /* @__PURE__ */ Symbol.for("yaml.node.type");
     var isAlias = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === ALIAS;
     var isDocument = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === DOC;
-    var isMap = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === MAP;
+    var isMap2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === MAP;
     var isPair = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === PAIR;
-    var isScalar = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SCALAR;
+    var isScalar2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SCALAR;
     var isSeq = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SEQ;
     function isCollection(node) {
       if (node && typeof node === "object")
@@ -74,7 +74,7 @@ var require_identity = __commonJS({
         }
       return false;
     }
-    var hasAnchor = (node) => (isScalar(node) || isCollection(node)) && !!node.anchor;
+    var hasAnchor = (node) => (isScalar2(node) || isCollection(node)) && !!node.anchor;
     exports.ALIAS = ALIAS;
     exports.DOC = DOC;
     exports.MAP = MAP;
@@ -86,10 +86,10 @@ var require_identity = __commonJS({
     exports.isAlias = isAlias;
     exports.isCollection = isCollection;
     exports.isDocument = isDocument;
-    exports.isMap = isMap;
+    exports.isMap = isMap2;
     exports.isNode = isNode;
     exports.isPair = isPair;
-    exports.isScalar = isScalar;
+    exports.isScalar = isScalar2;
     exports.isSeq = isSeq;
   }
 });
@@ -4198,9 +4198,9 @@ var require_resolve_flow_collection = __commonJS({
     var blockMsg = "Block collections are not allowed within flow collections";
     var isBlock = (token) => token && (token.type === "block-map" || token.type === "block-seq");
     function resolveFlowCollection({ composeNode, composeEmptyNode }, ctx, fc, onError, tag) {
-      const isMap = fc.start.source === "{";
-      const fcName = isMap ? "flow map" : "flow sequence";
-      const NodeClass = tag?.nodeClass ?? (isMap ? YAMLMap.YAMLMap : YAMLSeq.YAMLSeq);
+      const isMap2 = fc.start.source === "{";
+      const fcName = isMap2 ? "flow map" : "flow sequence";
+      const NodeClass = tag?.nodeClass ?? (isMap2 ? YAMLMap.YAMLMap : YAMLSeq.YAMLSeq);
       const coll = new NodeClass(ctx.schema);
       coll.flow = true;
       const atRoot = ctx.atRoot;
@@ -4236,7 +4236,7 @@ var require_resolve_flow_collection = __commonJS({
             offset = props.end;
             continue;
           }
-          if (!isMap && ctx.options.strict && utilContainsNewline.containsNewline(key))
+          if (!isMap2 && ctx.options.strict && utilContainsNewline.containsNewline(key))
             onError(
               key,
               // checked by containsNewline()
@@ -4276,7 +4276,7 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap && !sep && !props.found) {
+        if (!isMap2 && !sep && !props.found) {
           const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
@@ -4299,7 +4299,7 @@ var require_resolve_flow_collection = __commonJS({
             startOnNewline: false
           });
           if (valueProps.found) {
-            if (!isMap && !props.found && ctx.options.strict) {
+            if (!isMap2 && !props.found && ctx.options.strict) {
               if (sep)
                 for (const st of sep) {
                   if (st === valueProps.found)
@@ -4331,7 +4331,7 @@ var require_resolve_flow_collection = __commonJS({
           const pair = new Pair.Pair(keyNode, valueNode);
           if (ctx.options.keepSourceTokens)
             pair.srcToken = collItem;
-          if (isMap) {
+          if (isMap2) {
             const map = coll;
             if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
               onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
@@ -4347,7 +4347,7 @@ var require_resolve_flow_collection = __commonJS({
           offset = valueNode ? valueNode.range[2] : valueProps.end;
         }
       }
-      const expectedEnd = isMap ? "}" : "]";
+      const expectedEnd = isMap2 ? "}" : "]";
       const [ce, ...ee] = fc.end;
       let cePos = offset;
       if (ce?.source === expectedEnd)
@@ -5634,7 +5634,7 @@ var require_cst = __commonJS({
     var FLOW_END = "";
     var SCALAR = "";
     var isCollection = (token) => !!token && "items" in token;
-    var isScalar = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
+    var isScalar2 = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
     function prettyToken(token) {
       switch (token) {
         case BOM:
@@ -5718,7 +5718,7 @@ var require_cst = __commonJS({
     exports.FLOW_END = FLOW_END;
     exports.SCALAR = SCALAR;
     exports.isCollection = isCollection;
-    exports.isScalar = isScalar;
+    exports.isScalar = isScalar2;
     exports.prettyToken = prettyToken;
     exports.tokenType = tokenType;
   }
@@ -7234,7 +7234,7 @@ var require_public_api = __commonJS({
       const lineCounter$1 = options.lineCounter || prettyErrors && new lineCounter.LineCounter() || null;
       return { lineCounter: lineCounter$1, prettyErrors };
     }
-    function parseAllDocuments(source, options = {}) {
+    function parseAllDocuments2(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
       const parser$1 = new parser.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
@@ -7248,7 +7248,7 @@ var require_public_api = __commonJS({
         return docs;
       return Object.assign([], { empty: true }, composer$1.streamInfo());
     }
-    function parseDocument(source, options = {}) {
+    function parseDocument2(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
       const parser$1 = new parser.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
@@ -7267,14 +7267,14 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse2(src, reviver, options) {
+    function parse3(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
       } else if (options === void 0 && reviver && typeof reviver === "object") {
         options = reviver;
       }
-      const doc = parseDocument(src, options);
+      const doc = parseDocument2(src, options);
       if (!doc)
         return null;
       doc.warnings.forEach((warning) => log.warn(doc.options.logLevel, warning));
@@ -7308,9 +7308,9 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
-    exports.parse = parse2;
-    exports.parseAllDocuments = parseAllDocuments;
-    exports.parseDocument = parseDocument;
+    exports.parse = parse3;
+    exports.parseAllDocuments = parseAllDocuments2;
+    exports.parseDocument = parseDocument2;
     exports.stringify = stringify;
   }
 });
@@ -9856,6 +9856,10 @@ function gateFindings(gates, { scanFiles = /* @__PURE__ */ new Map(), reusable =
   return F;
 }
 
+// src/fix.mjs
+var import_yaml2 = __toESM(require_dist(), 1);
+import { isDeepStrictEqual } from "node:util";
+
 // src/advice.mjs
 var LOCK_OF = {
   npm: "package-lock.json",
@@ -9925,9 +9929,10 @@ function cacheExample(manager, lockfiles = []) {
       return "";
   }
 }
+var CANCEL_GROUP = "${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}";
 var CANCEL_OUTDATED = [
   "concurrency:",
-  "  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}",
+  `  group: ${CANCEL_GROUP}`,
   "  cancel-in-progress: true"
 ].join("\n");
 function triggerExample(pushBranches = [], defaultBranch = null) {
@@ -9988,6 +9993,82 @@ function forkGuardExample(runsOn) {
     return `runs-on: \${{ ${FORK_TO_HOSTED} || fromJSON('${JSON.stringify(runsOn).replace(/'/g, "''")}') }}`;
   }
   return "";
+}
+
+// src/fix.mjs
+var PR_TRIGGERS2 = ["pull_request", "pull_request_target"];
+function cancelBlock(unit) {
+  const pad = " ".repeat(unit);
+  return ["concurrency:", `${pad}group: ${CANCEL_GROUP}`, `${pad}cancel-in-progress: true`];
+}
+var lineStart = (text, offset) => text.lastIndexOf("\n", offset - 1) + 1;
+function insertionPatch(path, text, offset, insert, eol = "\n") {
+  const finalNewline = text.endsWith("\n");
+  const lines = text.split("\n");
+  if (finalNewline) lines.pop();
+  const at = text.slice(0, offset).split("\n").length - 1;
+  const from = Math.max(0, at - 3);
+  const to = Math.min(lines.length, at + 3);
+  const before = lines.slice(from, at);
+  const after = lines.slice(at, to);
+  const cr = eol === "\r\n" ? "\r" : "";
+  const body = [
+    ...before.map((l) => ` ${l}`),
+    ...insert.map((l) => `+${l}${cr}`),
+    ...after.map((l) => ` ${l}`)
+  ];
+  if (!finalNewline && to === lines.length && after.length) body.push("\\ No newline at end of file");
+  const oldCount = before.length + after.length;
+  const newCount = oldCount + insert.length;
+  return [
+    `diff --git a/${path} b/${path}`,
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    `@@ -${from + 1},${oldCount} +${from + 1},${newCount} @@`,
+    ...body,
+    ""
+  ].join("\n");
+}
+function cancelOutdatedFix(path, text) {
+  const no = (refused) => ({ path, refused });
+  if (typeof text !== "string" || !text.trim()) return no("the workflow file was not read");
+  if ((0, import_yaml2.parseAllDocuments)(text).length !== 1) return no("the file holds more than one YAML document");
+  const doc = (0, import_yaml2.parseDocument)(text);
+  if (doc.errors.length) return no("the file does not parse as YAML");
+  const top = doc.contents;
+  if (!(0, import_yaml2.isMap)(top) || top.flow) return no("the top level is not a block mapping");
+  const key = (p) => (0, import_yaml2.isScalar)(p.key) ? String(p.key.value) : null;
+  if (top.items.some((p) => key(p) === "concurrency")) return no("the workflow already has a concurrency setting; add cancel-in-progress to it by hand");
+  const js = doc.toJS();
+  const triggers = triggersOf(js);
+  if (triggers.includes("workflow_call")) return no("a reusable workflow (workflow_call): a concurrency group here also binds the runs that call it");
+  if (!triggers.some((t) => PR_TRIGGERS2.includes(t))) return no("no pull request trigger");
+  const jobs = top.items.find((p) => key(p) === "jobs");
+  const at = jobs?.key?.range?.[0];
+  if (!Number.isInteger(at) || lineStart(text, at) !== at) return no("no top-level jobs key at the start of a line to place the group before");
+  let offset = at;
+  for (; ; ) {
+    if (offset === 0) break;
+    const prev = lineStart(text, offset - 1);
+    if (!/^#/.test(text.slice(prev, offset))) break;
+    offset = prev;
+  }
+  const first = (0, import_yaml2.isMap)(jobs.value) ? jobs.value.items[0]?.key?.range?.[0] : null;
+  const unit = Number.isInteger(first) && first - lineStart(text, first) > 0 ? first - lineStart(text, first) : 2;
+  const eol = text.slice(0, at).endsWith("\r\n") || /\r\n/.test(text) ? "\r\n" : "\n";
+  const insert = [...cancelBlock(unit), ""];
+  const patched = text.slice(0, offset) + insert.map((l) => l + eol).join("") + text.slice(offset);
+  let after;
+  try {
+    after = (0, import_yaml2.parse)(patched);
+  } catch {
+    return no("the patched file does not parse; left for a hand edit");
+  }
+  const { concurrency, ...rest } = after ?? {};
+  if (!isDeepStrictEqual(rest, js) || !concurrency || concurrency.group !== CANCEL_GROUP || concurrency["cancel-in-progress"] !== true) {
+    return no("the patched file does not read as the workflow plus the group; left for a hand edit");
+  }
+  return { path, patch: insertionPatch(path, text, offset, insert, eol) };
 }
 
 // src/analyse.mjs
@@ -10597,7 +10678,7 @@ function workflowFindings(w, { lockKey, hasLock, lockfiles = [], defaultBranch =
       w.superseded_week * (w.job_minutes_per_run_mean ?? w.job_minutes_per_run),
       "outdated runs keep going",
       `${Math.round(w.superseded_week)} pull request runs a week were still running when a newer push to the same branch started a new run, and the workflow has no cancel-in-progress`,
-      "a concurrency group per branch with cancel-in-progress, so a new push cancels the outdated run (runs on the default branch keep their own group)",
+      "a concurrency group per pull request with cancel-in-progress, so a new push to it cancels its outdated run (every other run, the default branch's included, gets a group of its own and is never cancelled)",
       { tradeoff: "a workflow whose runs must all finish (a status that counts every run, a deploy) should not cancel, and cancelled runs show in the history", example: CANCEL_OUTDATED }
     );
   }
@@ -10873,6 +10954,19 @@ function groupFindings(F) {
   const risk = (f) => f.unit === "risk" ? 1 : 0;
   return out.sort((a, b) => risk(b) - risk(a) || b.saving - a.saving);
 }
+function patchesFor(findings, workflows, files = /* @__PURE__ */ new Map()) {
+  const byName = new Map(workflows.map((w) => [w.workflow, w]));
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const f of findings) {
+    if (f.what !== "outdated runs keep going") continue;
+    const w = byName.get(f.workflow);
+    if (!w || !w.path || seen.has(w.path)) continue;
+    seen.add(w.path);
+    out.push({ workflow: f.workflow, what: f.what, ...cancelOutdatedFix(w.path, files.get(w.path)) });
+  }
+  return out;
+}
 function analyse(repo, data) {
   return withParseCache(() => analyseParsed(repo, data));
 }
@@ -10922,6 +11016,9 @@ function analyseParsed(repo, data) {
     workflows,
     job_minutes_week_sampled: round(sum(workflows.map((w) => w.job_minutes_week)), 1),
     findings,
+    // A patch for each finding that has one (today: outdated runs keep going), against the workflow
+    // file the audit read, or the reason a file is left for a hand edit. One per file.
+    fixes: patchesFor(findings, workflows, data.files),
     saving_min_week_total: round(sum(findings.filter((f) => f.unit === "job").map((f) => f.saving_min_week)), 1),
     billed_minutes_week_sampled: round(sum(workflows.map((w) => w.billed_minutes_week)), 1),
     billed_saving_min_week_total: round(sum(findings.filter((f) => f.unit === "billed").map((f) => f.saving_min_week)), 1)
@@ -11065,6 +11162,10 @@ function report(a, { maxFindings = 8 } = {}) {
       L.push(`**Fix:** ${md(f.fix)}.${f.tradeoff ? "  " : ""}`);
       if (f.tradeoff) L.push(`**Trade-off:** ${md(f.tradeoff)}.`);
       if (f.example) L.push("", ...fence(f.example));
+      const fx = (a.fixes || []).find((x) => x.what === f.what && x.workflow === f.workflow);
+      if (fx) {
+        L.push("", fx.patch ? `**Patch:** \`--fix FILE\` writes it for ${md(`\`${fx.path}\``)}, checked to parse back to the same workflow plus the group; apply it with \`git apply FILE\`.` : `**Patch:** none for ${md(`\`${fx.path}\``)}: ${md(fx.refused)}.`);
+      }
       L.push("");
     });
     if (a.findings.length > maxFindings) L.push(`${plural(a.findings.length - maxFindings, "smaller finding")} not shown; the JSON report (\`--json\`) lists all of them.`, "");
