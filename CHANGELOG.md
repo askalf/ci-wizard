@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+
+- The README on npm catches up with 0.5.0: the `npx` examples name the current version, the action
+  examples pin v0.5.0's commit, and the quick start shows `--fix`. No code changed.
+
 ## 0.5.0
 
 - `--fix FILE` (CLI) and `fixes` (JSON report, `audit()`): a patch for each "outdated runs keep

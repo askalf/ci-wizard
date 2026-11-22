@@ -11,7 +11,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ```sh
-npx ci-wizard@0.5.0 owner/repo
+npx ci-wizard@0.5.1 owner/repo
 ```
 
 <img src="https://raw.githubusercontent.com/askalf/ci-wizard/main/docs/img/report.png" alt="The HTML report for askalf/ci: 183 job-minutes a week across 8 sampled workflows, 5 findings ranked by estimated saving, the first a self-hosted wrap-up tail with its fix and trade-off" width="860">
@@ -45,11 +45,11 @@ security mistakes a supply-chain review starts with.
 ### From the command line
 
 ```sh
-npx ci-wizard@0.5.0 owner/repo                          # the report, as markdown
-npx ci-wizard@0.5.0 owner/repo --html audit.html        # also a self-contained page
-npx ci-wizard@0.5.0 owner/repo --save before.json       # also a baseline for compare
-npx ci-wizard@0.5.0 owner/repo --fix fix.patch          # also the patches it offers, for git apply
-npx ci-wizard@0.5.0 compare before.json after.json      # did the fix work?
+npx ci-wizard@0.5.1 owner/repo                          # the report, as markdown
+npx ci-wizard@0.5.1 owner/repo --html audit.html        # also a self-contained page
+npx ci-wizard@0.5.1 owner/repo --save before.json       # also a baseline for compare
+npx ci-wizard@0.5.1 owner/repo --fix fix.patch          # also the patches it offers, for git apply
+npx ci-wizard@0.5.1 compare before.json after.json      # did the fix work?
 ```
 
 The repository can be `owner/repo`, a GitHub URL or an SSH remote. Left out, it is the origin of the
